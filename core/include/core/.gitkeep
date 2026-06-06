@@ -1,0 +1,2 @@
+# Public headers for sesolver_core live under this directory (core/...).
+# Added test-first via the TDD loop. This .gitkeep keeps the empty tree in git.

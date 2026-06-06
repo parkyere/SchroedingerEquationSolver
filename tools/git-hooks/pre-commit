@@ -1,0 +1,47 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# TDD commit-discipline guard.
+#
+# A single commit may touch TEST files OR PRODUCTION files, never BOTH.
+# Neutral files (build scripts, docs, config, tooling) may accompany either.
+#
+# Classification of staged paths:
+#   TEST        : tests/**
+#   PRODUCTION  : core/include/**, core/src/**, app/**
+#   NEUTRAL     : everything else
+#
+# Rationale: red test first (its own commit), then the production change that
+# makes it green (its own commit). See docs/TDD_RULES.md.
+#
+# Enable once after cloning:   git config core.hooksPath tools/git-hooks
+# Bypass for a genuine infra/bootstrap commit:   git commit --no-verify
+# ---------------------------------------------------------------------------
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+has_test=0
+has_prod=0
+
+for f in $staged; do
+    case "$f" in
+        tests/*)
+            has_test=1 ;;
+        core/include/*|core/src/*|app/*)
+            has_prod=1 ;;
+        *)
+            : ;;  # neutral - ignored
+    esac
+done
+
+if [ "$has_test" -eq 1 ] && [ "$has_prod" -eq 1 ]; then
+    echo "------------------------------------------------------------------" >&2
+    echo "TDD COMMIT RULE VIOLATION" >&2
+    echo "  This commit mixes TEST and PRODUCTION changes." >&2
+    echo "  Split them: commit the (red) test first, then the production" >&2
+    echo "  change that makes it green - never in the same commit." >&2
+    echo "  (Use 'git commit --no-verify' only for genuine infra commits.)" >&2
+    echo "------------------------------------------------------------------" >&2
+    exit 1
+fi
+
+exit 0
