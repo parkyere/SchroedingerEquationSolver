@@ -20,6 +20,7 @@ add_executable(sesolver_tests
     colormap_test.cpp
     complex_test.cpp
     deflation_test.cpp
+    drive_test.cpp
     dynamics3_test.cpp
     fft3_test.cpp
     fft_test.cpp
