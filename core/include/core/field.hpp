@@ -25,6 +25,10 @@ public:
     Complex<double>& operator[](int i) { return data_[static_cast<std::size_t>(i)]; }
     const Complex<double>& operator[](int i) const { return data_[static_cast<std::size_t>(i)]; }
 
+    // Raw storage access for in-place spectral transforms (fft/ifft).
+    std::vector<Complex<double>>& data() { return data_; }
+    const std::vector<Complex<double>>& data() const { return data_; }
+
 private:
     Grid1D grid_;
     std::vector<Complex<double>> data_;

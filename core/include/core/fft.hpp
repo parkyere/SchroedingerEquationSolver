@@ -39,18 +39,26 @@ inline void fft(std::vector<Complex<double>>& a) {
         }
     }
 
-    // Butterfly passes: len = 2, 4, ..., n.
+    // Twiddle table w[j] = e^{-2 pi i j / n}, j = 0 .. n/2-1, computed directly
+    // so every factor sits within ~1 ulp of the unit circle. (The recurrence
+    // w *= wlen drifts off the circle and systematically damps the norm --
+    // caught by SplitOperator.ConservesNorm over 200 steps.)
+    std::vector<Complex<double>> w(n / 2);
+    const double ang = -2.0 * std::numbers::pi / static_cast<double>(n);
+    for (std::size_t j = 0; j < n / 2; ++j) {
+        const double th = ang * static_cast<double>(j);
+        w[j] = Complex<double>{std::cos(th), std::sin(th)};
+    }
+
+    // Butterfly passes: len = 2, 4, ..., n. Stage len uses w_len^j = w[j * n/len].
     for (std::size_t len = 2; len <= n; len <<= 1) {
-        const double ang = -2.0 * std::numbers::pi / static_cast<double>(len);
-        const Complex<double> wlen{std::cos(ang), std::sin(ang)};
+        const std::size_t stride = n / len;
         for (std::size_t i = 0; i < n; i += len) {
-            Complex<double> w{1.0, 0.0};
             for (std::size_t j = 0; j < len / 2; ++j) {
                 const Complex<double> u = a[i + j];
-                const Complex<double> v = a[i + j + len / 2] * w;
+                const Complex<double> v = a[i + j + len / 2] * w[j * stride];
                 a[i + j] = u + v;
                 a[i + j + len / 2] = u - v;
-                w = w * wlen;
             }
         }
     }
