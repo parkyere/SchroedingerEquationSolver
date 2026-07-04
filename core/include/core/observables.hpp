@@ -8,6 +8,7 @@
 #include <core/fft.hpp>
 #include <core/field.hpp>
 #include <core/spectral.hpp>
+#include <core/vec.hpp>
 
 #include <cmath>
 #include <cstddef>
@@ -77,6 +78,105 @@ inline double mean_energy(const Field1D& f, const std::vector<double>& potential
         const double w = norm_sq(phi[j]);
         num_t += 0.5 * k[j] * k[j] * w;
         den_k += w;
+    }
+
+    return num_v / den_x + num_t / den_k;
+}
+
+// ---- 3D observables (per-axis, scale-invariant) ----
+
+inline Vec3d mean_position(const Field3D& f) {
+    const Grid3D& g = f.grid();
+    Vec3d num{};
+    double den = 0.0;
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double w = norm_sq(f(i, j, k));
+                num.x += g.x.coord(i) * w;
+                num.y += g.y.coord(j) * w;
+                num.z += g.z.coord(k) * w;
+                den += w;
+            }
+        }
+    }
+    return Vec3d{num.x / den, num.y / den, num.z / den};
+}
+
+inline Vec3d sigma_position(const Field3D& f) {
+    const Grid3D& g = f.grid();
+    Vec3d num{};
+    double den = 0.0;
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double w = norm_sq(f(i, j, k));
+                const double x = g.x.coord(i);
+                const double y = g.y.coord(j);
+                const double z = g.z.coord(k);
+                num.x += x * x * w;
+                num.y += y * y * w;
+                num.z += z * z * w;
+                den += w;
+            }
+        }
+    }
+    const Vec3d m = mean_position(f);
+    return Vec3d{std::sqrt(num.x / den - m.x * m.x), std::sqrt(num.y / den - m.y * m.y),
+                 std::sqrt(num.z / den - m.z * m.z)};
+}
+
+inline Vec3d mean_momentum(const Field3D& f) {
+    Field3D phi = f;
+    fft(phi);
+    const Grid3D& g = f.grid();
+    const std::vector<double> kx = wavenumbers(g.x);
+    const std::vector<double> ky = wavenumbers(g.y);
+    const std::vector<double> kz = wavenumbers(g.z);
+    Vec3d num{};
+    double den = 0.0;
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double w = norm_sq(phi(i, j, k));
+                num.x += kx[static_cast<std::size_t>(i)] * w;
+                num.y += ky[static_cast<std::size_t>(j)] * w;
+                num.z += kz[static_cast<std::size_t>(k)] * w;
+                den += w;
+            }
+        }
+    }
+    return Vec3d{num.x / den, num.y / den, num.z / den};
+}
+
+inline double mean_energy(const Field3D& f, const std::vector<double>& potential) {
+    double num_v = 0.0;
+    double den_x = 0.0;
+    for (std::size_t i = 0; i < f.data().size(); ++i) {
+        const double w = norm_sq(f.data()[i]);
+        num_v += potential[i] * w;
+        den_x += w;
+    }
+
+    Field3D phi = f;
+    fft(phi);
+    const Grid3D& g = f.grid();
+    const std::vector<double> kx = wavenumbers(g.x);
+    const std::vector<double> ky = wavenumbers(g.y);
+    const std::vector<double> kz = wavenumbers(g.z);
+    double num_t = 0.0;
+    double den_k = 0.0;
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double w = norm_sq(phi(i, j, k));
+                const double kxx = kx[static_cast<std::size_t>(i)];
+                const double kyy = ky[static_cast<std::size_t>(j)];
+                const double kzz = kz[static_cast<std::size_t>(k)];
+                num_t += 0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) * w;
+                den_k += w;
+            }
+        }
     }
 
     return num_v / den_x + num_t / den_k;

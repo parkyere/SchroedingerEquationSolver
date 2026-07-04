@@ -63,4 +63,58 @@ private:
     std::vector<double> kinetic_;  // e^{-k^2 dtau/2} per FFT bin
 };
 
+// 3D imaginary-time relaxation: identical structure over the 3D k-grid.
+class ImaginaryTimePropagator3D {
+public:
+    ImaginaryTimePropagator3D(const Grid3D& g, const std::vector<double>& potential,
+                              double dtau) {
+        assert(static_cast<int>(potential.size()) == g.size());
+        const std::size_t n = potential.size();
+
+        half_v_.resize(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            half_v_[i] = std::exp(-0.5 * potential[i] * dtau);
+        }
+
+        const std::vector<double> kx = wavenumbers(g.x);
+        const std::vector<double> ky = wavenumbers(g.y);
+        const std::vector<double> kz = wavenumbers(g.z);
+        kinetic_.resize(n);
+        for (int k = 0; k < g.z.n; ++k) {
+            for (int j = 0; j < g.y.n; ++j) {
+                for (int i = 0; i < g.x.n; ++i) {
+                    const double kxx = kx[static_cast<std::size_t>(i)];
+                    const double kyy = ky[static_cast<std::size_t>(j)];
+                    const double kzz = kz[static_cast<std::size_t>(k)];
+                    kinetic_[static_cast<std::size_t>(g.flat(i, j, k))] =
+                        std::exp(-0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) * dtau);
+                }
+            }
+        }
+    }
+
+    void relax(Field3D& psi, int nsteps) const {
+        assert(psi.data().size() == half_v_.size());
+        for (int s = 0; s < nsteps; ++s) {
+            apply_weight(half_v_, psi.data());
+            fft(psi);
+            apply_weight(kinetic_, psi.data());
+            ifft(psi);
+            apply_weight(half_v_, psi.data());
+            normalize(psi);
+        }
+    }
+
+private:
+    static void apply_weight(const std::vector<double>& weight,
+                             std::vector<Complex<double>>& a) {
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            a[i] = weight[i] * a[i];
+        }
+    }
+
+    std::vector<double> half_v_;
+    std::vector<double> kinetic_;
+};
+
 }  // namespace ses
