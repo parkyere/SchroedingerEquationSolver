@@ -17,6 +17,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(sesolver_tests
     complex_test.cpp
+    dynamics3_test.cpp
     fft3_test.cpp
     fft_test.cpp
     field3_test.cpp
@@ -28,6 +29,7 @@ add_executable(sesolver_tests
     potential_test.cpp
     propagator_test.cpp
     spectral_test.cpp
+    wavepacket3_test.cpp
     wavepacket_test.cpp
 )
 target_link_libraries(sesolver_tests
