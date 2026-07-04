@@ -27,6 +27,7 @@ add_executable(sesolver_tests
     harmonic_dynamics_test.cpp
     hydrogen3_test.cpp
     imaginary_time_test.cpp
+    marching_cubes_test.cpp
     potential_test.cpp
     propagator_test.cpp
     spectral_test.cpp
