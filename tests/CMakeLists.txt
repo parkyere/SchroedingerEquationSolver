@@ -28,6 +28,7 @@ add_executable(sesolver_tests
     grid_test.cpp
     harmonic_dynamics_test.cpp
     hydrogen3_test.cpp
+    imaginary_tables_test.cpp
     imaginary_time_test.cpp
     marching_cubes_test.cpp
     measurement_test.cpp
