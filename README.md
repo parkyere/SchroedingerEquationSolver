@@ -77,12 +77,14 @@ git config core.hooksPath tools/git-hooks
 
 ## Status
 
-Phases 0-6 complete, Phase 7 first deliverable shipped (105 tests green):
-hand-rolled Complex/FFT/split-operator/imaginary-time stack validated against
-analytic oracles through 3D, and `sesolver_app` renders the softened-hydrogen
-1s electron cloud as a marching-cubes isosurface with mouse orbit + zoom.
-Remaining: wavepacket animation in the viewer, volume rendering, phase
-coloring in 3D. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 0-6 complete, Phase 7 shipping (110 tests green): the hand-rolled
+Complex/FFT/split-operator/imaginary-time stack is validated against analytic
+oracles through 3D, and `sesolver_app` now animates the TDSE in real time --
+a Gaussian electron wavepacket swinging past a soft-Coulomb nucleus,
+re-meshed by marching cubes every frame (~57 fps at 32^3, norm conserved to
+1e-9 live). Drag orbits, wheel zooms, space pauses. Remaining: phase
+coloring, volume rendering, static-orbital mode. See
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 > Toolchain note: build with the Qt-bundled MinGW kit
 > (`-DCMAKE_PREFIX_PATH=C:/Qt/6.8.1/mingw_64`, compilers from
