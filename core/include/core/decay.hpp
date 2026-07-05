@@ -100,41 +100,57 @@ struct MultiJumpResult {
     double p_total{};  // total jump probability over this interval
 };
 
-inline MultiJumpResult multi_quantum_jump(Field3D& psi,
-                                          const std::vector<DecayChannel>& channels,
-                                          double dt, double u1, double u2) {
-    std::vector<double> rate(channels.size());
+struct ChannelPick {
+    int channel{-1};
+    double p_total{};
+};
+
+// The pure selection arithmetic over precomputed rates r_m = gamma_m * P_m:
+// total escape p = 1 - exp(-sum r_m dt); if u1 < p, u2 picks the channel
+// against the cumulative rate fractions. Zero-rate channels occupy zero
+// measure and can never be picked; the final fallthrough guards u2 rounding
+// at the top of the last stratum. Factored out so the GPU shell can reuse
+// it on GPU-reduced populations without duplicating domain logic.
+inline ChannelPick pick_decay_channel(const std::vector<double>& rates, double dt,
+                                      double u1, double u2) {
     double total = 0.0;
-    for (std::size_t m = 0; m < channels.size(); ++m) {
-        const double p_m = norm_sq(inner_product(*channels[m].from, psi));
-        rate[m] = channels[m].gamma * p_m;
-        total += rate[m];
+    for (const double r : rates) {
+        total += r;
     }
     if (total <= 0.0) {
-        return MultiJumpResult{-1, 0.0};
+        return ChannelPick{-1, 0.0};
     }
     const double p = 1.0 - std::exp(-total * dt);
     if (!(u1 < p)) {
-        return MultiJumpResult{-1, p};
+        return ChannelPick{-1, p};
     }
-    // Channel selection: u2 against the cumulative rate fractions. Zero-rate
-    // channels occupy zero measure and can never be picked; the final
-    // fallthrough guards u2 rounding at the top of the last stratum.
     double acc = 0.0;
     int last_positive = -1;
-    for (std::size_t m = 0; m < channels.size(); ++m) {
-        if (rate[m] <= 0.0) {
+    for (std::size_t m = 0; m < rates.size(); ++m) {
+        if (rates[m] <= 0.0) {
             continue;
         }
         last_positive = static_cast<int>(m);
-        acc += rate[m] / total;
+        acc += rates[m] / total;
         if (u2 < acc) {
-            psi = *channels[m].to;
-            return MultiJumpResult{static_cast<int>(m), p};
+            return ChannelPick{static_cast<int>(m), p};
         }
     }
-    psi = *channels[static_cast<std::size_t>(last_positive)].to;
-    return MultiJumpResult{last_positive, p};
+    return ChannelPick{last_positive, p};
+}
+
+inline MultiJumpResult multi_quantum_jump(Field3D& psi,
+                                          const std::vector<DecayChannel>& channels,
+                                          double dt, double u1, double u2) {
+    std::vector<double> rates(channels.size());
+    for (std::size_t m = 0; m < channels.size(); ++m) {
+        rates[m] = channels[m].gamma * norm_sq(inner_product(*channels[m].from, psi));
+    }
+    const ChannelPick pick = pick_decay_channel(rates, dt, u1, u2);
+    if (pick.channel >= 0) {
+        psi = *channels[static_cast<std::size_t>(pick.channel)].to;
+    }
+    return MultiJumpResult{pick.channel, pick.p_total};
 }
 
 }  // namespace ses
