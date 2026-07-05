@@ -30,6 +30,12 @@
 // rules emerge: A(2s->1s) ~ 0, so 2s (key 4) just sits there -- metastable
 // -- while any 2p decays in a ~4.5 ns-scale lifetime (display-accelerated
 // by ONE common factor, so RELATIVE lifetimes stay honest).
+//
+// T6 (decay by default): spontaneous emission is not opt-in in nature, so
+// it is not opt-in here. At startup the app SOLVES the atom first -- the
+// eigenstate atlas builds chunked across frames (watch each state converge,
+// progress in the title) -- then the wavepacket demo starts with decay
+// armed. D turns decay OFF for studying pure unitary evolution.
 
 #include <core/camera.hpp>
 #include <core/colormap.hpp>
@@ -283,6 +289,19 @@ struct ShellChannel {
     double gamma_display;  // uniformly accelerated display rate
 };
 
+// T6: one queued eigenstate computation of the startup atlas build. The
+// build is CHUNKED across frames (kBuildStepsPerFrame ITP steps per paint)
+// so the window stays live and each state is WATCHED converging.
+struct EigenTask {
+    int idx;
+    std::vector<int> deflate;  // state indices to project out
+    int steps;
+    int done = 0;
+    bool started = false;
+};
+
+constexpr int kBuildStepsPerFrame = 16;
+
 class Viewport : public QOpenGLWidget, protected QOpenGLFunctions_4_3_Core {
 public:
     explicit Viewport(QWidget* parent = nullptr)
@@ -344,6 +363,19 @@ protected:
                                                          kRelaxDtau};
             engine_.set_relax_tables(*this, relaxer.half_potential_weight(),
                                      relaxer.kinetic_weight(), kRelaxDtau);
+            // T6: solve the atom's eigenstate atlas up front, chunked across
+            // frames, so spontaneous decay is armed BY DEFAULT (as in
+            // nature) and every later demo entry point is instant. 2s is
+            // last: it deflates the whole lower manifold.
+            build_queue_ = {
+                EigenTask{kS1, {}, 700},
+                EigenTask{kP2Z, {kS1}, 700},
+                EigenTask{kP2X, {kS1}, 700},
+                EigenTask{kP2Y, {kS1}, 700},
+                EigenTask{kS2, {kS1, kP2X, kP2Y, kP2Z}, 1500},
+            };
+        } else {
+            decay_on_ = false;  // jump trials are GPU-only
         }
 
         // -- volume pipeline --
@@ -392,6 +424,17 @@ protected:
 
         // GPU stepping happens here, where the context is guaranteed current.
         if (use_gpu_path()) {
+            if (!build_queue_.empty()) {
+                // T6: startup atlas build owns the psi buffer this frame;
+                // the in-progress eigenstate IS the picture (watch it
+                // converge). Normal stepping resumes when the queue drains.
+                run_build_chunk();
+                pending_gpu_steps_ = 0;
+                if (gpu_title_due_) {
+                    gpu_title_due_ = false;
+                    refresh_title();
+                }
+            } else {
             if (cpu_is_truth_) {
                 // The CPU state is authoritative here: refresh the brightness
                 // normalizer from it (covers post-M collapse, post-R reset).
@@ -515,6 +558,7 @@ protected:
                     refresh_title();
                 }
             }
+            }  // end of the non-building (normal stepping) branch
         }
 
         if (mode_ == ViewMode::Cloud) {
@@ -621,6 +665,9 @@ public:
         after_control();
     }
     void reset_simulation() {
+        if (solving()) {
+            return;  // the startup atlas build owns the GPU state
+        }
         sim_ = make_simulation();
         stepping_ = Stepping::RealTime;
         laser_pol_ = LaserPol::Off;  // reset returns to the vanilla packet demo
@@ -634,6 +681,9 @@ public:
     // shell; core takes the uniform draw) and let the sharpened packet
     // re-evolve.
     void measure_now() {
+        if (solving()) {
+            return;
+        }
         ensure_cpu_current();
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         sim_.measure(uniform(rng_), kMeasureSigma);
@@ -642,6 +692,9 @@ public:
         after_control();
     }
     void toggle_view_mode() {
+        if (solving()) {
+            return;
+        }
         mode_ = (mode_ == ViewMode::Cloud) ? ViewMode::Surface : ViewMode::Cloud;
         // Re-stage for the newly selected mode: its data may be stale (tick
         // only stages the active mode, and we may be paused).
@@ -682,7 +735,7 @@ public:
     // so the display accelerates ALL channels by one common factor (title
     // reports it honestly and relative lifetimes stay physical).
     void toggle_decay() {
-        if (!gpu_ok_) {
+        if (!gpu_ok_ || solving()) {
             return;
         }
         if (!decay_on_) {
@@ -707,6 +760,8 @@ public:
         }
         return 0.0;
     }
+    bool solving() const { return !build_queue_.empty(); }
+    bool manifold_ready() const { return !channels_.empty(); }
     double state_energy(int idx) const { return state_energy_[static_cast<std::size_t>(idx)]; }
 
     // Transitions arc T3: cycle the laser off -> Z-pol -> X-pol -> off. The
@@ -716,7 +771,7 @@ public:
     // flop); X pumps the orthogonal 2p_x instead, so the monitored P(2pz)
     // stays flat -- the selection rule, live.
     void toggle_laser() {
-        if (!gpu_ok_) {
+        if (!gpu_ok_ || solving()) {
             return;  // the drive runs on the GPU path only
         }
         if (laser_pol_ == LaserPol::Off) {
@@ -763,7 +818,7 @@ protected:
     // its only competitors are the DEGENERATE other 2p's (gap ~1e-6).
     void start_excited_relax(const ses::Field3D& seed, const QString& label,
                              bool deflate_p_triplet) {
-        if (!gpu_ok_) {
+        if (!gpu_ok_ || solving()) {
             return;  // deflation runs on the GPU path only (v1)
         }
         if (mode_ != ViewMode::Cloud) {
@@ -800,6 +855,70 @@ protected:
         }
         ses::normalize(seed);
         return seed;
+    }
+
+    // T6: advance the startup atlas build by one chunk (current context
+    // required -- called from paintGL). Seeds on first touch, feeds the
+    // live ITP energy to the title, bridges the in-progress state to the
+    // volume texture, and finalizes the cache slot (and, when the queue
+    // drains, the decay channel table) on completion.
+    void run_build_chunk() {
+        EigenTask& t = build_queue_.front();
+        if (!t.started) {
+            engine_.upload_state(*this, make_seed(t.idx));
+            t.started = true;
+        }
+        std::vector<GLuint> lower;
+        for (const int d : t.deflate) {
+            lower.push_back(state_buf_[static_cast<std::size_t>(d)]);
+        }
+        const int chunk = std::min(kBuildStepsPerFrame, t.steps - t.done);
+        const ses_gpu::GpuEngine::RelaxStats stats =
+            lower.empty() ? engine_.relax_step(*this, chunk)
+                          : engine_.relax_deflated_step(*this, lower, chunk);
+        t.done += chunk;
+        state_energy_[static_cast<std::size_t>(t.idx)] = stats.energy;
+        relax_energy_display_ = stats.energy;
+        if (stats.peak > 0.0) {
+            peak_ = stats.peak;
+        }
+        engine_.write_psi_texture(*this, psi_tex_);
+        volume_dirty_ = false;
+        if (t.done >= t.steps) {
+            engine_.readback(*this, readback_buf_);
+            ses::Field3D f{sim_.grid()};
+            for (std::size_t i = 0; i < f.data().size(); ++i) {
+                f.data()[i] = ses::Complex<double>{readback_buf_[2 * i],
+                                                   readback_buf_[2 * i + 1]};
+            }
+            ses::normalize(f);  // fp32 round-trip polish
+            state_buf_[static_cast<std::size_t>(t.idx)] =
+                engine_.create_state_buffer(*this, f);
+            state_cpu_[static_cast<std::size_t>(t.idx)].emplace(std::move(f));
+            build_queue_.erase(build_queue_.begin());
+            if (build_queue_.empty()) {
+                build_channel_table();
+                cpu_is_truth_ = true;  // resume the untouched wavepacket
+                refresh_title();
+            }
+        }
+    }
+
+    ses::Field3D make_seed(int idx) const {
+        switch (idx) {
+            case kP2X:
+                return make_axis_odd_seed(0);
+            case kP2Y:
+                return make_axis_odd_seed(1);
+            case kP2Z:
+                return make_axis_odd_seed(2);
+            case kS2:
+                return ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
+                                                ses::Vec3d{4.0, 4.0, 4.0}, ses::Vec3d{});
+            default:  // kS1
+                return ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
+                                                ses::Vec3d{2.0, 2.0, 2.0}, ses::Vec3d{});
+        }
     }
 
     // One-time eigenstate computation into cache slot `idx`: GPU ITP from
@@ -879,17 +998,22 @@ protected:
             return true;
         }
         // 2s lies ABOVE the 2p triplet here (the soft core lifts s-states),
-        // so its build deflates all four lower states.
+        // so its build deflates all four lower states. (Blocking fallback;
+        // the startup atlas build normally has everything cached already.)
         if (!prepare_p_triplet() ||
-            !cache_eigenstate(kS2,
-                              ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
-                                                       ses::Vec3d{4.0, 4.0, 4.0},
-                                                       ses::Vec3d{}),
+            !cache_eigenstate(kS2, make_seed(kS2),
                               {state_buf_[kS1], state_buf_[kP2X], state_buf_[kP2Y],
                                state_buf_[kP2Z]},
                               1500)) {
             return false;
         }
+        return build_channel_table();
+    }
+
+    // Assemble the decay-channel table from the cached manifold: every
+    // downward pair, Einstein A from our wavefunctions, one common display
+    // acceleration.
+    bool build_channel_table() {
         double a_max = 0.0;
         for (int from = 0; from < kNumStates; ++from) {
             for (int to = 0; to < kNumStates; ++to) {
@@ -905,6 +1029,9 @@ protected:
                 channels_.push_back(ShellChannel{
                     from, to, ses::einstein_a(gap, ses::dipole_strength_sq(d)), 0.0});
                 a_max = std::max(a_max, channels_.back().a_true);
+                if (from == kP2Z && to == kS1) {
+                    dipole_z_ = std::abs(d.z);  // T3 laser E0, ready for free
+                }
             }
         }
         if (a_max <= 0.0) {
@@ -1105,7 +1232,14 @@ private:
                                 : QStringLiteral("relaxing->%1").arg(relax_label_)))
                 .arg(use_gpu_path() ? QStringLiteral("gpu 128^3")
                                     : QStringLiteral("cpu 128^3")) +
-            (decay_on_
+            (solving()
+                 ? QStringLiteral("  solving atom: %1 (%2/%3)  E ~ %4 Ha")
+                       .arg(QLatin1String(kStateName[build_queue_.front().idx]))
+                       .arg(kNumStates - static_cast<int>(build_queue_.size()) + 1)
+                       .arg(kNumStates)
+                       .arg(relax_energy_display_, 0, 'f', 4)
+                 : QString()) +
+            (decay_on_ && !channels_.empty()
                  ? QStringLiteral("  decay ON: tau(2p) %1 au, tau(2s) %2 au, x%3, "
                                   "photons %4%5")
                        .arg(lifetime_of(kP2Z), 0, 'e', 2)
@@ -1324,7 +1458,10 @@ private:
     QString last_jump_;
     QString relax_label_ = QStringLiteral("2p");
     std::vector<GLuint> relax_deflate_;  // live RelaxingExcited deflation set
-    bool decay_on_ = false;
+    std::vector<EigenTask> build_queue_;  // T6 startup atlas build
+    // Decay is the DEFAULT, as in nature; D is the off-switch for studying
+    // pure unitary evolution. Armed once the startup atlas build finishes.
+    bool decay_on_ = true;
     int flash_ticks_ = 0;
     long long photon_count_ = 0;
 
@@ -1382,6 +1519,18 @@ private:
     QPointF last_pos_;
 };
 
+// Selftest helper: poll until the startup atlas build has produced the
+// channel table, then run the arc (slower GPUs just stretch the wait).
+template <typename F>
+void run_when_manifold_ready(Viewport* viewport, F fn) {
+    if (viewport->manifold_ready()) {
+        fn();
+        return;
+    }
+    QTimer::singleShot(500, viewport,
+                       [viewport, fn] { run_when_manifold_ready(viewport, fn); });
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1436,21 +1585,21 @@ int main(int argc, char** argv) {
     // real time, enable decay, and require at least one quantum jump.
     // (After the first jump the atom sits in 1s with P_e ~ 0, so exactly one
     // photon is the physically expected outcome without a re-pump laser.)
-    // Selftest arcs are CHAINED: every window is scheduled only after the
-    // preceding (machine-dependent, GUI-blocking) cache build has returned,
-    // so a slower GPU stretches the run instead of false-failing the verdict
-    // (adversarial-review finding).
+    // Selftest arcs wait for the startup atlas build (run_when_manifold_ready)
+    // and are then CHAINED, so a slower GPU stretches the run instead of
+    // false-failing a wall-clock verdict. Decay is ON by default (T6);
+    // photon verdicts count from a baseline captured at the arc's start.
     if (app.arguments().contains(QStringLiteral("--selftest-decay"))) {
-        QTimer::singleShot(500, viewport, [viewport, &app] {
-            viewport->relax_to_excited();  // blocks: ground cache build
+        run_when_manifold_ready(viewport, [viewport, &app] {
+            viewport->relax_to_excited();  // caches ready: no block
             QTimer::singleShot(13500, viewport, [viewport, &app] {
-                viewport->set_real_time();
-                viewport->toggle_decay();  // blocks: manifold build
-                QTimer::singleShot(30000, viewport, [viewport, &app] {
-                    const long long photons = viewport->photon_count();
+                const long long baseline = viewport->photon_count();
+                viewport->set_real_time();  // decay is already armed
+                QTimer::singleShot(30000, viewport, [viewport, &app, baseline] {
+                    const long long fresh = viewport->photon_count() - baseline;
                     std::fprintf(stderr, "selftest-decay: photons = %lld  [%s]\n",
-                                 photons, photons >= 1 ? "PASS" : "FAIL");
-                    app.exit(photons >= 1 ? 0 : 1);
+                                 fresh, fresh >= 1 ? "PASS" : "FAIL");
+                    app.exit(fresh >= 1 ? 0 : 1);
                 });
             });
         });
@@ -1461,11 +1610,12 @@ int main(int argc, char** argv) {
     // require >= 2 photons -- repeated absorb/emit cycles. A ground-start
     // run WITHOUT the pump emits zero photons, so 2 is unambiguous.
     if (app.arguments().contains(QStringLiteral("--selftest-rabi"))) {
-        QTimer::singleShot(500, viewport, [viewport, &app] {
-            viewport->set_relaxing();  // cool to 1s (no build)
+        run_when_manifold_ready(viewport, [viewport, &app] {
+            viewport->toggle_decay();  // OFF: study the clean coherent flop
+            viewport->set_relaxing();  // cool to 1s
             QTimer::singleShot(11500, viewport, [viewport, &app] {
                 viewport->set_real_time();
-                viewport->toggle_laser();  // blocks: 1s + 2p_z cache build
+                viewport->toggle_laser();  // cached: instant
                 QTimer::singleShot(35000, viewport, [viewport, &app] {
                     const double peak = viewport->peak_excited_population();
                     std::fprintf(stderr, "selftest-rabi: peak P(2pz) = %.3f  [%s]\n",
@@ -1474,12 +1624,16 @@ int main(int argc, char** argv) {
                         app.exit(1);
                         return;
                     }
-                    viewport->toggle_decay();  // blocks: manifold build
-                    QTimer::singleShot(45000, viewport, [viewport, &app] {
-                        const long long photons = viewport->photon_count();
-                        std::fprintf(stderr, "selftest-rabi: photons = %lld  [%s]\n",
-                                     photons, photons >= 2 ? "PASS" : "FAIL");
-                        app.exit(photons >= 2 ? 0 : 1);
+                    const long long baseline = viewport->photon_count();
+                    viewport->toggle_decay();  // back ON: fluorescence
+                    QTimer::singleShot(45000, viewport,
+                                       [viewport, &app, baseline] {
+                        const long long fresh =
+                            viewport->photon_count() - baseline;
+                        std::fprintf(stderr,
+                                     "selftest-rabi: photons = %lld  [%s]\n",
+                                     fresh, fresh >= 2 ? "PASS" : "FAIL");
+                        app.exit(fresh >= 2 ? 0 : 1);
                     });
                 });
             });
@@ -1492,8 +1646,7 @@ int main(int argc, char** argv) {
     // from 1s can only fluoresce through 2p_x, so new photons prove the
     // multi-channel trial fires beyond the old single 2p_z channel.
     if (app.arguments().contains(QStringLiteral("--selftest-manifold"))) {
-        QTimer::singleShot(500, viewport, [viewport, &app] {
-            viewport->toggle_decay();  // blocks: full manifold build
+        run_when_manifold_ready(viewport, [viewport, &app] {
             // Deterministic physics of the freshly built channel table.
             const double a_pz = viewport->channel_a(kP2Z, kS1);
             const double a_px = viewport->channel_a(kP2X, kS1);
