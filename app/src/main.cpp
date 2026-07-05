@@ -41,8 +41,8 @@
 // T7 (lifetimes to n = 10): the potential is spherical, so the radial
 // engine (core/radial.hpp) solves EVERY bound level to n = 10 in 1D --
 // energies and E1 lifetimes for all 55 levels, printed at startup. The 3D
-// tracked manifold is what the +-24 Bohr box can physically hold: n <= 3
-// (14 states, ~50 channels), each synthesized as (u/r) Y_lm from the
+// tracked manifold is what the +-64 Bohr box can physically hold: n <= 4
+// (30 states, ~150 channels), each synthesized as (u/r) Y_lm from the
 // radial solutions (core/harmonics.hpp) -- no imaginary-time ladder, no
 // fp32 drift. Key 5 excites an n = 3 state to watch the CASCADE (e.g.
 // 3d -> 2p -> 1s, two photons). Relaxation demos auto-complete: when the
@@ -105,11 +105,13 @@ ses::WavepacketSimulation make_simulation() {
     // the CPU session stays the double-precision truth for relax / measure /
     // surface meshing, synced on demand.
     //
-    // Box +-24 Bohr at 128^3 (h = 0.375): spectral accuracy makes the
-    // coarser h free (E(1s), E(2p) identical to 1e-6 vs h = 0.1875), while
-    // the old +-12 box squeezed E(2p) by 7e-4 Ha (converged by +-18..24).
-    // Periodic wrap-around re-entry is also pushed 2x further out.
-    const ses::Grid1D axis{-24.0, 24.0, 128};
+    // Box +-64 Bohr at 256^3 (h = 0.5): sized for the n = 4 shell (4s
+    // classical turning point ~37 Bohr + tails). Spectral accuracy keeps
+    // h = 0.5 cheap (h = 0.375 was proven exact to 1e-6; the startup atlas
+    // cross-check E_radial vs <H>_grid audits h on every launch). ~9x the
+    // per-step cost of 128^3 -- the P5000's honest ceiling for a full
+    // m-resolved n <= 4 manifold (30 state buffers ~ 4 GB VRAM).
+    const ses::Grid1D axis{-64.0, 64.0, 256};
     const ses::Grid3D grid{axis, axis, axis};
     return ses::WavepacketSimulation{ses::WavepacketSimulation::Config{
         grid,
@@ -248,7 +250,7 @@ void main() {
         t_stop = sp.x;
     }
 
-    const int kSteps = 256;  // keeps ~0.3 Bohr/sample across the +-24 box
+    const int kSteps = 384;  // ~0.6 Bohr/sample across the +-64 box
     float step_len = (t_stop - tn) / float(kSteps);
     // Per-pixel jitter of the ray start kills wood-grain banding.
     float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -290,23 +292,25 @@ enum class ViewMode { Cloud, Surface };
 enum class Stepping { RealTime, Relaxing, RelaxingExcited };
 enum class LaserPol { Off, Z, X };
 
-// T5/T7: the tracked eigenstate manifold -- everything the box holds, the
-// n <= 3 shell. The first five indices are frozen (selftests, laser).
+// T5/T7/T8: the tracked eigenstate manifold -- everything the box holds,
+// the full m-resolved n <= 4 shell. First five indices frozen (selftests).
 enum StateIndex : int {
     kS1 = 0, kP2X = 1, kP2Y = 2, kP2Z = 3, kS2 = 4,
     k3S = 5, k3PX = 6, k3PY = 7, k3PZ = 8,
     k3DXY = 9, k3DYZ = 10, k3DZ0 = 11, k3DZX = 12, k3DX2Y2 = 13,
+    k4S = 14, k4F0 = 26,  // named entries the shell refers to
 };
-constexpr int kNumStates = 14;
+constexpr int kNumStates = 30;
 
 // Radial levels backing the manifold (l, nodes k); n = l + 1 + k.
 struct RadialLevelSpec {
     int l;
     int k;
 };
-constexpr int kNumLevels = 6;  // 1s 2s 2p 3s 3p 3d
+constexpr int kNumLevels = 10;  // 1s 2s 2p 3s 3p 3d 4s 4p 4d 4f
 constexpr RadialLevelSpec kLevelSpec[kNumLevels] = {
     {0, 0}, {0, 1}, {1, 0}, {0, 2}, {1, 1}, {2, 0},
+    {0, 3}, {1, 2}, {2, 1}, {3, 0},
 };
 
 struct StateSpec {
@@ -323,6 +327,13 @@ constexpr StateSpec kStateSpec[kNumStates] = {
     {4, 1, 1, "3p_x"}, {4, 1, -1, "3p_y"}, {4, 1, 0, "3p_z"},
     {5, 2, -2, "3d_xy"}, {5, 2, -1, "3d_yz"}, {5, 2, 0, "3d_z2"},
     {5, 2, 1, "3d_zx"}, {5, 2, 2, "3d_x2y2"},
+    {6, 0, 0, "4s"},
+    {7, 1, 1, "4p_x"}, {7, 1, -1, "4p_y"}, {7, 1, 0, "4p_z"},
+    {8, 2, -2, "4d_xy"}, {8, 2, -1, "4d_yz"}, {8, 2, 0, "4d_z2"},
+    {8, 2, 1, "4d_zx"}, {8, 2, 2, "4d_x2y2"},
+    {9, 3, -3, "4f_-3"}, {9, 3, -2, "4f_-2"}, {9, 3, -1, "4f_-1"},
+    {9, 3, 0, "4f_0"}, {9, 3, 1, "4f_+1"}, {9, 3, 2, "4f_+2"},
+    {9, 3, 3, "4f_+3"},
 };
 
 struct ShellChannel {
@@ -332,8 +343,8 @@ struct ShellChannel {
     double gamma_display;  // uniformly accelerated display rate
 };
 
-constexpr int kAtlasMontageFrames = 8;  // frames each synthesized orbital shows
-constexpr int kAtlasPairsPerFrame = 8;  // dipole pairs evaluated per paint
+constexpr int kAtlasMontageFrames = 3;  // frames each synthesized orbital shows
+constexpr int kAtlasPairsPerFrame = 4;  // dipole pairs evaluated per paint
 
 class Viewport : public QOpenGLWidget, protected QOpenGLFunctions_4_3_Core {
 public:
@@ -699,7 +710,7 @@ protected:
 
     void wheelEvent(QWheelEvent* e) override {
         distance_ *= std::pow(0.999, e->angleDelta().y());
-        distance_ = std::clamp(distance_, 4.0, 100.0);
+        distance_ = std::clamp(distance_, 4.0, 200.0);  // frame the +-64 box
         update();
     }
 
@@ -836,7 +847,7 @@ public:
         if (!prepare_manifold_cache()) {
             return;
         }
-        static constexpr int kCycle[] = {k3DZ0, k3S, k3PZ, k3DXY};
+        static constexpr int kCycle[] = {k3DZ0, k4F0, k3S, k4S};
         const int idx = kCycle[excite_cycle_++ % 4];
         makeCurrent();
         engine_.copy_into_psi(*this, state_buf_[static_cast<std::size_t>(idx)]);
@@ -947,8 +958,8 @@ protected:
     // the periodic grid supports); the free-atom table to n = 10 is the
     // full lifetime atlas, printed for the record.
     void solve_radial_atom() {
-        const double r_box = sim_.grid().x.xmax;  // 24 Bohr
-        radial_grid_ = ses::RadialGrid{r_box, 1999};
+        const double r_box = sim_.grid().x.xmax;  // 64 Bohr
+        radial_grid_ = ses::RadialGrid{r_box, 5119};
         std::vector<double> v(static_cast<std::size_t>(radial_grid_.n));
         for (int i = 0; i < radial_grid_.n; ++i) {
             const double r = radial_grid_.r(i);
@@ -1026,9 +1037,18 @@ protected:
             }
             const std::size_t s = static_cast<std::size_t>(idx);
             const ses::Field3D& f = *state_cpu_[s];
-            std::fprintf(stderr, "atlas: %-8s E_radial = %.6f Ha   <H>_grid = %.6f Ha\n",
-                         kStateSpec[s].name, state_energy_[s],
-                         ses::mean_energy(f, sim_.potential()));
+            // The h-audit: cross-check the 1D radial energy against the
+            // full 3D spectral <H> for the resolution-critical 1s and the
+            // box-critical 4s (a full-grid CPU FFT each -- 2 states only).
+            if (idx == kS1 || idx == k4S) {
+                std::fprintf(stderr,
+                             "atlas: %-8s E_radial = %.6f Ha   <H>_grid = %.6f Ha\n",
+                             kStateSpec[s].name, state_energy_[s],
+                             ses::mean_energy(f, sim_.potential()));
+            } else {
+                std::fprintf(stderr, "atlas: %-8s E_radial = %.6f Ha\n",
+                             kStateSpec[s].name, state_energy_[s]);
+            }
             // Montage: the freshly built orbital is the picture.
             double pk = 0.0;
             for (const ses::Complex<double>& z : f.data()) {
@@ -1053,6 +1073,11 @@ protected:
             }
             if (pair_queue_.empty()) {
                 finalize_channel_table();
+                // CPU copies served only the dipole integrals: release the
+                // ~8 GB of doubles (populations/jumps live on the GPU).
+                for (auto& c : state_cpu_) {
+                    c.reset();
+                }
                 atlas_done_ = true;
                 cpu_is_truth_ = true;  // resume the untouched wavepacket
                 refresh_title();
@@ -1062,14 +1087,21 @@ protected:
 
     // Downward pairs worth a dipole integral: gap > 1e-3 skips both the
     // degenerate m-splittings (zero by construction here) and sub-mHa
-    // radio-frequency channels whose omega^3 rates are irrelevant.
+    // radio-frequency channels whose omega^3 rates are irrelevant; the
+    // |dl| = 1 filter applies the E1 selection rule analytically (the
+    // synthesis KNOWS each state's l -- emergence was demonstrated in T5,
+    // and 30 states would otherwise cost ~450 forbidden integrals).
     void collect_channel_pairs() {
         pair_queue_.clear();
         for (int from = 0; from < kNumStates; ++from) {
             for (int to = 0; to < kNumStates; ++to) {
-                if (state_energy_[static_cast<std::size_t>(from)] -
+                const bool downward =
+                    state_energy_[static_cast<std::size_t>(from)] -
                         state_energy_[static_cast<std::size_t>(to)] >
-                    1e-3) {
+                    1e-3;
+                const bool e1_allowed =
+                    std::abs(kStateSpec[from].l - kStateSpec[to].l) == 1;
+                if (downward && e1_allowed) {
                     pair_queue_.push_back({from, to});
                 }
             }
@@ -1676,7 +1708,9 @@ int main(int argc, char** argv) {
     format.setVersion(4, 3);
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setDepthBufferSize(24);
-    format.setSamples(4);
+    // No MSAA: the volume ray marcher is a full-screen fragment pass where
+    // 4x multisampling only multiplies its cost (it smooths nothing but
+    // the cube edges) -- at 256^3 that budget belongs to the physics.
     QSurfaceFormat::setDefaultFormat(format);
 
     QApplication app(argc, argv);
@@ -1701,7 +1735,7 @@ int main(int argc, char** argv) {
                         [viewport] { viewport->relax_to_excited(); });
     controls->addAction(QStringLiteral("Relax to 2s (4)"), viewport,
                         [viewport] { viewport->relax_to_2s(); });
-    controls->addAction(QStringLiteral("Excite n=3 (5)"), viewport,
+    controls->addAction(QStringLiteral("Excite n=3/4 (5)"), viewport,
                         [viewport] { viewport->excite_n3(); });
     controls->addAction(QStringLiteral("Decay (D)"), viewport,
                         [viewport] { viewport->toggle_decay(); });
@@ -1756,7 +1790,9 @@ int main(int argc, char** argv) {
             QTimer::singleShot(11500, viewport, [viewport, &app] {
                 viewport->set_real_time();
                 viewport->toggle_laser();  // cached: instant
-                QTimer::singleShot(35000, viewport, [viewport, &app] {
+                // 256^3 runs ~3 au/s of sim time: the half-flop (pi/Omega
+                // ~ 79 au) needs most of this window.
+                QTimer::singleShot(60000, viewport, [viewport, &app] {
                     const double peak = viewport->peak_excited_population();
                     std::fprintf(stderr, "selftest-rabi: peak P(2pz) = %.3f  [%s]\n",
                                  peak, peak >= 0.5 ? "PASS" : "FAIL");
@@ -1766,7 +1802,7 @@ int main(int argc, char** argv) {
                     }
                     const long long baseline = viewport->photon_count();
                     viewport->toggle_decay();  // back ON: fluorescence
-                    QTimer::singleShot(45000, viewport,
+                    QTimer::singleShot(180000, viewport,
                                        [viewport, &app, baseline] {
                         const long long fresh =
                             viewport->photon_count() - baseline;
@@ -1788,7 +1824,7 @@ int main(int argc, char** argv) {
         run_when_manifold_ready(viewport, [viewport, &app] {
             const long long baseline = viewport->photon_count();
             viewport->excite_n3();  // first in the cycle: 3d_z2
-            QTimer::singleShot(60000, viewport, [viewport, &app, baseline] {
+            QTimer::singleShot(90000, viewport, [viewport, &app, baseline] {
                 const long long fresh = viewport->photon_count() - baseline;
                 std::fprintf(stderr, "selftest-cascade: photons = %lld  [%s]\n",
                              fresh, fresh >= 2 ? "PASS" : "FAIL");
