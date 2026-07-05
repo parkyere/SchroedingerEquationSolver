@@ -96,22 +96,26 @@ kernel verified against the unit-tested CPU double core by
 `sesolver_gpucheck`). The full atom-and-light demo works from first
 principles computed by the solver itself:
 
-- **1** real time / **2** relax to 1s / **3** relax to 2p_z (deflated
-  imaginary time; the ITP energy readout converges live);
+- **1** real time / **2** relax to 1s / **3** relax to 2p_z / **4** relax
+  to 2s (deflated imaginary time; the ITP energy readout converges live);
 - **M** soft Gaussian position measurement (collapse and re-evolution);
-- **D** spontaneous decay via quantum jumps -- Gamma from the Einstein A
-  coefficient over OUR wavefunctions (tau ~ 4.5 ns, same order as real
-  hydrogen 2p), photon flash + counter, honestly-labeled display
-  acceleration;
+- **D** spontaneous decay via multi-channel quantum jumps over the whole
+  n<=2 manifold (1s, 2p_x, 2p_y, 2p_z, 2s): every downward pair gets its
+  Einstein A from OUR wavefunctions -- the 2p triplet decays with
+  tau ~ 4.7 ns (same order as real hydrogen 2p) while A(2s->1s) ~ 1e-16
+  makes 2s METASTABLE, the selection rule emerging from the matrix
+  element. Photon flash + counter + last-jump label; one common,
+  honestly-labeled display acceleration keeps relative lifetimes physical;
 - **L** resonant laser at w = E(2p) - E(1s): Z-polarization Rabi-pumps
-  1s -> 2p_z (live P(1s)/P(2pz) readout), X-polarization leaves P(2pz)
-  flat -- the selection rule on screen. Laser + decay = repeated
-  absorb/emit cycles (fluorescence).
+  1s -> 2p_z (live P(1s)/P(2pz) readout), X-polarization pumps 2p_x
+  instead so P(2pz) stays flat -- and its fluorescence clicks through the
+  2p_x decay channel. Laser + decay = repeated absorb/emit cycles.
 
 Tab switches to the marching-cubes isosurface view; drag orbits, wheel
 zooms, space pauses, [ ] tunes cloud density. All shader math is
 unit-tested in core and transcribed into GLSL; the demo arcs regress
-headlessly via `--selftest-decay` / `--selftest-rabi`. See
+headlessly via `--selftest-decay` / `--selftest-rabi` /
+`--selftest-manifold`. See
 [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/GPU_PLAN.md](docs/GPU_PLAN.md).
 
 > Toolchain note: build with the Qt-bundled MinGW kit
