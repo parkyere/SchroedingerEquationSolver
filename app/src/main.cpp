@@ -91,7 +91,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
-#include <optional>
 #include <random>
 #include <utility>
 #include <vector>
@@ -129,8 +128,10 @@ ses::WavepacketSimulation make_simulation() {
     // would be 8x the work), so reaching n = 6 spends grid spacing: h grows
     // 0.5 -> 0.625. The startup atlas cross-check E_radial vs <H>_grid audits h
     // on every launch. The full m-resolved n <= 6 manifold is 91 state buffers
-    // (~12 GB VRAM -- also box-critical; ~24 GB host RAM held transiently
-    // during the dipole-integral phase, freed right after).
+    // (~12 GB VRAM -- also box-critical). No host mirror: each orbital's double
+    // field is transient (synthesized, uploaded fp32, freed), and the atlas
+    // dipole integrals reduce on the GPU straight from the resident buffers, so
+    // host RAM stays flat through the build instead of holding 91 copies.
     const ses::Grid1D axis{-80.0, 80.0, 256};
     const ses::Grid3D grid{axis, axis, axis};
     return ses::WavepacketSimulation{ses::WavepacketSimulation::Config{
@@ -1374,6 +1375,23 @@ protected:
     // Synthesize (and cache) tracked state `idx` from the radial solution:
     // psi = (u/r) Y_lm -- exact separation of variables, no ITP ladder.
     // Needs a current GL context for the buffer upload.
+    // Synthesize state `idx` from the radial solution: psi = (u/r) Y_lm --
+    // exact separation of variables, no ITP ladder. Caches the energy and
+    // RETURNS the double field without retaining it: the caller decides its
+    // lifetime (the atlas keeps only the fp32 GPU buffer, never the double).
+    ses::Field3D synthesize_state(int idx) {
+        const std::size_t s = static_cast<std::size_t>(idx);
+        const StateSpec& sp = kStateSpec[s];
+        state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
+        return ses::synthesize_orbital(
+            sim_.grid(), radial_grid_,
+            radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m);
+    }
+
+    // Ensure state `idx` has a resident GPU buffer. The double field is a
+    // TRANSIENT -- synthesized, uploaded (fp32), then freed as it leaves scope
+    // -- so the 91-state manifold costs GPU memory only, not 91 host copies at
+    // once. Needs a current GL context for the buffer upload.
     bool ensure_state(int idx) {
         const std::size_t s = static_cast<std::size_t>(idx);
         if (state_buf_[s] != 0) {
@@ -1382,13 +1400,8 @@ protected:
         if (!radial_ready_) {
             return false;
         }
-        const StateSpec& sp = kStateSpec[s];
-        ses::Field3D f = ses::synthesize_orbital(
-            sim_.grid(), radial_grid_,
-            radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m);
+        const ses::Field3D f = synthesize_state(idx);
         state_buf_[s] = engine_.create_state_buffer(*this, f);
-        state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
-        state_cpu_[s].emplace(std::move(f));
         return state_buf_[s] != 0;
     }
 
@@ -1404,12 +1417,22 @@ protected:
         if (!synth_queue_.empty()) {
             const int idx = synth_queue_.front();
             synth_queue_.erase(synth_queue_.begin());
-            if (!ensure_state(idx)) {
+            if (!radial_ready_) {
                 atlas_done_ = true;  // no radial solve: give up gracefully
                 return;
             }
             const std::size_t s = static_cast<std::size_t>(idx);
-            const ses::Field3D& f = *state_cpu_[s];
+            // Build this orbital's TRANSIENT double field, upload it to its
+            // resident GPU buffer, show it, then let it die at frame end (the
+            // 268 MB is freed at once -- the montage never accumulates copies).
+            const ses::Field3D f = synthesize_state(idx);
+            if (state_buf_[s] == 0) {
+                state_buf_[s] = engine_.create_state_buffer(*this, f);
+            }
+            if (state_buf_[s] == 0) {
+                atlas_done_ = true;  // GPU buffer alloc failed: give up gracefully
+                return;
+            }
             // The h-audit: cross-check the 1D radial energy against the
             // full 3D spectral <H> for the resolution-critical 1s and the
             // box-critical 4s/5s/6s (a full-grid CPU FFT each -- 4 states only).
@@ -1446,11 +1469,9 @@ protected:
             }
             if (pair_queue_.empty()) {
                 finalize_channel_table();
-                // CPU copies served only the dipole integrals: release the
-                // ~8 GB of doubles (populations/jumps live on the GPU).
-                for (auto& c : state_cpu_) {
-                    c.reset();
-                }
+                // Nothing to release: dipole integrals ran on the GPU straight
+                // from the resident state buffers, so no host copies were ever
+                // held (populations/jumps live on the GPU too).
                 atlas_done_ = true;
                 cpu_is_truth_ = true;  // resume the untouched wavepacket
                 refresh_title();
@@ -1485,8 +1506,8 @@ protected:
         const std::size_t from = static_cast<std::size_t>(p.first);
         const std::size_t to = static_cast<std::size_t>(p.second);
         const double gap = state_energy_[from] - state_energy_[to];
-        const ses::DipoleMatrixElement d =
-            ses::dipole_matrix_element(*state_cpu_[to], *state_cpu_[from]);
+        const ses::DipoleMatrixElement d = engine_.dipole_between(
+            *this, state_buf_[to], state_buf_[from]);
         channels_.push_back(ShellChannel{
             p.first, p.second, ses::einstein_a(gap, ses::dipole_strength_sq(d)), 0.0});
         if (p.first == kP2Z && p.second == kS1) {
@@ -1538,16 +1559,13 @@ protected:
     bool prepare_excited_cache() {
         makeCurrent();
         const bool ok = ensure_state(kS1) && ensure_state(kP2Z);
-        doneCurrent();
-        if (!ok) {
-            return false;
-        }
-        if (dipole_z_ == 0.0) {
+        if (ok && dipole_z_ == 0.0) {
             const ses::DipoleMatrixElement d =
-                ses::dipole_matrix_element(*state_cpu_[kP2Z], *state_cpu_[kS1]);
+                engine_.dipole_between(*this, state_buf_[kP2Z], state_buf_[kS1]);
             dipole_z_ = std::abs(d.z);
         }
-        return true;
+        doneCurrent();
+        return ok;
     }
 
     bool prepare_p_triplet() {
@@ -1564,19 +1582,24 @@ protected:
         if (!channels_.empty()) {
             return true;
         }
+        // One context bracket over the whole build: ensure_state uploads the
+        // buffers and evaluate_channel_pair reduces the dipoles on the GPU, so
+        // both need the context current (the dipoles no longer touch the CPU).
         makeCurrent();
         bool ok = true;
         for (int idx = 0; idx < kNumStates && ok; ++idx) {
             ok = ensure_state(idx);
         }
+        if (ok) {
+            collect_channel_pairs();
+            while (!pair_queue_.empty()) {
+                evaluate_channel_pair(pair_queue_.back());
+                pair_queue_.pop_back();
+            }
+        }
         doneCurrent();
         if (!ok) {
             return false;
-        }
-        collect_channel_pairs();
-        while (!pair_queue_.empty()) {
-            evaluate_channel_pair(pair_queue_.back());
-            pair_queue_.pop_back();
         }
         return finalize_channel_table();
     }
@@ -2080,7 +2103,6 @@ private:
     // Transitions arc T1/T4/T5: the cached eigenstate manifold, the decay
     // channel table (built on first decay toggle), and jump bookkeeping.
     std::array<GLuint, kNumStates> state_buf_{};
-    std::array<std::optional<ses::Field3D>, kNumStates> state_cpu_;
     std::array<double, kNumStates> state_energy_{};
     std::vector<ShellChannel> channels_;
     double accel_display_ = 0.0;  // common display acceleration factor
