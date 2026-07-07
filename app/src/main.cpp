@@ -614,25 +614,21 @@ protected:
                         engine_.driven_step(*this, d, sim_.time() + gpu_time_,
                                             sim_.dt(), pending_gpu_steps_);
                     } else if (bfield_b_ > 0.0) {
-                        // Magnetic field along +z: the PROPER minimal-coupling
-                        // solve. psi evolves under H = H0 + (B/2)L_z +
-                        // (B^2/8)rho^2 -- the diamagnetic term is already in the
-                        // half-potential table (uploaded on set_bfield_b), the
-                        // paramagnetic L_z is the exact three-shear rotation.
-                        // No display trick: the cloud genuinely precesses (and
-                        // diamagnetically contracts) in psi itself.
+                        // Magnetic field along bfield_axis_: the PROPER minimal-
+                        // coupling solve. psi evolves under H = H0 + (E z) +
+                        // (B/2)L_axis + (B^2/8)rho_perp^2 -- the static E and the
+                        // diamagnetic term are already folded into the
+                        // half-potential (upload_field_tables), the paramagnetic
+                        // L_axis is the exact three-shear rotation. Because it is
+                        // the combined solve, crossed E(z)-B(x/y) is genuine.
                         engine_.magnetic_step(*this, bfield_axis_,
                                               0.5 * bfield_b_ * (0.5 * sim_.dt()),
                                               pending_gpu_steps_);
-                    } else if (efield_e0_ > 0.0) {
-                        // Static uniform electric field along +z: the SAME
-                        // dipole drive at omega = 0 (Stark). The nucleus is the
-                        // fixed potential; only the cloud responds (polarizes,
-                        // then field-ionizes toward +z if driven hard).
-                        const ses::DipoleDrive d{ses::Vec3d{0.0, 0.0, 1.0}, efield_e0_, 0.0};
-                        engine_.driven_step(*this, d, sim_.time() + gpu_time_,
-                                            sim_.dt(), pending_gpu_steps_);
                     } else {
+                        // The static E-field (if any) is folded into the
+                        // half-potential -- exact, and equal to the old omega=0
+                        // dipole kick -- so a plain step polarizes / field-
+                        // ionizes correctly.
                         engine_.step(*this, pending_gpu_steps_);
                     }
                     // Time is credited where steps EXECUTE, so a stalled or
@@ -962,7 +958,7 @@ public:
         stepping_ = Stepping::RealTime;
         laser_pol_ = LaserPol::Off;  // reset returns to the vanilla packet demo
         bfield_b_ = 0.0;             // and to no magnetic field
-        upload_magnetic_tables();    // restore the base half-potential
+        upload_field_tables();    // restore the base half-potential
         cpu_is_truth_ = true;  // GPU state discarded with the reset
         gpu_time_ = 0.0;
         pending_gpu_steps_ = 0;
@@ -1130,6 +1126,7 @@ public:
     // on, takes precedence in the stepping branch.
     void set_efield_e0(double e0) {
         efield_e0_ = e0;
+        upload_field_tables();  // fold E*z into the half-potential (with diamag if B on)
         if (e0 > 0.0 && !solving()) {
             stepping_ = Stepping::RealTime;  // let the field actually act
         }
@@ -1143,7 +1140,7 @@ public:
     // magnetic_step only has to add the paramagnetic rotation.
     void set_bfield_b(double b) {
         bfield_b_ = b;
-        upload_magnetic_tables();
+        upload_field_tables();
         if (b > 0.0 && !solving()) {
             stepping_ = Stepping::RealTime;
         }
@@ -1155,25 +1152,43 @@ public:
     // perpendicular to the axis, so the half-potential table is rebuilt.
     void toggle_bfield_axis() {
         bfield_axis_ = (bfield_axis_ == 2) ? 0 : (bfield_axis_ == 0 ? 1 : 2);
-        upload_magnetic_tables();
+        upload_field_tables();
         refresh_title();
         update();
     }
     int bfield_axis() const { return bfield_axis_; }
 
-    // The half-potential table the GPU step should use for the current field:
-    // V + (B^2/8) rho_perp^2 (via core MagneticPropagator) when B is on, the
-    // base atom when off.
-    void upload_magnetic_tables() {
+    // Rebuild the GPU half-potential for the current static fields:
+    //   V  +  E z (Stark, diagonal)  +  (B^2/8) rho_perp^2 (diamagnetic).
+    // Both static-E and diamagnetic are diagonal in position, so folding them
+    // in is exact (the old omega=0 dipole-kick equals this). The per-frame
+    // magnetic_step then only adds the paramagnetic rotation. Crossed E-B
+    // (E along z, B along x/y) is now a genuine combined solve.
+    void upload_field_tables() {
         if (!gpu_ok_) {
             return;
         }
         makeCurrent();
-        if (bfield_b_ > 0.0) {
-            const ses::MagneticPropagator3D mprop{sim_.grid(), sim_.potential(),
-                                                  sim_.dt(), bfield_b_, bfield_axis_};
-            const ses::SplitOperator3D aug{sim_.grid(), mprop.effective_potential(),
-                                           sim_.dt()};
+        if (efield_e0_ > 0.0 || bfield_b_ > 0.0) {
+            const ses::Grid3D& g = sim_.grid();
+            std::vector<double> v = sim_.potential();
+            if (efield_e0_ > 0.0) {
+                for (int k = 0; k < g.z.n; ++k) {
+                    const double ez = efield_e0_ * g.z.coord(k);
+                    for (int j = 0; j < g.y.n; ++j) {
+                        for (int i = 0; i < g.x.n; ++i) {
+                            v[static_cast<std::size_t>(g.flat(i, j, k))] += ez;
+                        }
+                    }
+                }
+            }
+            if (bfield_b_ > 0.0) {
+                // Reuse the core diamagnetic (perpendicular to the field axis).
+                const ses::MagneticPropagator3D mprop{g, v, sim_.dt(), bfield_b_,
+                                                      bfield_axis_};
+                v = mprop.effective_potential();
+            }
+            const ses::SplitOperator3D aug{g, v, sim_.dt()};
             engine_.set_half_potential(*this, aug.half_potential_phase());
         } else {
             engine_.set_half_potential(*this, sim_.propagator().half_potential_phase());
