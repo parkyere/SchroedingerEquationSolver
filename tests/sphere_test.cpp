@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -77,6 +78,42 @@ TEST(SphereMesh, IsWatertight) {
     for (const auto& [edge, count] : edge_count) {
         ASSERT_EQ(count, 2) << "open or non-manifold edge";
     }
+}
+
+// ---- arrow_mesh: the orientation-gizmo geometry (cylinder shaft + cone) ----
+
+TEST(ArrowMesh, IsANonEmptyTriangleSoupWithUnitNormals) {
+    const Mesh a = ses::arrow_mesh(Vec3d{0.0, 0.0, 1.0}, 1.0, 0.05, 0.12, 0.3, 12);
+    ASSERT_GT(a.vertices.size(), 0u);
+    EXPECT_EQ(a.vertices.size() % 3, 0u);
+    EXPECT_EQ(a.normals.size(), a.vertices.size());
+    for (const Vec3d& n : a.normals) {
+        EXPECT_NEAR(std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z), 1.0, 1e-9);
+    }
+}
+
+TEST(ArrowMesh, TipReachesTheLengthAndStaysWithinTheHead) {
+    const double len = 1.0, head_r = 0.12, shaft_r = 0.05;
+    const Mesh a = ses::arrow_mesh(Vec3d{0.0, 0.0, 1.0}, len, shaft_r, head_r, 0.3, 16);
+    double max_z = -1e9, min_z = 1e9, max_r = 0.0;
+    for (const Vec3d& v : a.vertices) {
+        max_z = std::max(max_z, v.z);
+        min_z = std::min(min_z, v.z);
+        max_r = std::max(max_r, std::sqrt(v.x * v.x + v.y * v.y));
+    }
+    EXPECT_NEAR(max_z, len, 1e-9);    // apex sits at z = length
+    EXPECT_NEAR(min_z, 0.0, 1e-9);    // base at the origin
+    EXPECT_LE(max_r, head_r + 1e-9);  // never wider than the head
+    EXPECT_GT(max_r, shaft_r);        // the head flares past the shaft
+}
+
+TEST(ArrowMesh, OrientsAlongAnArbitraryAxis) {
+    const Mesh a = ses::arrow_mesh(Vec3d{1.0, 0.0, 0.0}, 2.0, 0.05, 0.12, 0.3, 8);
+    double max_x = -1e9;
+    for (const Vec3d& v : a.vertices) {
+        max_x = std::max(max_x, v.x);
+    }
+    EXPECT_NEAR(max_x, 2.0, 1e-9);  // tip along +x at length 2
 }
 
 }  // namespace

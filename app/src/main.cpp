@@ -422,6 +422,7 @@ protected:
         glBindVertexArray(0);
 
         upload_proton_marker();
+        upload_axes_gizmo();
 
         // -- GPU propagation engine (fp32 transcription of the tested CPU
         //    tables; verified by sesolver_gpucheck). Falls back to CPU
@@ -752,6 +753,54 @@ protected:
             glDrawArrays(GL_TRIANGLES, 0, vertex_count_);
             glBindVertexArray(0);
         }
+
+        // Orientation gizmo overlays both views (its own corner viewport).
+        draw_axes_gizmo();
+    }
+
+    // XYZ orientation gizmo in the bottom-left corner: the same orbit
+    // orientation as the scene but at a FIXED distance (constant screen size),
+    // in a square viewport whose depth is cleared so it neither occludes nor is
+    // occluded by the scene. Lets the user read field / axis directions.
+    void draw_axes_gizmo() {
+        if (gizmo_vertex_count_ == 0) {
+            return;
+        }
+        GLint vp[4];
+        glGetIntegerv(GL_VIEWPORT, vp);  // full framebuffer viewport (device px)
+        const GLint side = std::clamp(std::min(vp[2], vp[3]) / 6, 96, 180);
+        const GLint margin = side / 8;
+
+        const double d_g = 3.2;  // frames the length-1 arrows in the corner box
+        const ses::Vec3d eye = ses::orbit_eye(azimuth_, elevation_, d_g, ses::Vec3d{});
+        const ses::Mat4 proj =
+            ses::perspective(45.0 * 3.14159265358979323846 / 180.0, 1.0, 0.1, 50.0);
+        const ses::Mat4 view =
+            ses::look_at(eye, ses::Vec3d{}, ses::Vec3d{0.0, 1.0, 0.0});
+        const ses::Mat4 mvp = proj * view;
+        float mvp_f[16];
+        for (int i = 0; i < 16; ++i) {
+            mvp_f[i] = static_cast<float>(mvp.m[i]);
+        }
+
+        glViewport(vp[0] + margin, vp[1] + margin, side, side);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(vp[0] + margin, vp[1] + margin, side, side);
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        glClear(GL_DEPTH_BUFFER_BIT);  // own depth region; no scene occlusion
+
+        glUseProgram(mesh_program_);
+        glUniformMatrix4fv(mesh_mvp_loc_, 1, GL_FALSE, mvp_f);
+        glUniform3f(mesh_eye_loc_, static_cast<float>(eye.x), static_cast<float>(eye.y),
+                    static_cast<float>(eye.z));
+        glBindVertexArray(gizmo_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, gizmo_vertex_count_);
+        glBindVertexArray(0);
+
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(vp[0], vp[1], vp[2], vp[3]);  // restore the full viewport
     }
 
     void draw_proton(const float* mvp_f, const ses::Vec3d& eye) {
@@ -1512,6 +1561,56 @@ private:
 
     // ---- GL uploads (current context required: called from initializeGL/paintGL) ----
 
+    // XYZ orientation gizmo: three arrows from the origin -- X red, Y green,
+    // Z blue -- baked into the mesh vertex format (per-vertex color). Uploaded
+    // once; drawn each frame by draw_axes_gizmo().
+    void upload_axes_gizmo() {
+        struct Axis {
+            ses::Vec3d dir;
+            float r, g, b;
+        };
+        const Axis axes[3] = {
+            {ses::Vec3d{1.0, 0.0, 0.0}, 0.95f, 0.25f, 0.25f},  // X red
+            {ses::Vec3d{0.0, 1.0, 0.0}, 0.30f, 0.85f, 0.30f},  // Y green
+            {ses::Vec3d{0.0, 0.0, 1.0}, 0.35f, 0.55f, 1.00f},  // Z blue
+        };
+        std::vector<float> interleaved;
+        for (const Axis& ax : axes) {
+            const ses::Mesh arrow = ses::arrow_mesh(ax.dir, 1.0, 0.045, 0.13, 0.32, 16);
+            for (std::size_t i = 0; i < arrow.vertices.size(); ++i) {
+                const ses::Vec3d& p = arrow.vertices[i];
+                const ses::Vec3d& n = arrow.normals[i];
+                interleaved.push_back(static_cast<float>(p.x));
+                interleaved.push_back(static_cast<float>(p.y));
+                interleaved.push_back(static_cast<float>(p.z));
+                interleaved.push_back(static_cast<float>(n.x));
+                interleaved.push_back(static_cast<float>(n.y));
+                interleaved.push_back(static_cast<float>(n.z));
+                interleaved.push_back(ax.r);
+                interleaved.push_back(ax.g);
+                interleaved.push_back(ax.b);
+            }
+        }
+        gizmo_vertex_count_ = static_cast<int>(interleaved.size() / 9);
+        glGenVertexArrays(1, &gizmo_vao_);
+        glBindVertexArray(gizmo_vao_);
+        glGenBuffers(1, &gizmo_vbo_);
+        glBindBuffer(GL_ARRAY_BUFFER, gizmo_vbo_);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(interleaved.size() * sizeof(float)),
+                     interleaved.data(), GL_STATIC_DRAW);
+        constexpr GLsizei kStride = 9 * sizeof(float);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, kStride, reinterpret_cast<void*>(0));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, kStride,
+                              reinterpret_cast<void*>(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, kStride,
+                              reinterpret_cast<void*>(6 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glBindVertexArray(0);
+    }
+
     // Static warm-colored sphere at the nucleus, in the mesh vertex format.
     void upload_proton_marker() {
         const ses::Mesh sphere = ses::sphere_mesh(ses::Vec3d{}, kProtonMarkerRadius, 16, 24);
@@ -1762,6 +1861,9 @@ private:
     GLuint proton_vao_ = 0;
     GLuint proton_vbo_ = 0;
     int proton_vertex_count_ = 0;
+    GLuint gizmo_vao_ = 0;
+    GLuint gizmo_vbo_ = 0;
+    int gizmo_vertex_count_ = 0;
     std::mt19937 rng_{std::random_device{}()};
 
     GLuint volume_program_ = 0;
