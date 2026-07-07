@@ -98,6 +98,41 @@ TEST(RealSphericalHarmonic, LEqualsFourPointValues) {
     EXPECT_NEAR(ses::real_spherical_harmonic(4, -4, s, s, 0.0), 0.0, 1e-12);
 }
 
+TEST(RealSphericalHarmonic, LEqualsFivePointValues) {
+    // The l = 5 (h) shell: the six n = 6 orbitals' highest angular momentum.
+    // Canonical Cartesian forms (numerator / r^5); constants and polynomials
+    // verified harmonic + orthonormal over the sphere to machine precision.
+    // h_z5 (m=0) at the +z pole: z(63 z^4 - 70 z^2 r^2 + 15 r^4)/r^5 = 8 there.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 0, 0.0, 0.0, 1.0),
+                (1.0 / 16.0) * std::sqrt(11.0 / kPi) * 8.0, 1e-12);
+    // m=+5 on the +x axis: x^5 / r^5 = 1.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 5, 1.0, 0.0, 0.0),
+                (1.0 / 32.0) * std::sqrt(1386.0 / kPi), 1e-12);
+    // m=-5 on the +y axis: (5 x^4 y - 10 x^2 y^3 + y^5)/r^5 = 1.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, -5, 0.0, 1.0, 0.0),
+                (1.0 / 32.0) * std::sqrt(1386.0 / kPi), 1e-12);
+    // m=+1 on the +x axis: x(21 z^4 - 14 z^2 r^2 + r^4)/r^5 = 1.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 1, 1.0, 0.0, 0.0),
+                (1.0 / 16.0) * std::sqrt(165.0 / kPi), 1e-12);
+    // m=-3 on the +y axis: y(3 x^2 - y^2)(9 z^2 - r^2)/r^5 = (1)(-1)(-1) = 1.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, -3, 0.0, 1.0, 0.0),
+                (1.0 / 32.0) * std::sqrt(770.0 / kPi), 1e-12);
+    // m=+3 on the +x axis: x(x^2 - 3 y^2)(9 z^2 - r^2)/r^5 = (1)(1)(-1) = -1.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 3, 1.0, 0.0, 0.0),
+                -(1.0 / 32.0) * std::sqrt(770.0 / kPi), 1e-12);
+    // m=+2 on the (1,0,1)/sqrt2 diagonal: (x^2-y^2) z (3 z^2 - r^2)/r^5 =
+    // (1/2)(s)(1/2) = s/4 with s = 1/sqrt2.
+    const double s = 1.0 / std::sqrt(2.0);
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 2, s, 0.0, s),
+                (1.0 / 8.0) * std::sqrt(1155.0 / kPi) * 0.25 * s, 1e-12);
+    // m=-4 vanishes on the x = y diagonal (4 x y (x^2 - y^2) z = 0).
+    const double s3 = 1.0 / std::sqrt(3.0);
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, -4, s3, s3, s3), 0.0, 1e-12);
+    // Pole nodes: m=+4 and m=+5 need x, y and vanish on the +z axis.
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 4, 0.0, 0.0, 1.0), 0.0, 1e-12);
+    EXPECT_NEAR(ses::real_spherical_harmonic(5, 5, 0.0, 0.0, 1.0), 0.0, 1e-12);
+}
+
 struct SynthCase {
     int l;
     int m;
@@ -117,12 +152,13 @@ TEST(SynthesizeOrbital, HarmonicTrapEnergiesThroughTheFull3DMachinery) {
     }
 
     // E = w (2k + l + 3/2): s, p_z, d_z2, d_xy, the 2s-like k=1, the
-    // l = 3 f states (E = 4.5), and the l = 4 g states (E = 5.5) for the
-    // n = 5 shell.
+    // l = 3 f states (E = 4.5), the l = 4 g states (E = 5.5), and the l = 5
+    // h states (E = 6.5) -- the highest angular momentum of the n = 6 shell.
     const SynthCase cases[] = {
         {0, 0, 0, 1.5}, {1, 0, 0, 2.5}, {2, 0, 0, 3.5}, {2, -2, 0, 3.5},
         {0, 0, 1, 3.5}, {3, 0, 0, 4.5}, {3, -2, 0, 4.5}, {3, 3, 0, 4.5},
         {4, 0, 0, 5.5}, {4, -4, 0, 5.5}, {4, 2, 0, 5.5},
+        {5, 0, 0, 6.5}, {5, -5, 0, 6.5}, {5, 3, 0, 6.5},
     };
     for (const SynthCase& c : cases) {
         const ses::RadialState st =
@@ -155,6 +191,9 @@ TEST(SynthesizeOrbital, SetIsOrthonormalOnTheGrid) {
         {4, -4, 0, 0.0}, {4, -3, 0, 0.0}, {4, -2, 0, 0.0}, {4, -1, 0, 0.0},
         {4, 0, 0, 0.0}, {4, 1, 0, 0.0}, {4, 2, 0, 0.0}, {4, 3, 0, 0.0},
         {4, 4, 0, 0.0},                                                    // g
+        {5, -5, 0, 0.0}, {5, -4, 0, 0.0}, {5, -3, 0, 0.0}, {5, -2, 0, 0.0},
+        {5, -1, 0, 0.0}, {5, 0, 0, 0.0}, {5, 1, 0, 0.0}, {5, 2, 0, 0.0},
+        {5, 3, 0, 0.0}, {5, 4, 0, 0.0}, {5, 5, 0, 0.0},                    // h
     };
     for (const SynthCase& c : cases) {
         const ses::RadialState st =
