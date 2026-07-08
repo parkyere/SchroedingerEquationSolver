@@ -1973,7 +1973,7 @@ private:
                                .arg(relax_energy_display_ * kHaToEv, 0, 'f', 3);
         }
         window()->setWindowTitle(
-            QStringLiteral("Electron near a soft-Coulomb nucleus   t = %1   %2"
+            QStringLiteral("Electron near a hydrogen nucleus   t = %1   %2"
                            "norm = %3   [%4, %5, %6]  1=real 2=relax R=reset tab=view "
                            "[ ]=density M=pos E=energy")
                 .arg(sim_.time() + gpu_time_, 0, 'f', 2)
@@ -2441,7 +2441,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
 
     QMainWindow window;
-    window.setWindowTitle(QStringLiteral("Electron wavepacket near a soft-Coulomb nucleus"));
+    window.setWindowTitle(QStringLiteral("Electron wavepacket near a hydrogen nucleus"));
     auto* viewport = new Viewport();
     window.setCentralWidget(viewport);
 

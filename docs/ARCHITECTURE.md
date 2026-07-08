@@ -51,7 +51,7 @@ Hand-written (the learning lives here):
 - FFT (1D radix-2 → N-D, CPU and GPU compute-shader variants)
 - grid, complex field, finite-difference / spectral operators
 - time propagation (split-operator Fourier method, real and imaginary time)
-- potentials (harmonic, softened Coulomb)
+- potentials (harmonic, regularized bare Coulomb)
 - visualization geometry/color math (marching cubes, transfer functions)
 - all OpenGL rendering/compute logic (shaders, buffers, camera, volume cloud)
 
@@ -72,8 +72,13 @@ FFTW (we hand-roll the FFT), Eigen/BLAS/LAPACK.
   and it makes the hand-rolled FFT the centerpiece.
 - **Never** `-ffast-math` / `/fp:fast` — it breaks NaN handling and bitwise
   reproducibility that the tests rely on.
-- Soften the Coulomb `1/r` singularity (`1/√(r²+a²)`) so a grid point on the
-  nucleus does not produce NaNs.
+- **Regularize the bare Coulomb `-Z/r`** rather than softening it: the single
+  cell on the nucleus (where `-Z/r` = -∞) takes the analytic cell average
+  `-Z·C/h` (`C = ∫1/r` over the unit cube ≈ 2.380), while every other cell keeps
+  the exact `-Z/r`. This yields the textbook hydrogen spectrum (`E(1s) = -13.6
+  eV`, exact `2s = 2p` degeneracy); the older soft-Coulomb `-Z/√(r²+a²)` rounded
+  the whole well and pushed `E(1s)` up to -9 eV. The radial solves feed bare
+  `-Z/r` directly (their grid `r = (i+1)h` never hits 0).
 
 ## Validation strategy
 
