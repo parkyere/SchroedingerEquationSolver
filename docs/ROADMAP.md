@@ -6,6 +6,9 @@ then 3D; physics first, rendering last.
 
 Legend: each phase lists the *first* red tests that gate it.
 
+> **Status:** Phases 0-7 are all complete. The project has since grown several
+> arcs well beyond this original ladder -- see **Beyond the ladder** at the end.
+
 ## Phase 0 — Scaffolding ✅
 Build system, layered structure, GoogleTest harness, TDD guard hook, docs.
 
@@ -46,8 +49,8 @@ Hand-rolled, header-driven where sensible.
   Red: 3D free Gaussian dispersion; 3D harmonic coherent state.
 
 ## Phase 7 — Visualization (hand-written OpenGL, Humble Object shell)
-Pure, testable geometry/color math in `core/viz`; thin GL drawing in `app/`.
-- `core/viz`: marching-cubes vertex/normal generation, transfer-function
+Pure, testable geometry/color math in `core/`; thin GL drawing in `app/`.
+- `core/` geometry: marching-cubes vertex/normal generation, transfer-function
   mapping, camera/MVP matrices. Red: marching cubes on an analytic sphere field
   yields the right surface area / vertex count within tolerance; transfer
   function maps known density→color; camera matrix maps a known point correctly.
@@ -59,8 +62,33 @@ Pure, testable geometry/color math in `core/viz`; thin GL drawing in `app/`.
 
 ### Notes
 - Atomic units throughout (ℏ=mₑ=e=1).
-- The "electron cloud" first shown is a **moving wavepacket** `|ψ(r,t)|²`
-  (Phase 4→6→7), not a stationary orbital. Stationary hydrogen orbitals come
-  later via imaginary-time propagation on the same engine, if wanted.
+- **The startup flow has since inverted:** the app now first SOLVES and
+  synthesizes the stationary **n ≤ 6 eigenstate atlas** on the GPU
+  (`ψ = (u/r)Yₗₘ`, no imaginary-time ladder), then runs the moving-wavepacket
+  `|ψ(r,t)|²` demo with spontaneous decay armed. Imaginary time survives as the
+  Key-2 "relax to 1s" cooling demo.
 - Keep `core` free of Qt/GL at every phase; if a thing is hard to test, it
   probably belongs in `core` as data, not in `app` as logic.
+
+---
+
+### Beyond the ladder (delivered since)
+
+The project grew well past Phase 7. Each later arc is TDD'd against analytic /
+CPU oracles and (for GPU kernels) verified in `sesolver_gpucheck`:
+
+- **Transitions:** radial engine (all bound levels to n = 10 + E1 lifetimes),
+  Einstein-A multi-channel quantum-jump decay, resonant laser / Rabi, position
+  **and** energy-basis measurement, radiative cascades.
+- **GPU compute** (see [GPU_PLAN.md](GPU_PLAN.md)): all real- and
+  imaginary-time evolution, orbital synthesis, and dipole / mean-force
+  reductions run on OpenGL 4.3 compute at 256³.
+- **Manifold:** the tracked m-resolved shell raised to **n ≤ 6** (91 states),
+  real Yₗₘ to **l = 5** (h orbitals).
+- **Static fields, solved as a proper Hamiltonian:** E-field (Stark, a dipole
+  term in the half-potential) and magnetic field **z/x/y** (paramagnetic Larmor
+  via an exact three-shear rotation, `core/rotation.hpp`; diamagnetic folded
+  into the potential, `core/magnetic.hpp`), crossed E-B; a boundary absorbing
+  mask for the periodic FFT box.
+- **Radiation:** semiclassical Larmor power from the oscillating dipole
+  (Ehrenfest ⟨∇V⟩, `core/emission.hpp`).

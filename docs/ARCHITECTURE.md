@@ -90,5 +90,6 @@ analytic oracle as its red test:
 ## Build topology
 
 `CMakeLists.txt` (root) → `core/` (always) → `tests/` (if `SES_BUILD_TESTS`) →
-`app/` (if `SES_BUILD_APP` **and** Qt6 found). The app is optional so the TDD
-loop never requires a Qt toolchain.
+`bench/` (if `SES_BUILD_BENCH`, the `sesolver_bench` micro-benchmark) →
+`app/` (if `SES_BUILD_APP` **and** Qt6 found). The app and bench are optional
+so the TDD loop never requires a Qt toolchain.

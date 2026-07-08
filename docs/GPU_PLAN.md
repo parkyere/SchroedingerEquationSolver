@@ -9,8 +9,9 @@ MSVC host compiler), DirectX rejected (Windows-only).
 ## Why
 
 64^3 is real-time on the CPU (OpenMP+AVX2: advance ~13.5 ms). The GPU arc is
-the enabler for **128^3+** (estimated CPU ~110 ms/step) and removes the
-per-frame psi texture upload entirely (the field becomes GPU-resident).
+the enabler for **higher resolution** -- the app now deploys **256^3** -- and
+removes the per-frame psi texture upload entirely (the field becomes
+GPU-resident).
 
 ## Precision strategy (the honest constraint)
 
@@ -50,9 +51,9 @@ Compute shaders cannot be gtest-unit-tested from the pure core. Instead:
   tables from SplitOperator3D's tested accessors; the bridge compute pass
   writes the RG32F 3D texture (no CPU round-trip). Verified: 20 GPU steps vs
   20 CPU steps at 1.2e-6; bridge bitwise.
-- [x] G5: shell steps on the GPU at 128^3 (~50-55 fps; CPU would be ~9);
-  relax/measure/surface stay on the CPU double session behind the single
-  cpu_is_truth_ sync invariant. Hardened by adversarial review (stale-bridge,
+- [x] G5: shell steps on the GPU at 256^3; measure/surface stay on the CPU
+  double session behind the single cpu_is_truth_ sync invariant (relaxation
+  later moved to the GPU too -- G7). Hardened by adversarial review (stale-bridge,
   buffer-update barriers, execute-side time accounting, peak tracking).
 - [x] G6: norm/peak tree-reduction kernel (2 KB readback replaces the 16 MB
   title drain) + scale kernel for fp32 drift renormalization -- the norm now
@@ -63,8 +64,13 @@ Compute shaders cannot be gtest-unit-tested from the pure core. Instead:
   renormalization reuses the G6 reduction, whose pre-renorm norm gives the
   ITP energy estimator E ~= -ln||psi||^2/(2 dtau) for free. Verified: 50 GPU
   steps match the CPU relaxer at 4.7e-7; the estimator hits the harmonic
-  3w/2 at 1.4998. The whole stationary-state demo arc now runs at 128^3.
+  3w/2 at 1.4998. The whole stationary-state demo arc now runs at 256^3.
 
-The GPU arc is complete: the Cloud view never leaves the GPU in either time
-direction; the CPU double session remains the tested truth for measure,
-surface meshing, and as gpucheck's reference.
+GPU residency has since grown past propagation: the startup **orbital
+synthesis** (ψ = (u/r)Yₗₘ, no CPU field -- atlas build ~90s -> seconds), the
+**dipole / mean-force ⟨∇V⟩ reductions** (decay channels + semiclassical
+radiated power), and the **static E/B-field Hamiltonian** (dipole half-kick,
+three-shear Larmor rotation, diamagnetic potential) all run on GPU compute too
+-- each with its `sesolver_gpucheck` comparison. The CPU double session remains
+the tested truth for position measurement, surface meshing, and as gpucheck's
+reference.

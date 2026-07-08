@@ -87,26 +87,29 @@ git config core.hooksPath tools/git-hooks
 
 ## Status
 
-Phases 0-7 plus the GPU engine and the transitions arc delivered (168 tests
-green): the hand-rolled Complex/FFT/split-operator/imaginary-time stack is
-validated against analytic oracles through 3D, and `sesolver_app` renders
-the TDSE as a TRUE VOLUME-RENDERED electron cloud at 128^3 -- propagation,
-relaxation, and rendering all GPU-resident (OpenGL 4.3 compute; every
-kernel verified against the unit-tested CPU double core by
-`sesolver_gpucheck`). The full atom-and-light demo works from first
-principles computed by the solver itself:
+Phases 0-7 plus the GPU engine and the transitions, static-field, magnetic
+(Larmor), and radiation arcs delivered (216 tests green): the hand-rolled
+Complex/FFT/split-operator/imaginary-time stack is validated against analytic
+oracles through 3D, and `sesolver_app` renders the TDSE as a TRUE
+VOLUME-RENDERED electron cloud at 256^3 -- propagation, relaxation, orbital
+synthesis, and rendering all GPU-resident (OpenGL 4.3 compute; every kernel
+verified against the unit-tested CPU double core by `sesolver_gpucheck`). The
+full atom-and-light demo works from first principles computed by the solver
+itself:
 
 At startup the app SOLVES the atom first. The spherical potential reduces
 exactly to 1D per angular momentum, so the hand-rolled radial engine
 (Sturm bisection + inverse iteration) finds ALL 55 bound levels to n = 10
-with their E1 lifetimes -- the full table prints to the console (2p 4.8
-ns; 2s 184 ns through the degeneracy-lifted 2s->2p channel; 10s 95 us).
-The 3D tracked manifold is everything the +-64 Bohr box (256^3) and the
-16 GB GPU physically hold: the full m-resolved n <= 4 shell -- 30 states
-synthesized as (u/r) Y_lm, 161 decay channels, audited E_radial vs
-<H>_grid to 1e-6 on every launch. The m-selection physics emerges
-numerically (3d_z2 -> 2p branches 4:1:1, Clebsch-Gordan). Then the
-wavepacket demo begins with spontaneous decay ARMED, as in nature.
+with their E1 lifetimes -- the full table prints to the console (soft-Coulomb
+a = 0.5: 2p 3.1 ns; 2s 337 ns through the degeneracy-lifted 2s->2p channel;
+10s 18 us). The 3D tracked manifold is everything the +-80 Bohr box (256^3,
+h = 0.625) and the GPU physically hold: the full m-resolved n <= 6 shell --
+91 states, real Y_lm to l = 5 (h orbitals), synthesized directly on the GPU
+as (u/r) Y_lm (no CPU field -- the atlas builds in seconds), with the decay
+channels and dipole matrix elements reduced on the GPU and E_radial audited
+vs <H>_grid on every launch. The m-selection physics emerges numerically
+(3d_z2 -> 2p branches 4:1:1, Clebsch-Gordan). Then the wavepacket demo
+begins with spontaneous decay ARMED, as in nature. Energies are shown in eV.
 
 - **1** real time / **2** relax to 1s / **3** relax to 2p_z / **4** relax
   to 2s (deflated imaginary time, live energy readout; relaxation
@@ -114,7 +117,10 @@ wavepacket demo begins with spontaneous decay ARMED, as in nature.
 - **5** excite an n=3/4 state and watch the CASCADE: 3d -> 2p (photon) ->
   1s (photon), or the triple chain 4f -> 3d -> 2p -> 1s -- the
   Delta-l = +-1 ladder forced by the selection rules;
-- **M** soft Gaussian position measurement (collapse and re-evolution);
+- **M** soft Gaussian position measurement / **E** projective energy
+  measurement (collapse onto an eigenstate sampled by |<n|psi>|^2, or an
+  honest "outside the tracked manifold" outcome from the bound set's
+  incompleteness);
 - **D** turns decay OFF (and back on) -- the switch for studying pure
   unitary evolution. Decay is multi-channel quantum jumps over the whole
   manifold: every downward pair gets its Einstein A from OUR
@@ -125,13 +131,23 @@ wavepacket demo begins with spontaneous decay ARMED, as in nature.
 - **L** resonant laser at w = E(2p) - E(1s): Z-polarization Rabi-pumps
   1s -> 2p_z (live P(1s)/P(2pz) readout), X-polarization pumps 2p_x
   instead so P(2pz) stays flat -- and its fluorescence clicks through the
-  2p_x decay channel. Laser + decay = repeated absorb/emit cycles.
+  2p_x decay channel. Laser + decay = repeated absorb/emit cycles;
+- **static E-field (+z)** and **magnetic field (z/x/y)** sliders solve the
+  field Hamiltonian PROPERLY: the E-field is a dipole term folded into the
+  half-potential (Stark polarization / field ionization); the B-field is the
+  paramagnetic (B/2)L Larmor rotation (exact unitary three-shear via the
+  Fourier shift theorem) plus the diamagnetic (B^2/8)rho_perp^2, so a p_x
+  cloud genuinely precesses into p_y. Crossed E-B works; a boundary absorbing
+  mask stops ionized flux wrapping the periodic FFT box; a live readout gives
+  the semiclassical Larmor radiated power of the oscillating dipole; an XYZ
+  gizmo (z labeled) shows the axes.
 
 Tab switches to the marching-cubes isosurface view; drag orbits, wheel
 zooms, space pauses, [ ] tunes cloud density. All shader math is
 unit-tested in core and transcribed into GLSL; the demo arcs regress
-headlessly via `--selftest-decay` / `--selftest-rabi` /
-`--selftest-manifold` / `--selftest-cascade`. See
+headlessly via `--selftest-decay` / `--selftest-rabi` / `--selftest-cascade`
+/ `--selftest-manifold` / `--selftest-energy` / `--selftest-efield` /
+`--selftest-magnetic`. See
 [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/GPU_PLAN.md](docs/GPU_PLAN.md).
 
 > Toolchain note: build with the Qt-bundled MinGW kit
