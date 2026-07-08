@@ -794,6 +794,7 @@ protected:
                         if (relax_plateau_ >= 12) {  // ~2 s of stable readout
                             relax_plateau_ = 0;
                             stepping_ = Stepping::RealTime;
+                            free_deflation_buffers();  // converged -> free the phi
                         }
                     }
                 }
@@ -1024,6 +1025,9 @@ public:
         }
         sim_ = make_simulation();
         stepping_ = Stepping::RealTime;
+        makeCurrent();
+        free_deflation_buffers();  // drop any owned deflation phi
+        doneCurrent();
         laser_pol_ = LaserPol::Off;  // reset returns to the vanilla packet demo
         bfield_b_ = 0.0;             // and to no magnetic field
         upload_field_tables();    // restore the base half-potential
@@ -1173,7 +1177,7 @@ public:
             if (mode_ != ViewMode::Cloud) {
                 mode_ = ViewMode::Cloud;
             }
-            if (!prepare_excited_cache()) {
+            if (!manifold_ready()) {
                 return;
             }
             laser_omega_ = state_energy_[kP2Z] - state_energy_[kS1];
@@ -1329,15 +1333,22 @@ protected:
         if (mode_ != ViewMode::Cloud) {
             mode_ = ViewMode::Cloud;
         }
-        if (deflate_p_triplet ? !prepare_p_triplet() : !prepare_ground_cache()) {
+        if (!manifold_ready()) {
             return;
         }
-        relax_deflate_.assign(1, state_buf_[kS1]);
+        // Deflation set synthesized into OWNED transient fp32 buffers (no resident
+        // atlas): freed at auto-complete / reset / the next relaxation.
+        // relax_deflated_step reads them as fp32 phi every relax frame.
+        makeCurrent();
+        free_deflation_buffers();
+        relax_deflate_.push_back(synth_transient(kS1));
         if (deflate_p_triplet) {
-            relax_deflate_.push_back(state_buf_[kP2X]);
-            relax_deflate_.push_back(state_buf_[kP2Y]);
-            relax_deflate_.push_back(state_buf_[kP2Z]);
+            relax_deflate_.push_back(synth_transient(kP2X));
+            relax_deflate_.push_back(synth_transient(kP2Y));
+            relax_deflate_.push_back(synth_transient(kP2Z));
         }
+        relax_deflate_owned_ = relax_deflate_;
+        doneCurrent();
         sim_.set_psi(seed);
         cpu_is_truth_ = true;
         relax_label_ = label;
@@ -1519,22 +1530,32 @@ protected:
                                     radial_grid_.n);
     }
 
-    // Free the resident atlas once the channel table + per-state grid norms are
-    // captured: populations come from the projection and collapse re-synthesizes
-    // on demand, so only the deflation set (kS1/kP2X/kP2Y/kP2Z, read every relax
-    // frame as fp32 phi by relax_deflated_step) must stay resident. Called from
-    // paintGL, where the context is already current.
-    void release_resident_atlas() {
-        for (int s = 0; s < kNumStates; ++s) {
-            if (s == kS1 || s == kP2X || s == kP2Y || s == kP2Z) {
-                continue;
-            }
-            GLuint& b = state_buf_[static_cast<std::size_t>(s)];
+    // Synthesize eigenstate idx into a FRESH fp32 buffer (caller frees); captures
+    // its grid norm (for populations) and energy. ALL build/deflation work uses
+    // these transients -- no resident atlas -- so the startup montage holds ONE
+    // orbital at a time (not all 91) and 512^3, where a resident atlas is
+    // physically impossible, becomes feasible. (fp16 is kept dormant for a future
+    // big-box preset; it only ever mattered for a RESIDENT atlas.)
+    GLuint synth_transient(int idx, double* out_norm2 = nullptr, double* out_peak = nullptr) {
+        const StateSpec& sp = kStateSpec[static_cast<std::size_t>(idx)];
+        state_energy_[static_cast<std::size_t>(idx)] =
+            radial_energy_[static_cast<std::size_t>(sp.level)];
+        return engine_.synthesize_state(*this, radial_u_[static_cast<std::size_t>(sp.level)],
+                                        sp.l, sp.m, radial_grid_.h(), radial_grid_.rmax,
+                                        radial_grid_.n, out_peak, out_norm2);
+    }
+
+    // Free the OWNED transient deflation buffers (synthesized at relax-start).
+    // Caller must hold a current GL context.
+    void free_deflation_buffers() {
+        for (GLuint b : relax_deflate_owned_) {
             if (b != 0) {
-                glDeleteBuffers(1, &b);
-                b = 0;
+                GLuint x = b;
+                glDeleteBuffers(1, &x);
             }
         }
+        relax_deflate_owned_.clear();
+        relax_deflate_.clear();
     }
 
     // Ensure state `idx` has a resident GPU buffer, synthesized on the GPU.
@@ -1567,18 +1588,17 @@ protected:
                 return;
             }
             const std::size_t s = static_cast<std::size_t>(idx);
-            // Synthesize this orbital straight into its resident GPU buffer:
-            // (u/r) Y_lm + normalization run entirely on the GPU, no CPU field.
+            // Synthesize into a TRANSIENT fp32 buffer: capture its grid norm (for
+            // populations), SHOW it (montage), audit, then FREE. The orbital-free
+            // projection keeps no atlas, so the montage holds ONE orbital at a
+            // time instead of accumulating all 91 (the old startup VRAM ramp).
             double pk = 0.0;
-            if (state_buf_[s] == 0) {
-                state_buf_[s] = gpu_synthesize(idx, &pk);
-            }
-            if (state_buf_[s] == 0) {
+            GLuint buf = synth_transient(idx, &state_norm2_[s], &pk);
+            if (buf == 0) {
                 atlas_done_ = true;  // GPU buffer alloc failed: give up gracefully
                 return;
             }
-            // Show it: copy the state into psi and bridge it to the texture.
-            engine_.copy_into_psi_p(*this, state_buf_[s], state_is_fp16(idx));
+            engine_.copy_into_psi(*this, buf);  // show (fp32)
             // The h-audit: cross-check the 1D radial energy against the full 3D
             // spectral <H> for the resolution-critical 1s and the box-critical
             // 4s/5s/6s -- the ONLY states read back to the CPU (4 of 91).
@@ -1597,6 +1617,7 @@ protected:
                 std::fprintf(stderr, "atlas: %-8s E_radial = %.6f Ha\n",
                              kStateSpec[s].name, state_energy_[s]);
             }
+            glDeleteBuffers(1, &buf);  // TRANSIENT: freed after show + audit
             if (pk > 0.0) {
                 peak_ = pk;
             }
@@ -1615,12 +1636,15 @@ protected:
             }
             if (pair_queue_.empty()) {
                 finalize_channel_table();
-                // The orbital-free projection now supplies populations and
-                // collapse re-synthesizes on demand, so the resident atlas is no
-                // longer needed at runtime. Release all but the deflation set --
-                // ~11 GB freed at 256^3 (and 512^3 becomes feasible: the resident
-                // 91-state atlas would be ~97 GB, impossible).
-                release_resident_atlas();
+                // Free the channel-build 'from' cache; nothing else is resident
+                // (montage + pairs were transient). Populations come from the
+                // projection and collapse/deflation re-synthesize on demand -- NO
+                // resident atlas -> ~1.2 GB runtime, and 512^3 is feasible.
+                if (pair_from_buf_ != 0) {
+                    glDeleteBuffers(1, &pair_from_buf_);
+                    pair_from_buf_ = 0;
+                }
+                pair_from_idx_ = -1;
                 atlas_done_ = true;
                 cpu_is_truth_ = true;  // resume the untouched wavepacket
                 refresh_title();
@@ -1655,9 +1679,20 @@ protected:
         const std::size_t from = static_cast<std::size_t>(p.first);
         const std::size_t to = static_cast<std::size_t>(p.second);
         const double gap = state_energy_[from] - state_energy_[to];
-        const ses::DipoleMatrixElement d = engine_.dipole_between_p(
-            *this, state_buf_[to], state_is_fp16(static_cast<int>(to)),
-            state_buf_[from], state_is_fp16(static_cast<int>(from)));
+        // Transient endpoints (no resident atlas): cache the 'from' orbital
+        // across its consecutive channels (pairs are grouped by 'from'), and
+        // synthesize each 'to' fresh -- peak residency is 2 orbitals, never 91.
+        if (pair_from_idx_ != p.first) {
+            if (pair_from_buf_ != 0) {
+                glDeleteBuffers(1, &pair_from_buf_);
+            }
+            pair_from_buf_ = synth_transient(p.first);
+            pair_from_idx_ = p.first;
+        }
+        GLuint to_buf = synth_transient(p.second);
+        const ses::DipoleMatrixElement d =
+            engine_.dipole_between(*this, to_buf, pair_from_buf_);
+        glDeleteBuffers(1, &to_buf);
         channels_.push_back(ShellChannel{
             p.first, p.second, ses::einstein_a(gap, ses::dipole_strength_sq(d)), 0.0});
         if (p.first == kP2Z && p.second == kS1) {
@@ -2269,7 +2304,10 @@ private:
     QString last_measure_;  // last energy-measurement readout (Key E)
     int last_measured_index_ = -2;  // last energy-measurement outcome (selftest)
     QString relax_label_ = QStringLiteral("2p");
-    std::vector<GLuint> relax_deflate_;  // live RelaxingExcited deflation set
+    std::vector<GLuint> relax_deflate_;        // live RelaxingExcited deflation set
+    std::vector<GLuint> relax_deflate_owned_;  // owned transient buffers to free
+    int pair_from_idx_ = -1;                   // channel-build 'from' cache (transient)
+    GLuint pair_from_buf_ = 0;
     double relax_prev_energy_ = 0.0;     // T7 auto-complete plateau tracking
     int relax_plateau_ = 0;
 
