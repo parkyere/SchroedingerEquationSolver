@@ -1217,8 +1217,9 @@ public:
     // normalized peak (pre-pack), matching synthesize_state.
     GLuint synthesize_state_half(Gl& gl, const std::vector<double>& u, int l, int m,
                                  double h_radial, double rmax, int n_radial,
-                                 double* out_peak = nullptr) {
-        const GLuint fp32 = synthesize_state(gl, u, l, m, h_radial, rmax, n_radial, out_peak);
+                                 double* out_peak = nullptr, double* out_norm2 = nullptr) {
+        const GLuint fp32 =
+            synthesize_state(gl, u, l, m, h_radial, rmax, n_radial, out_peak, out_norm2);
         const GLuint half = make_half_state_buffer(gl);
         pack_to_half(gl, fp32, half);
         gl.glDeleteBuffers(1, &fp32);
@@ -1360,7 +1361,7 @@ public:
     // |psi|^2. The buffer is GL_STATIC_COPY (a write-once eigenstate).
     GLuint synthesize_state(Gl& gl, const std::vector<double>& u, int l, int m,
                             double h_radial, double rmax, int n_radial,
-                            double* out_peak = nullptr) {
+                            double* out_peak = nullptr, double* out_norm2 = nullptr) {
         upload_radial(gl, u);
         GLuint buf = 0;
         gl.glGenBuffers(1, &buf);
@@ -1395,11 +1396,17 @@ public:
         // Normalize in place: the norm reduction and scale act on binding 0
         // (still `buf`), exactly the core's normalize().
         const NormPeak np = run_norm_peak(gl, norm_prog_, partials_buf_, cells_);
-        const double norm_sq = np.sum * grid_.cell_volume();
+        const double norm_sq = np.sum * grid_.cell_volume();  // ||raw (u/r)Ylm||^2_grid
         const double inv = (norm_sq > 0.0) ? 1.0 / std::sqrt(norm_sq) : 0.0;
         run_scale(gl, scale_prog_, cells_, static_cast<float>(inv));
         if (out_peak != nullptr) {
             *out_peak = (norm_sq > 0.0) ? np.peak / norm_sq : 0.0;
+        }
+        // The pre-normalization grid norm: the projection normalizes populations
+        // by this (|<n|psi>|^2 = |raw dot|^2 / norm2_grid) to stay value-identical
+        // to the retired inner_with_psi(grid-normalized orbital) path.
+        if (out_norm2 != nullptr) {
+            *out_norm2 = norm_sq;
         }
         return buf;
     }

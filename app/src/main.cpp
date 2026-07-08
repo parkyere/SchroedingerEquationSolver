@@ -498,6 +498,17 @@ protected:
             // is then synthesized chunked across frames so decay is armed
             // BY DEFAULT and every demo entry point is instant afterwards.
             solve_radial_atom();
+            // Orbital-free projection index (Phase 5): the static counting-sort
+            // geometry, uploaded once. Populations then come from ONE project_psi
+            // deposit pass (state-count independent) instead of a per-state
+            // inner_with_psi over the resident atlas.
+            {
+                const ses::RadialBinIndex bin_idx =
+                    ses::build_radial_bin_index(sim_.grid(), radial_grid_);
+                engine_.set_projection_index(*this, bin_idx.sorted_cell, bin_idx.bin_off,
+                                             radial_grid_.n, radial_grid_.h(), 5);
+                proj_ready_ = true;
+            }
             synth_queue_.clear();
             for (int idx = 0; idx < kNumStates; ++idx) {
                 synth_queue_.push_back(idx);
@@ -614,12 +625,10 @@ protected:
             // even while paused (it writes psi_tex_ itself).
             if (pending_energy_measure_) {
                 pending_energy_measure_ = false;
+                engine_.project_psi(*this);
                 std::vector<double> pop(static_cast<std::size_t>(kNumStates));
                 for (int s = 0; s < kNumStates; ++s) {
-                    const ses_gpu::NormPeak ip = engine_.inner_with_psi_p(
-                        *this, state_buf_[static_cast<std::size_t>(s)],
-                        state_is_fp16(s));
-                    pop[static_cast<std::size_t>(s)] = ip.sum * ip.sum + ip.peak * ip.peak;
+                    pop[static_cast<std::size_t>(s)] = project_population(s);
                 }
                 std::uniform_real_distribution<double> uniform(0.0, 1.0);
                 const int n = ses::sample_energy_eigenstate(pop, uniform(rng_));
@@ -699,6 +708,16 @@ protected:
                         engine_.apply_mask(*this, mask_buf_);
                     }
 
+                    // Orbital-free populations (Phase 5): ONE deposit pass on the
+                    // post-step psi, shared by the decay and laser readouts this
+                    // title tick (state-count independent) -- replaces the
+                    // per-state inner_with_psi over the resident atlas.
+                    if (gpu_title_due_ && proj_ready_ &&
+                        ((decay_on_ && !channels_.empty()) ||
+                         laser_pol_ != LaserPol::Off)) {
+                        engine_.project_psi(*this);
+                    }
+
                     // T4/T5/T7: competing-channels Poisson trials over the
                     // whole tracked manifold. The exponential is memoryless,
                     // so trials run on the TITLE cadence with the sim time
@@ -712,10 +731,7 @@ protected:
                         if (gpu_title_due_) {
                             std::array<double, kNumStates> pop{};
                             for (int s = 1; s < kNumStates; ++s) {
-                                const ses_gpu::NormPeak ip =
-                                    engine_.inner_with_psi_p(*this, state_buf_[s],
-                                                             state_is_fp16(s));
-                                pop[s] = ip.sum * ip.sum + ip.peak * ip.peak;
+                                pop[s] = project_population(s);
                             }
                             std::vector<double> rates(channels_.size());
                             for (std::size_t c = 0; c < channels_.size(); ++c) {
@@ -746,14 +762,8 @@ protected:
                     // cadence -- two 2 KB reductions every ~10 ticks.
                     if (laser_pol_ != LaserPol::Off && gpu_title_due_ &&
                         state_buf_[kP2Z] != 0) {
-                        const ses_gpu::NormPeak pe =
-                            engine_.inner_with_psi_p(*this, state_buf_[kP2Z],
-                                                     state_is_fp16(kP2Z));
-                        pop_excited_ = pe.sum * pe.sum + pe.peak * pe.peak;
-                        const ses_gpu::NormPeak pg =
-                            engine_.inner_with_psi_p(*this, state_buf_[kS1],
-                                                     state_is_fp16(kS1));
-                        pop_ground_ = pg.sum * pg.sum + pg.peak * pg.peak;
+                        pop_excited_ = project_population(kP2Z);
+                        pop_ground_ = project_population(kS1);
                         rabi_peak_ = std::max(rabi_peak_, pop_excited_);
                     }
                 } else {
@@ -1482,11 +1492,27 @@ protected:
         if (state_is_fp16(idx)) {
             return engine_.synthesize_state_half(
                 *this, radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-                radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak);
+                radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
+                &state_norm2_[s]);
         }
         return engine_.synthesize_state(
             *this, radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak);
+            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
+            &state_norm2_[s]);
+    }
+
+    // Population |<n|psi>|^2 from the last engine_.project_psi() pass: the 1-D
+    // radial dot g_lm . u_nl, grid-normalized to be value-identical to the
+    // retired inner_with_psi(grid-normalized orbital) path.
+    double project_population(int idx) const {
+        const StateSpec& sp = kStateSpec[static_cast<std::size_t>(idx)];
+        const double n2 = state_norm2_[static_cast<std::size_t>(idx)];
+        if (n2 <= 0.0) {
+            return 0.0;
+        }
+        return ses::norm_sq(engine_.project_amplitude(
+                   radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m)) /
+               n2;
     }
 
     // Ensure state `idx` has a resident GPU buffer, synthesized on the GPU.
@@ -2206,6 +2232,11 @@ private:
     // Atlas storage precision, decided at startup from free VRAM: the fp32
     // n<=6 manifold is ~12 GB and oversubscribes a small card. Fp16 halves it.
     ses::GpuPrecision state_precision_ = ses::GpuPrecision::Fp32;
+    // Orbital-free projection (Phase 5): grid norm of each raw (u/r)Ylm orbital
+    // (captured at synthesis) normalizes projected populations to match the
+    // retired inner_with_psi path; proj_ready_ once the static index is uploaded.
+    std::array<double, kNumStates> state_norm2_{};
+    bool proj_ready_ = false;
     std::array<double, kNumStates> state_energy_{};
     std::vector<ShellChannel> channels_;
     double accel_display_ = 0.0;  // common display acceleration factor
