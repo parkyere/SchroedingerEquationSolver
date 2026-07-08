@@ -7,7 +7,9 @@ cmake_minimum_required(VERSION 3.21)
 # preset sets it); skipped if you already pinned CMAKE_CXX_COMPILER or set $CXX;
 # falls through safely to CMake's default if nothing on the list is found.
 # ---------------------------------------------------------------------------
-if(UNIX AND SES_AUTODETECT_COMPILER
+# NOTE: UNIX/WIN32 are only set after project(); use CMAKE_HOST_UNIX (available
+# from startup) since this is about the build host's compilers.
+if(CMAKE_HOST_UNIX AND SES_AUTODETECT_COMPILER
    AND NOT DEFINED CMAKE_CXX_COMPILER AND "$ENV{CXX}" STREQUAL "")
     # Newest first (LLVM ahead of GCC). Extend the top as toolchains land.
     foreach(_cxx IN ITEMS
