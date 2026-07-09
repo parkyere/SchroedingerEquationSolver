@@ -1332,6 +1332,44 @@ bool check_synth(QRhi* rhi) {
     return ok;
 }
 
+// SSBO -> 3D volume texture bridge (the renderer feed for M3): copy psi into an
+// RGBA32F volume via imageStore, then read the texture back through an SSBO
+// (imageLoad). A store->load round-trip that reproduces psi bit-for-bit proves
+// imageStore wrote exactly the SSBO contents (the GL check's "pure copy: must
+// be bitwise"). Exercises QRhi 3D storage-image handling, new for M3.
+bool check_bridge(QRhi* rhi) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 0.0},
+                                                 ses::Vec3d{1.2, 1.2, 1.2},
+                                                 ses::Vec3d{0.0, 0.5, 0.0});
+    ses_qrhi::QrhiEngine engine;
+    if (!engine.initialize(rhi, g, prop.half_potential_phase(), prop.kinetic_phase(),
+                           psi0.data())) {
+        std::printf("texture bridge (QRhi/Vulkan): engine init FAIL\n");
+        return false;
+    }
+    engine.step(20);  // a non-trivial psi to copy
+
+    std::vector<float> ssbo;
+    engine.readback(ssbo);
+    std::vector<float> tex;
+    if (!engine.bridge_roundtrip(tex)) {
+        std::printf("texture bridge (QRhi/Vulkan): bridge FAIL\n");
+        return false;
+    }
+    double err = 0.0;
+    for (std::size_t i = 0; i < ssbo.size(); ++i) {
+        err = std::max(err, static_cast<double>(std::abs(tex[i] - ssbo[i])));
+    }
+    const bool ok = err == 0.0;  // pure copy: must be bitwise
+    std::printf("texture bridge (QRhi/Vulkan): max |tex - ssbo| = %.3e  [%s]\n", err,
+                ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1378,6 +1416,7 @@ int main(int argc, char** argv) {
     ok = check_deflation(rhi.data()) && ok;
     ok = check_magnetic(rhi.data()) && ok;
     ok = check_synth(rhi.data()) && ok;
+    ok = check_bridge(rhi.data()) && ok;
     std::printf("%s\n", ok ? "QRhi kernel checks PASS" : "QRhi kernel checks FAILED");
     return ok ? 0 : 1;
 }

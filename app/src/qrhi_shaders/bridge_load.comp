@@ -1,0 +1,23 @@
+#version 450
+
+// Inverse of bridge_store, for verification only: read the volume texture back
+// into an SSBO (imageLoad) so the bridge can be checked without a 3D-texture
+// readback (which QRhi handles per-slice). A store->load round-trip that
+// reproduces psi bit-for-bit proves imageStore wrote exactly the SSBO contents.
+// out SSBO (binding 0), image3D in (binding 1), grid dims UBO (binding 2).
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) writeonly buffer OutBuf { vec2 outp[]; };
+layout(rgba32f, binding = 1) uniform readonly image3D img;
+layout(std140, binding = 2) uniform Params { int nx; int ny; int nz; };
+
+void main() {
+    int idx = int(gl_GlobalInvocationID.x);
+    if (idx >= nx * ny * nz) {
+        return;
+    }
+    int i = idx % nx;
+    int j = (idx / nx) % ny;
+    int k = idx / (nx * ny);
+    outp[idx] = imageLoad(img, ivec3(i, j, k)).xy;
+}

@@ -543,6 +543,54 @@ public:
         }
     }
 
+    // ---- SSBO -> 3D volume texture bridge (renderer seed for M3) --------
+    // Copy psi into the owned RGBA32F volume texture (imageStore, .xy = psi),
+    // the GPU-to-GPU feed the volume renderer samples. write_psi_to_volume does
+    // the store; bridge_roundtrip additionally reads the texture back through an
+    // SSBO (imageLoad) so the bridge is verifiable without a per-slice 3D
+    // texture readback. Returns false if a resource fails to build.
+    bool write_psi_to_volume() {
+        if (!ensure_bridge()) { return false; }
+        const int groups = static_cast<int>((cells_ + 255) / 256);
+        const BridgeParams bp{ grid_.x.n, grid_.y.n, grid_.z.n, 0 };
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return false; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        u->updateDynamicBuffer(bridge_ubo_.data(), 0, sizeof(BridgeParams), &bp);
+        cb->beginComputePass(u);
+        cb->setComputePipeline(store_pipe_.data());
+        cb->setShaderResources(store_srb_.data());
+        cb->dispatch(groups, 1, 1);
+        cb->endComputePass();
+        rhi_->endOffscreenFrame();
+        return true;
+    }
+
+    // psi -> volume texture -> scratch SSBO -> host. out matches psi bit-for-bit
+    // iff imageStore/imageLoad round-trip the RGBA32F texel .xy losslessly.
+    bool bridge_roundtrip(std::vector<float>& out) {
+        if (!write_psi_to_volume()) { return false; }
+        const int groups = static_cast<int>((cells_ + 255) / 256);
+        const BridgeParams bp{ grid_.x.n, grid_.y.n, grid_.z.n, 0 };
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return false; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        u->updateDynamicBuffer(bridge_ubo_.data(), 0, sizeof(BridgeParams), &bp);
+        cb->beginComputePass(u);
+        cb->setComputePipeline(load_pipe_.data());
+        cb->setShaderResources(load_srb_.data());
+        cb->dispatch(groups, 1, 1);
+        QRhiReadbackResult rb;
+        QRhiResourceUpdateBatch* d = rhi_->nextResourceUpdateBatch();
+        d->readBackBuffer(scratch_bridge_buf_.data(), 0,
+                          static_cast<quint32>(2 * cells_ * sizeof(float)), &rb);
+        cb->endComputePass(d);
+        rhi_->endOffscreenFrame();
+        out.assign(reinterpret_cast<const float*>(rb.data.constData()),
+                   reinterpret_cast<const float*>(rb.data.constData()) + 2 * cells_);
+        return true;
+    }
+
 private:
     static constexpr int kGroups = 256;  // norm/peak workgroups (ses_gpu::kNormPeakGroups)
 
@@ -575,6 +623,7 @@ private:
         qint32 m, n_radial;
         float h_radial, rmax;
     };
+    struct alignas(16) BridgeParams { qint32 nx, ny, nz, pad; };
 
     // An auxiliary (lower) eigenstate resident on the GPU plus its bindings for
     // the deflation kernels. Heap-owned (unique_ptr) so the QScopedPointer members
@@ -798,6 +847,42 @@ private:
         return shear_pipe_->create();
     }
 
+    // Lazily build the RGBA32F volume texture, its scratch readback buffer, and
+    // the store/load bridge pipelines on the first bridge call.
+    bool ensure_bridge() {
+        if (!store_pipe_.isNull()) { return true; }
+        const QShader storecs = load_qsb(QStringLiteral(":/shaders/bridge_store.comp.qsb"));
+        const QShader loadcs = load_qsb(QStringLiteral(":/shaders/bridge_load.comp.qsb"));
+        if (!storecs.isValid() || !loadcs.isValid()) { return false; }
+        volume_tex_.reset(rhi_->newTexture(
+            QRhiTexture::RGBA32F, n_, n_, n_, 1,
+            QRhiTexture::ThreeDimensional | QRhiTexture::UsedWithLoadStore));
+        if (!volume_tex_->create()) { return false; }
+        scratch_bridge_buf_.reset(rhi_->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer,
+                                                  static_cast<quint32>(2 * cells_ * sizeof(float))));
+        bridge_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                          sizeof(BridgeParams)));
+        if (!scratch_bridge_buf_->create() || !bridge_ubo_->create()) { return false; }
+        using B = QRhiShaderResourceBinding;
+        const auto cs = B::ComputeStage;
+        store_srb_.reset(rhi_->newShaderResourceBindings());
+        store_srb_->setBindings({ B::bufferLoad(0, cs, psi_.data()),
+                                  B::imageStore(1, cs, volume_tex_.data(), 0),
+                                  B::uniformBuffer(2, cs, bridge_ubo_.data()) });
+        load_srb_.reset(rhi_->newShaderResourceBindings());
+        load_srb_->setBindings({ B::bufferLoadStore(0, cs, scratch_bridge_buf_.data()),
+                                 B::imageLoad(1, cs, volume_tex_.data(), 0),
+                                 B::uniformBuffer(2, cs, bridge_ubo_.data()) });
+        if (!store_srb_->create() || !load_srb_->create()) { return false; }
+        store_pipe_.reset(rhi_->newComputePipeline());
+        store_pipe_->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, storecs));
+        store_pipe_->setShaderResourceBindings(store_srb_.data());
+        load_pipe_.reset(rhi_->newComputePipeline());
+        load_pipe_->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, loadcs));
+        load_pipe_->setShaderResourceBindings(load_srb_.data());
+        return store_pipe_->create() && load_pipe_->create();
+    }
+
     // One shear (own frame): FFT along freq_axis, phase-shift by coeff*coord,
     // then inverse FFT along that axis (conj -> FFT -> conj/n). The freq/conj
     // UBOs are constant per axis; only shear_ubo_ carries this shear's geometry.
@@ -891,6 +976,14 @@ private:
     QScopedPointer<QRhiBuffer> radial_buf_, synth_ubo_;
     QScopedPointer<QRhiShaderResourceBindings> synth_srb_;
     QScopedPointer<QRhiComputePipeline> synth_pipe_;
+
+    // SSBO -> 3D volume texture bridge (write_psi_to_volume / bridge_roundtrip):
+    // the RGBA32F volume the renderer samples, plus a scratch buffer + load
+    // pipeline that reads it back for verification.
+    QScopedPointer<QRhiTexture> volume_tex_;
+    QScopedPointer<QRhiBuffer> scratch_bridge_buf_, bridge_ubo_;
+    QScopedPointer<QRhiShaderResourceBindings> store_srb_, load_srb_;
+    QScopedPointer<QRhiComputePipeline> store_pipe_, load_pipe_;
 };
 
 }  // namespace ses_qrhi
