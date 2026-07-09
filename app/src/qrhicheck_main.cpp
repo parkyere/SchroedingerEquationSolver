@@ -1116,9 +1116,102 @@ bool check_driven(QRhi* rhi) {
     return pass;
 }
 
+// T1 (QRhi): the deflated imaginary-time relax vs ImaginaryTimePropagator3D::
+// relax_deflated -- Gram-Schmidt projecting the ground state out each step so
+// the flow climbs to the first excited level. Exercises the inner-product
+// reduction, the axpy projection, and copy_into_psi (the collapse path). An
+// 8^3 grid matches the baked fft_line8; the excited energy estimate is reported
+// for info (the 8^3 grid is too coarse to pin it to 5w/2, like check_relax).
+bool check_deflation(QRhi* rhi) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v = ses::harmonic_potential(g, 1.0, ses::Vec3d{});
+    const double dtau = 0.05;
+    const ses::SplitOperator3D real_prop{g, v, 0.02};  // phase tables for init
+    const ses::ImaginaryTimePropagator3D cpu_relaxer{g, v, dtau};
+
+    // CPU ground state (the deflation target) + a mixed-parity guess.
+    ses::Field3D ground = ses::gaussian_wavepacket(g, ses::Vec3d{},
+                                                   ses::Vec3d{1.2, 1.2, 1.2}, ses::Vec3d{});
+    cpu_relaxer.relax(ground, 600);
+    ses::Field3D guess = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.5, 0.0},
+                                                  ses::Vec3d{1.2, 1.2, 1.2}, ses::Vec3d{});
+
+    ses_qrhi::QrhiEngine engine;
+    if (!engine.initialize(rhi, g, real_prop.half_potential_phase(), real_prop.kinetic_phase(),
+                           guess.data())) {
+        std::printf("deflation (QRhi/Vulkan): engine init FAIL\n");
+        return false;
+    }
+    if (!engine.set_relax_tables(cpu_relaxer.half_potential_weight(),
+                                 cpu_relaxer.kinetic_weight(), dtau, g.cell_volume())) {
+        std::printf("deflation (QRhi/Vulkan): set_relax_tables FAIL\n");
+        return false;
+    }
+    const int ground_h = engine.create_state_buffer(ground.data());
+    if (ground_h < 0) {
+        std::printf("deflation (QRhi/Vulkan): create_state_buffer FAIL\n");
+        return false;
+    }
+
+    // Inner-product kernel: <ground|guess> vs the CPU double reference.
+    const ses::Complex<double> cpu_ip = ses::inner_product(ground, guess);
+    const ses::Complex<double> gpu_ip = engine.inner_with_psi(ground_h);
+    const double ip_err = std::max(std::abs(gpu_ip.real() - cpu_ip.real()),
+                                   std::abs(gpu_ip.imag() - cpu_ip.imag()));
+    const bool ip_ok = ip_err < 1e-6;
+    std::printf("  inner-product <phi|psi> (QRhi/Vulkan): max err %.3e  [%s]\n", ip_err,
+                ip_ok ? "PASS" : "FAIL");
+
+    // Deflated relax: 50 GPU steps vs 50 CPU steps (numeric parity).
+    engine.relax_deflated_step({ground_h}, 50);
+    std::vector<float> gpu_out;
+    engine.readback(gpu_out);
+    ses::Field3D cpu = guess;
+    cpu_relaxer.relax_deflated(cpu, {&ground}, 50);
+    double max_err = 0.0;
+    double max_mag = 0.0;
+    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+        max_err = std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
+        max_err = std::max(max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
+    }
+    const double tol = 1e-4 + 1e-5 * max_mag;
+    const bool relax_ok = max_err < tol;
+    std::printf("  deflated relax 50 steps (QRhi/Vulkan): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
+                max_err, tol, relax_ok ? "PASS" : "FAIL");
+
+    // Excited energy estimator (reported; 8^3 is too coarse to assert 5w/2).
+    const ses_qrhi::QrhiEngine::RelaxStats stats = engine.relax_deflated_step({ground_h}, 550);
+    std::printf("  deflated energy estimator (QRhi/Vulkan): E = %.4f (5w/2 = 2.5, coarse grid)\n",
+                stats.energy);
+
+    // copy_into_psi (quantum-jump collapse): bitwise copy of the aux buffer.
+    engine.copy_into_psi(ground_h);
+    std::vector<float> copied;
+    engine.readback(copied);
+    const std::vector<float> ground_staged = ses_qrhi::to_rg32f(ground.data());
+    double copy_err = 0.0;
+    for (std::size_t i = 0; i < copied.size(); ++i) {
+        copy_err = std::max(copy_err,
+                            static_cast<double>(std::abs(copied[i] - ground_staged[i])));
+    }
+    const bool copy_ok = copy_err == 0.0;
+    std::printf("  copy_into_psi (QRhi/Vulkan): max err %.3e  [%s]\n", copy_err,
+                copy_ok ? "PASS" : "FAIL");
+
+    const bool pass = ip_ok && relax_ok && copy_ok;
+    std::printf("deflation (QRhi/Vulkan): [%s]\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Unbuffered stdout: when the harness output is piped, printf is block-
+    // buffered, so a crash mid-run would discard every earlier check's line.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     QGuiApplication app(argc, argv);
 
     QVulkanInstance inst;
@@ -1156,6 +1249,7 @@ int main(int argc, char** argv) {
     ok = check_engine_step(rhi.data()) && ok;
     ok = check_relax(rhi.data()) && ok;
     ok = check_driven(rhi.data()) && ok;
+    ok = check_deflation(rhi.data()) && ok;
     std::printf("%s\n", ok ? "QRhi kernel checks PASS" : "QRhi kernel checks FAILED");
     return ok ? 0 : 1;
 }

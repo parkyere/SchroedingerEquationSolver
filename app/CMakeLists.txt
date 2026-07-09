@@ -127,6 +127,8 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             src/qrhi_shaders/unpack_half.comp
             src/qrhi_shaders/fft_line8.comp
             src/qrhi_shaders/conj_scale.comp
+            src/qrhi_shaders/axpy.comp
+            src/qrhi_shaders/copy_state.comp
         OUTPUTS
             phase_multiply.comp.qsb
             scale.comp.qsb
@@ -139,7 +141,9 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             pack_half.comp.qsb
             unpack_half.comp.qsb
             fft_line8.comp.qsb
-            conj_scale.comp.qsb)
+            conj_scale.comp.qsb
+            axpy.comp.qsb
+            copy_state.comp.qsb)
     if(_ses_qt_platform_plugins)
         qt6_import_plugins(sesolver_qrhicheck INCLUDE ${_ses_qt_platform_plugins})
     endif()
