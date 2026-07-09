@@ -781,6 +781,101 @@ bool check_fft(QRhi* rhi) {
     return pass;
 }
 
+// fp16 storage codec roundtrip: pack fp32 -> half (packHalf2x16), then unpack
+// half -> fp32 (unpackHalf2x16), compare to the original. Two dispatches in one
+// compute pass (QRhi orders the read-after-write on the half buffer). Validates
+// kPackHalfSrc + kUnpackHalfSrc; error is fp16 precision (~5e-4), not fp32.
+bool check_fp16_roundtrip(QRhi* rhi) {
+    const std::size_t n = 4096;
+    std::vector<ses::Complex<double>> src_d(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const double x = static_cast<double>(i);
+        src_d[i] = ses::Complex<double>{0.5 * std::sin(0.05 * x), 0.5 * std::cos(0.03 * x)};
+    }
+    const std::vector<float> src_f = to_rg32f(src_d);
+    const quint32 fp32_bytes = static_cast<quint32>(src_f.size() * sizeof(float));
+    const quint32 half_bytes = static_cast<quint32>(n * sizeof(quint32));
+
+    QShader packcs = load_qsb(QStringLiteral(":/shaders/pack_half.comp.qsb"));
+    QShader unpackcs = load_qsb(QStringLiteral(":/shaders/unpack_half.comp.qsb"));
+    if (!packcs.isValid() || !unpackcs.isValid()) {
+        std::fprintf(stderr, "pack/unpack_half.comp.qsb missing\n");
+        return false;
+    }
+
+    QScopedPointer<QRhiBuffer> src(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, fp32_bytes));
+    QScopedPointer<QRhiBuffer> half(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, half_bytes));
+    QScopedPointer<QRhiBuffer> dst(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, fp32_bytes));
+    struct alignas(16) Params { quint32 n; quint32 pad0, pad1, pad2; };
+    Params params{ static_cast<quint32>(n), 0, 0, 0 };
+    QScopedPointer<QRhiBuffer> ubo(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Params)));
+    if (!src->create() || !half->create() || !dst->create() || !ubo->create()) { return false; }
+
+    QScopedPointer<QRhiShaderResourceBindings> pack_srb(rhi->newShaderResourceBindings());
+    pack_srb->setBindings({
+        QRhiShaderResourceBinding::bufferLoad(0, QRhiShaderResourceBinding::ComputeStage,
+                                              src.data()),
+        QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::ComputeStage,
+                                                 ubo.data()),
+        QRhiShaderResourceBinding::bufferLoadStore(6, QRhiShaderResourceBinding::ComputeStage,
+                                                   half.data()),
+    });
+    if (!pack_srb->create()) { return false; }
+    QScopedPointer<QRhiShaderResourceBindings> unpack_srb(rhi->newShaderResourceBindings());
+    unpack_srb->setBindings({
+        QRhiShaderResourceBinding::bufferLoadStore(0, QRhiShaderResourceBinding::ComputeStage,
+                                                   dst.data()),
+        QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::ComputeStage,
+                                                 ubo.data()),
+        QRhiShaderResourceBinding::bufferLoad(6, QRhiShaderResourceBinding::ComputeStage,
+                                              half.data()),
+    });
+    if (!unpack_srb->create()) { return false; }
+
+    QScopedPointer<QRhiComputePipeline> pack_pipe(rhi->newComputePipeline());
+    pack_pipe->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, packcs));
+    pack_pipe->setShaderResourceBindings(pack_srb.data());
+    if (!pack_pipe->create()) { return false; }
+    QScopedPointer<QRhiComputePipeline> unpack_pipe(rhi->newComputePipeline());
+    unpack_pipe->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, unpackcs));
+    unpack_pipe->setShaderResourceBindings(unpack_srb.data());
+    if (!unpack_pipe->create()) { return false; }
+
+    QRhiCommandBuffer* cb = nullptr;
+    if (rhi->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return false; }
+    QRhiResourceUpdateBatch* up = rhi->nextResourceUpdateBatch();
+    up->uploadStaticBuffer(src.data(), src_f.data());
+    up->updateDynamicBuffer(ubo.data(), 0, sizeof(Params), &params);
+    const int groups = static_cast<int>((n + 255) / 256);
+    cb->beginComputePass(up);
+    cb->setComputePipeline(pack_pipe.data());
+    cb->setShaderResources(pack_srb.data());
+    cb->dispatch(groups, 1, 1);
+    cb->setComputePipeline(unpack_pipe.data());
+    cb->setShaderResources(unpack_srb.data());
+    cb->dispatch(groups, 1, 1);
+    QRhiReadbackResult rb;
+    QRhiResourceUpdateBatch* down = rhi->nextResourceUpdateBatch();
+    down->readBackBuffer(dst.data(), 0, fp32_bytes, &rb);
+    cb->endComputePass(down);
+    rhi->endOffscreenFrame();
+
+    const float* out = reinterpret_cast<const float*>(rb.data.constData());
+    double max_err = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        max_err = std::max(max_err, std::abs(out[2 * i] - src_d[i].real()));
+        max_err = std::max(max_err, std::abs(out[2 * i + 1] - src_d[i].imag()));
+    }
+    const bool pass = max_err < 5e-3;  // fp16, not fp32
+    std::printf("fp16 pack/unpack roundtrip (QRhi/Vulkan): max |gpu - cpu| = %.3e  [%s]\n",
+                max_err, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -816,6 +911,7 @@ int main(int argc, char** argv) {
     ok = check_mean_force(rhi.data()) && ok;
     ok = check_dipole(rhi.data()) && ok;
     ok = check_fft(rhi.data()) && ok;
+    ok = check_fp16_roundtrip(rhi.data()) && ok;
     std::printf("%s\n", ok ? "QRhi kernel checks PASS" : "QRhi kernel checks FAILED");
     return ok ? 0 : 1;
 }

@@ -123,6 +123,8 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             src/qrhi_shaders/mean_force.comp
             src/qrhi_shaders/dipole.comp
             src/qrhi_shaders/fft_line64.comp
+            src/qrhi_shaders/pack_half.comp
+            src/qrhi_shaders/unpack_half.comp
         OUTPUTS
             phase_multiply.comp.qsb
             scale.comp.qsb
@@ -131,7 +133,9 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             dipole_kick.comp.qsb
             mean_force.comp.qsb
             dipole.comp.qsb
-            fft_line64.comp.qsb)
+            fft_line64.comp.qsb
+            pack_half.comp.qsb
+            unpack_half.comp.qsb)
     if(_ses_qt_platform_plugins)
         qt6_import_plugins(sesolver_qrhicheck INCLUDE ${_ses_qt_platform_plugins})
     endif()
