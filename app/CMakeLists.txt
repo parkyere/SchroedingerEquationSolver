@@ -52,15 +52,25 @@ target_link_libraries(sesolver_gpucheck
 )
 target_compile_features(sesolver_gpucheck PRIVATE cxx_std_20)
 
-# Static Qt (e.g. the vcpkg x64-linux triplet) does NOT load plugins at
-# runtime -- the platform plugin must be linked in, or the executable aborts
-# with "no Qt platform plugin could be initialized". Import xcb (X11) for both
-# GUI executables when Qt6 is a static build; shared Qt loads plugins itself,
-# so both guards make this a no-op there (Windows MinGW/MSVC).
+# Static Qt (the vcpkg x64-windows-static / x64-linux triplets) does NOT load
+# plugins at runtime -- the platform plugin must be linked in, or the executable
+# aborts with "no Qt platform plugin could be initialized". Collect the platform
+# plugin (qwindows on Windows, xcb on Linux/X11) and import it into every GUI
+# executable when Qt6 is a static build; a shared Qt loads plugins itself, so the
+# guard makes this a no-op there. Reused by the sesolver_qrhicheck block below.
 get_target_property(_ses_qt_core_type Qt6::Core TYPE)
-if(_ses_qt_core_type STREQUAL "STATIC_LIBRARY" AND TARGET Qt6::QXcbIntegrationPlugin)
-    qt6_import_plugins(sesolver_app INCLUDE Qt6::QXcbIntegrationPlugin)
-    qt6_import_plugins(sesolver_gpucheck INCLUDE Qt6::QXcbIntegrationPlugin)
+set(_ses_qt_platform_plugins "")
+if(_ses_qt_core_type STREQUAL "STATIC_LIBRARY")
+    if(TARGET Qt6::QWindowsIntegrationPlugin)
+        list(APPEND _ses_qt_platform_plugins Qt6::QWindowsIntegrationPlugin)
+    endif()
+    if(TARGET Qt6::QXcbIntegrationPlugin)
+        list(APPEND _ses_qt_platform_plugins Qt6::QXcbIntegrationPlugin)
+    endif()
+endif()
+if(_ses_qt_platform_plugins)
+    qt6_import_plugins(sesolver_app INCLUDE ${_ses_qt_platform_plugins})
+    qt6_import_plugins(sesolver_gpucheck INCLUDE ${_ses_qt_platform_plugins})
 endif()
 
 # Qt DLLs must be findable when ctest launches the harness.
@@ -104,8 +114,8 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
         NOGLSL NOHLSL NOMSL
         FILES src/qrhi_shaders/phase_multiply.comp
         OUTPUTS phase_multiply.comp.qsb)
-    if(_ses_qt_core_type STREQUAL "STATIC_LIBRARY" AND TARGET Qt6::QXcbIntegrationPlugin)
-        qt6_import_plugins(sesolver_qrhicheck INCLUDE Qt6::QXcbIntegrationPlugin)
+    if(_ses_qt_platform_plugins)
+        qt6_import_plugins(sesolver_qrhicheck INCLUDE ${_ses_qt_platform_plugins})
     endif()
     add_test(NAME QrhiCheck COMMAND sesolver_qrhicheck)
     set_tests_properties(QrhiCheck PROPERTIES
@@ -121,8 +131,9 @@ endif()
 
 # Stage the Qt runtime next to the app after every build, so it launches
 # from the IDE or Explorer without Qt on PATH (the classic missing-
-# Qt6Widgets.dll failure when pressing F5 in Visual Studio).
-if(WIN32)
+# Qt6Widgets.dll failure when pressing F5 in Visual Studio). Skipped for a
+# static Qt build -- there are no Qt DLLs to deploy.
+if(WIN32 AND NOT _ses_qt_core_type STREQUAL "STATIC_LIBRARY")
     find_program(SES_WINDEPLOYQT windeployqt HINTS "${_qt6_bin_dir}")
     if(SES_WINDEPLOYQT)
         add_custom_command(TARGET sesolver_app POST_BUILD
