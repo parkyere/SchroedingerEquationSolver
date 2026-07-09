@@ -580,6 +580,129 @@ bool check_mean_force(QRhi* rhi) {
     return pass;
 }
 
+// <to| r |from> = sum conj(to)*from * (x,y,z), exactly kDipoleSrc -- three
+// complex reductions with grid coordinates, written as 6 floats/workgroup.
+// to(0)/from(3) readonly, partials(2) read-write, vec4-padded geometry UBO(1).
+bool check_dipole(QRhi* rhi) {
+    const int nx = 8;
+    const int ny = 8;
+    const int nz = 8;
+    const std::size_t n = static_cast<std::size_t>(nx * ny * nz);
+    const double box_min[3] = {-4.0, -4.0, -4.0};
+    const double cell_h[3] = {1.0, 1.1, 0.9};
+
+    std::vector<ses::Complex<double>> to_d(n);
+    std::vector<ses::Complex<double>> from_d(n);
+    double cpu[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};  // Dx re,im, Dy re,im, Dz re,im
+    for (std::size_t idx = 0; idx < n; ++idx) {
+        const double x = static_cast<double>(idx);
+        to_d[idx] = ses::Complex<double>{std::sin(0.11 * x) + 0.1, std::cos(0.07 * x)};
+        from_d[idx] = ses::Complex<double>{std::cos(0.05 * x), std::sin(0.13 * x) - 0.2};
+        const int i = static_cast<int>(idx) % nx;
+        const int j = (static_cast<int>(idx) / nx) % ny;
+        const int k = static_cast<int>(idx) / (nx * ny);
+        const double r[3] = {box_min[0] + i * cell_h[0], box_min[1] + j * cell_h[1],
+                             box_min[2] + k * cell_h[2]};
+        const double ar = to_d[idx].real();
+        const double ai = to_d[idx].imag();
+        const double br = from_d[idx].real();
+        const double bi = from_d[idx].imag();
+        const double c_re = ar * br + ai * bi;  // conj(to)*from
+        const double c_im = ar * bi - ai * br;
+        for (int a = 0; a < 3; ++a) {
+            cpu[2 * a + 0] += c_re * r[a];
+            cpu[2 * a + 1] += c_im * r[a];
+        }
+    }
+    const std::vector<float> to_f = to_rg32f(to_d);
+    const std::vector<float> from_f = to_rg32f(from_d);
+    const quint32 bytes = static_cast<quint32>(to_f.size() * sizeof(float));
+    const int groups = 256;
+    const quint32 part_bytes = static_cast<quint32>(6 * groups * sizeof(float));
+
+    QShader cs = load_qsb(QStringLiteral(":/shaders/dipole.comp.qsb"));
+    if (!cs.isValid()) { std::fprintf(stderr, "dipole.comp.qsb missing\n"); return false; }
+
+    QScopedPointer<QRhiBuffer> fto(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, bytes));
+    QScopedPointer<QRhiBuffer> ffrom(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, bytes));
+    QScopedPointer<QRhiBuffer> partials(
+        rhi->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer, part_bytes));
+    struct alignas(16) Params {
+        quint32 n;
+        qint32 nx;
+        qint32 ny;
+        qint32 pad0;
+        float box_min[4];
+        float cell_h[4];
+    };
+    Params params{};
+    params.n = static_cast<quint32>(n);
+    params.nx = nx;
+    params.ny = ny;
+    for (int c = 0; c < 3; ++c) {
+        params.box_min[c] = static_cast<float>(box_min[c]);
+        params.cell_h[c] = static_cast<float>(cell_h[c]);
+    }
+    QScopedPointer<QRhiBuffer> ubo(
+        rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(Params)));
+    if (!fto->create() || !ffrom->create() || !partials->create() || !ubo->create()) { return false; }
+
+    QScopedPointer<QRhiShaderResourceBindings> srb(rhi->newShaderResourceBindings());
+    srb->setBindings({
+        QRhiShaderResourceBinding::bufferLoad(0, QRhiShaderResourceBinding::ComputeStage,
+                                              fto.data()),
+        QRhiShaderResourceBinding::uniformBuffer(1, QRhiShaderResourceBinding::ComputeStage,
+                                                 ubo.data()),
+        QRhiShaderResourceBinding::bufferLoadStore(2, QRhiShaderResourceBinding::ComputeStage,
+                                                   partials.data()),
+        QRhiShaderResourceBinding::bufferLoad(3, QRhiShaderResourceBinding::ComputeStage,
+                                              ffrom.data()),
+    });
+    if (!srb->create()) { return false; }
+
+    QScopedPointer<QRhiComputePipeline> pipe(rhi->newComputePipeline());
+    pipe->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, cs));
+    pipe->setShaderResourceBindings(srb.data());
+    if (!pipe->create()) { return false; }
+
+    QRhiCommandBuffer* cb = nullptr;
+    if (rhi->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return false; }
+    QRhiResourceUpdateBatch* up = rhi->nextResourceUpdateBatch();
+    up->uploadStaticBuffer(fto.data(), to_f.data());
+    up->uploadStaticBuffer(ffrom.data(), from_f.data());
+    up->updateDynamicBuffer(ubo.data(), 0, sizeof(Params), &params);
+    cb->beginComputePass(up);
+    cb->setComputePipeline(pipe.data());
+    cb->setShaderResources(srb.data());
+    cb->dispatch(groups, 1, 1);
+    QRhiReadbackResult rb;
+    QRhiResourceUpdateBatch* down = rhi->nextResourceUpdateBatch();
+    down->readBackBuffer(partials.data(), 0, part_bytes, &rb);
+    cb->endComputePass(down);
+    rhi->endOffscreenFrame();
+
+    const float* p = reinterpret_cast<const float*>(rb.data.constData());
+    double gpu[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    for (int g = 0; g < groups; ++g) {
+        for (int c = 0; c < 6; ++c) {
+            gpu[c] += p[6 * g + c];
+        }
+    }
+    double mag2 = 0.0;
+    double err2 = 0.0;
+    for (int c = 0; c < 6; ++c) {
+        mag2 += cpu[c] * cpu[c];
+        err2 += (gpu[c] - cpu[c]) * (gpu[c] - cpu[c]);
+    }
+    const double rel = (mag2 > 0.0) ? std::sqrt(err2 / mag2) : std::sqrt(err2);
+    const bool pass = rel < 1e-4;
+    std::printf("dipole <to|r|from> (QRhi/Vulkan): rel err = %.3e  [%s]\n",
+                rel, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -613,6 +736,7 @@ int main(int argc, char** argv) {
     ok = check_inner_product(rhi.data()) && ok;
     ok = check_dipole_kick(rhi.data()) && ok;
     ok = check_mean_force(rhi.data()) && ok;
+    ok = check_dipole(rhi.data()) && ok;
     std::printf("%s\n", ok ? "QRhi kernel checks PASS" : "QRhi kernel checks FAILED");
     return ok ? 0 : 1;
 }
