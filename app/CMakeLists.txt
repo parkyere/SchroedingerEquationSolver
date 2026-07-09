@@ -133,6 +133,7 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             src/qrhi_shaders/synth.comp
             src/qrhi_shaders/bridge_store.comp
             src/qrhi_shaders/bridge_load.comp
+            src/qrhi_shaders/project_deposit.comp
         OUTPUTS
             phase_multiply.comp.qsb
             scale.comp.qsb
@@ -151,7 +152,8 @@ if(TARGET Qt6::GuiPrivate AND TARGET Qt6::ShaderTools AND TARGET Vulkan::Headers
             shear.comp.qsb
             synth.comp.qsb
             bridge_store.comp.qsb
-            bridge_load.comp.qsb)
+            bridge_load.comp.qsb
+            project_deposit.comp.qsb)
     if(_ses_qt_platform_plugins)
         qt6_import_plugins(sesolver_qrhicheck INCLUDE ${_ses_qt_platform_plugins})
     endif()

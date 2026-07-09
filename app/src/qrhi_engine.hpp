@@ -22,6 +22,7 @@
 #include <QFile>
 #include <QString>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -579,6 +580,113 @@ public:
             ses::Complex<double>{ d6[4] * cell_volume_, d6[5] * cell_volume_ } };
     }
 
+    // ---- orbital-free angular projection -------------------------------
+    // Upload the static counting-sort geometry (ses::build_radial_bin_index) and
+    // allocate g_lm[ncomp*nr]. Call once after the radial grid is fixed.
+    // sorted_cell = cells grouped by radial bin, bin_off = CSR offsets.
+    bool set_projection_index(const std::vector<quint32>& sorted_cell,
+                              const std::vector<quint32>& bin_off, int n_radial,
+                              double h_radial, int l_max) {
+        proj_nr_ = n_radial;
+        proj_ncomp_ = (l_max + 1) * (l_max + 1);
+        proj_h_radial_ = h_radial;
+        const QShader depcs = load_qsb(QStringLiteral(":/shaders/project_deposit.comp.qsb"));
+        if (!depcs.isValid()) { return false; }
+        proj_sorted_buf_.reset(rhi_->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer,
+                                               static_cast<quint32>(sorted_cell.size() * 4)));
+        proj_binoff_buf_.reset(rhi_->newBuffer(QRhiBuffer::Static, QRhiBuffer::StorageBuffer,
+                                               static_cast<quint32>(bin_off.size() * 4)));
+        glm_buf_.reset(rhi_->newBuffer(
+            QRhiBuffer::Static, QRhiBuffer::StorageBuffer,
+            static_cast<quint32>(2 * proj_ncomp_ * proj_nr_ * sizeof(float))));
+        proj_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                        sizeof(ProjectParams)));
+        if (!proj_sorted_buf_->create() || !proj_binoff_buf_->create() || !glm_buf_->create() ||
+            !proj_ubo_->create()) {
+            return false;
+        }
+        using B = QRhiShaderResourceBinding;
+        const auto cs = B::ComputeStage;
+        proj_srb_.reset(rhi_->newShaderResourceBindings());
+        proj_srb_->setBindings({ B::bufferLoad(0, cs, psi_.data()),
+                                 B::uniformBuffer(1, cs, proj_ubo_.data()),
+                                 B::bufferLoad(6, cs, proj_sorted_buf_.data()),
+                                 B::bufferLoad(7, cs, proj_binoff_buf_.data()),
+                                 B::bufferLoadStore(8, cs, glm_buf_.data()) });
+        if (!proj_srb_->create()) { return false; }
+        proj_pipe_.reset(rhi_->newComputePipeline());
+        proj_pipe_->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, depcs));
+        proj_pipe_->setShaderResourceBindings(proj_srb_.data());
+        if (!proj_pipe_->create()) { return false; }
+
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return false; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        u->uploadStaticBuffer(proj_sorted_buf_.data(), sorted_cell.data());
+        u->uploadStaticBuffer(proj_binoff_buf_.data(), bin_off.data());
+        cb->resourceUpdate(u);
+        rhi_->endOffscreenFrame();
+        return true;
+    }
+
+    // Deposit psi -> g_lm (ONE grid pass, independent of state count), read back
+    // to glm_host_ as double. Then call project_amplitude per state. Mirrors
+    // Projector::project.
+    void project_psi() {
+        ProjectParams pp{};
+        pp.nx = grid_.x.n;
+        pp.ny = grid_.y.n;
+        pp.nr = proj_nr_;
+        pp.h_radial = static_cast<float>(proj_h_radial_);
+        pp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        pp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        pp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        pp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        pp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        pp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        pp.dv = static_cast<float>(cell_volume_);
+
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        u->updateDynamicBuffer(proj_ubo_.data(), 0, sizeof(ProjectParams), &pp);
+        cb->beginComputePass(u);
+        cb->setComputePipeline(proj_pipe_.data());
+        cb->setShaderResources(proj_srb_.data());
+        cb->dispatch(proj_nr_, 1, 1);
+        QRhiReadbackResult rb;
+        QRhiResourceUpdateBatch* d = rhi_->nextResourceUpdateBatch();
+        d->readBackBuffer(glm_buf_.data(), 0,
+                          static_cast<quint32>(2 * proj_ncomp_ * proj_nr_ * sizeof(float)), &rb);
+        cb->endComputePass(d);
+        rhi_->endOffscreenFrame();
+
+        const float* raw = reinterpret_cast<const float*>(rb.data.constData());
+        glm_host_.assign(static_cast<std::size_t>(proj_ncomp_),
+                         std::vector<ses::Complex<double>>(static_cast<std::size_t>(proj_nr_)));
+        for (int c = 0; c < proj_ncomp_; ++c) {
+            for (int j = 0; j < proj_nr_; ++j) {
+                const std::size_t o = 2 * (static_cast<std::size_t>(c) * proj_nr_ +
+                                           static_cast<std::size_t>(j));
+                glm_host_[static_cast<std::size_t>(c)][static_cast<std::size_t>(j)] =
+                    ses::Complex<double>{ raw[o], raw[o + 1] };
+            }
+        }
+    }
+
+    // <n|psi> raw amplitude = sum_j u_nl[j] g_lm[lm(l,m)][j] (double CPU finish).
+    // Needs a prior project_psi(). Mirrors Projector::amplitude.
+    ses::Complex<double> project_amplitude(const std::vector<double>& u, int l, int m) const {
+        const std::vector<ses::Complex<double>>& gc =
+            glm_host_[static_cast<std::size_t>(l * l + (l + m))];
+        ses::Complex<double> raw{};
+        const int n = std::min(static_cast<int>(u.size()), proj_nr_);
+        for (int j = 0; j < n; ++j) {
+            raw += u[static_cast<std::size_t>(j)] * gc[static_cast<std::size_t>(j)];
+        }
+        return raw;
+    }
+
     // ---- magnetic minimal coupling (real-time B field) -----------------
     // Replace the resident half-potential table (half_) with a new one -- the
     // caller swaps in the diamagnetic-augmented V + (B^2/8) rho_perp^2 before a
@@ -714,6 +822,14 @@ private:
     struct AtlasState {
         bool is_half = false;
         QScopedPointer<QRhiBuffer> buf;
+    };
+    // std140: nx@0, ny@4, nr@8, h_radial@12, box_min@16, cell_h@32, dv@48.
+    struct alignas(16) ProjectParams {
+        qint32 nx, ny, nr;
+        float h_radial;
+        float box_min[4];
+        float cell_h[4];
+        float dv, pad0, pad1, pad2;
     };
 
     // An auxiliary (lower) eigenstate resident on the GPU plus its bindings for
@@ -1307,6 +1423,16 @@ private:
     QScopedPointer<QRhiBuffer> dipole_ubo_, dipole_partials_;
     QScopedPointer<QRhiShaderResourceBindings> dipole_layout_srb_;
     QScopedPointer<QRhiComputePipeline> dipole_pipe_;
+
+    // Orbital-free angular projection (set_projection_index / project_psi /
+    // project_amplitude): static counting-sort index + g_lm deposit output.
+    int proj_nr_ = 0;
+    int proj_ncomp_ = 0;
+    double proj_h_radial_ = 0.0;
+    QScopedPointer<QRhiBuffer> proj_sorted_buf_, proj_binoff_buf_, glm_buf_, proj_ubo_;
+    QScopedPointer<QRhiShaderResourceBindings> proj_srb_;
+    QScopedPointer<QRhiComputePipeline> proj_pipe_;
+    std::vector<std::vector<ses::Complex<double>>> glm_host_;
 };
 
 }  // namespace ses_qrhi

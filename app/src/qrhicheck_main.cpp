@@ -19,6 +19,7 @@
 #include <core/harmonics.hpp>
 #include <core/imaginary_time.hpp>
 #include <core/magnetic.hpp>
+#include <core/projection.hpp>
 #include <core/radial.hpp>
 #include <core/rotation.hpp>
 #include <core/potential.hpp>
@@ -1428,6 +1429,74 @@ bool check_fp16_consumers(QRhi* rhi) {
     return ok;
 }
 
+// Orbital-free angular-decomposition projection: the GPU deposit (sorted-gather
+// per radial bin, fp32) + CPU-double radial dot vs the CPU oracle
+// project_radial_angular. Also checks determinism (a second deposit reproduces
+// the amplitude bit-for-bit -- no atomics, fixed-order tree reduction).
+bool check_project(QRhi* rhi) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D seed = ses::gaussian_wavepacket(g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5},
+                                                 ses::Vec3d{});
+    ses_qrhi::QrhiEngine engine;
+    if (!engine.initialize(rhi, g, prop.half_potential_phase(), prop.kinetic_phase(),
+                           seed.data())) {
+        std::printf("orbital-free projection (QRhi/Vulkan): engine init FAIL\n");
+        return false;
+    }
+    const ses::RadialGrid rg{8.0, 200};
+    std::vector<std::vector<double>> u_by_level(2);
+    for (int lev = 0; lev < 2; ++lev) {
+        u_by_level[static_cast<std::size_t>(lev)].resize(static_cast<std::size_t>(rg.n));
+        for (int i = 0; i < rg.n; ++i) {
+            const double r = rg.r(i);
+            u_by_level[static_cast<std::size_t>(lev)][static_cast<std::size_t>(i)] =
+                (lev == 0) ? r * std::exp(-r) : r * r * std::exp(-0.5 * r);
+        }
+    }
+    const int l_max = 5;
+    const ses::RadialBinIndex idx = ses::build_radial_bin_index(g, rg);
+    if (!engine.set_projection_index(idx.sorted_cell, idx.bin_off, rg.n, rg.h(), l_max)) {
+        std::printf("orbital-free projection (QRhi/Vulkan): set_projection_index FAIL\n");
+        return false;
+    }
+
+    ses::Field3D psi = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.5, -0.4},
+                                                ses::Vec3d{1.7, 1.7, 1.7},
+                                                ses::Vec3d{0.3, -0.2, 0.1});
+    engine.upload_state(psi.data());
+    engine.project_psi();
+
+    const std::vector<ses::ProjectorState> states = {
+        {0, 0, 0}, {1, 1, 0}, {1, 1, 1}, {0, 2, -1}, {1, 4, 2}, {0, 5, 3}};
+    const ses::RadialAngularProjection cpu =
+        ses::project_radial_angular(psi, rg, u_by_level, states, l_max);
+    double worst = 0.0;
+    for (std::size_t s = 0; s < states.size(); ++s) {
+        const ses::ProjectorState& st = states[s];
+        const ses::Complex<double> gpu = engine.project_amplitude(
+            u_by_level[static_cast<std::size_t>(st.level)], st.l, st.m);
+        const ses::Complex<double> ref =
+            cpu.amp[s] * std::sqrt(cpu.norm2[static_cast<std::size_t>(s)]);
+        const double e = std::max(std::abs(gpu.real() - ref.real()),
+                                  std::abs(gpu.imag() - ref.imag())) /
+                         (1.0 + std::abs(ref));
+        worst = std::max(worst, e);
+    }
+    // Determinism: a second deposit reproduces the amplitude bit-for-bit.
+    const ses::Complex<double> a1 = engine.project_amplitude(u_by_level[1], 1, 0);
+    engine.project_psi();
+    const ses::Complex<double> a2 = engine.project_amplitude(u_by_level[1], 1, 0);
+    const bool deterministic = (a1 == a2);
+    const bool ok = worst < 1e-3 && deterministic;
+    std::printf("orbital-free projection <n|psi> (QRhi/Vulkan): max rel = %.3e, "
+                "deterministic = %d  [%s]\n",
+                worst, deterministic ? 1 : 0, ok ? "PASS" : "FAIL");
+    return ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1476,6 +1545,7 @@ int main(int argc, char** argv) {
     ok = check_synth(rhi.data()) && ok;
     ok = check_bridge(rhi.data()) && ok;
     ok = check_fp16_consumers(rhi.data()) && ok;
+    ok = check_project(rhi.data()) && ok;
     std::printf("%s\n", ok ? "QRhi kernel checks PASS" : "QRhi kernel checks FAILED");
     return ok ? 0 : 1;
 }
