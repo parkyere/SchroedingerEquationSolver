@@ -113,9 +113,11 @@ public:
                                               sizeof(FftParams)));
             if (!fft_ubo_[a]->create()) { return false; }
         }
-        kick_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
-                                        sizeof(KickParams)));
-        if (!kick_ubo_->create()) { return false; }
+        // Dipole-kick params live in a dynamic-offset UBO so a whole driven
+        // batch records as one frame; slots are ubufAlignment() apart.
+        kick_stride_ = static_cast<quint32>(rhi_->ubufAlignment());
+        while (kick_stride_ < sizeof(KickParams)) { kick_stride_ *= 2; }
+        if (!ensure_kick_capacity(2)) { return false; }
 
         // SRBs. phase_multiply: psi(0) rw, phase(1) ro, n(2) ubo. conj_scale:
         // psi(0) rw, params(1) ubo. fft_line: psi(0) rw, axis(1) ubo.
@@ -140,12 +142,9 @@ public:
             fft_srb_[a]->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
                                        B::uniformBuffer(1, cs, fft_ubo_[a].data()) });
         }
-        kick_srb_.reset(rhi_->newShaderResourceBindings());
-        kick_srb_->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
-                                 B::uniformBuffer(1, cs, kick_ubo_.data()) });
         if (!mul_half_srb_->create() || !mul_kin_srb_->create() || !conj1_srb_->create() ||
             !conjN_srb_->create() || !fft_srb_[0]->create() || !fft_srb_[1]->create() ||
-            !fft_srb_[2]->create() || !kick_srb_->create()) {
+            !fft_srb_[2]->create()) {
             return false;
         }
 
@@ -220,24 +219,40 @@ public:
     }
 
     // Driven Strang steps (T3): kick(t) . step . kick(t+dt), the tested
-    // core/drive.hpp composition. theta = amplitude cos(omega t) dt/2. Each
-    // half-kick and each step body run in their own frame (a kick's theta
-    // differs each time, and a Dynamic UBO cannot change mid-pass).
+    // core/drive.hpp composition. theta = amplitude cos(omega t) dt/2. The
+    // per-kick thetas differ within the batch, so the kick parameters are
+    // packed into ONE dynamic-offset UBO (2*nsteps slots) and the WHOLE batch
+    // records as a single offscreen frame -- per-step frame splits serialize
+    // on GPU completion and halve the laser-path sim rate (GL parity).
     void driven_step(const ses::DipoleDrive& d, double t0, double dt, int nsteps) {
         const int mul_groups = static_cast<int>((cells_ + 255) / 256);
+        const int kicks = 2 * nsteps;
+        if (!ensure_kick_capacity(kicks)) { return; }
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        update_step_ubos(u);
         for (int s = 0; s < nsteps; ++s) {
             const double t = t0 + s * dt;
-            kick(d.axis, d.amplitude * std::cos(d.omega * t) * 0.5 * dt);
-            QRhiCommandBuffer* cb = nullptr;
-            if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
-            QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
-            update_step_ubos(u);
-            cb->beginComputePass(u);
-            run_step_body(cb, mul_groups, mul_half_srb_.data(), mul_kin_srb_.data());
-            cb->endComputePass();
-            rhi_->endOffscreenFrame();
-            kick(d.axis, d.amplitude * std::cos(d.omega * (t + dt)) * 0.5 * dt);
+            KickParams kp = make_kick_params(
+                d.axis, d.amplitude * std::cos(d.omega * t) * 0.5 * dt);
+            u->updateDynamicBuffer(kick_ubo_.data(),
+                                   static_cast<quint32>(2 * s) * kick_stride_,
+                                   sizeof(KickParams), &kp);
+            kp.theta = static_cast<float>(
+                d.amplitude * std::cos(d.omega * (t + dt)) * 0.5 * dt);
+            u->updateDynamicBuffer(kick_ubo_.data(),
+                                   static_cast<quint32>(2 * s + 1) * kick_stride_,
+                                   sizeof(KickParams), &kp);
         }
+        cb->beginComputePass(u);
+        for (int s = 0; s < nsteps; ++s) {
+            record_kick(cb, mul_groups, static_cast<quint32>(2 * s) * kick_stride_);
+            run_step_body(cb, mul_groups, mul_half_srb_.data(), mul_kin_srb_.data());
+            record_kick(cb, mul_groups, static_cast<quint32>(2 * s + 1) * kick_stride_);
+        }
+        cb->endComputePass();
+        rhi_->endOffscreenFrame();
     }
 
     // Free-energy estimate + normalized peak density from the per-step
@@ -780,29 +795,47 @@ public:
     }
 
     // Exact three-shear rotation of psi about coordinate `axis` by theta -- the
-    // GPU transcription of core/rotation.hpp rotate_axis. In place.
+    // GPU transcription of core/rotation.hpp rotate_axis. In place, one frame.
     void rotate_axis_shear(int axis, double theta) {
         if (!ensure_magnetic()) { return; }
+        const int mul_groups = static_cast<int>((cells_ + 255) / 256);
         const int b = (axis + 1) % 3;  // in-plane axes (b x c = axis)
         const int c = (axis + 2) % 3;
-        const double t = std::tan(0.5 * theta);
-        const double s = std::sin(theta);
-        apply_shear(b, c, -t);
-        apply_shear(c, b, s);
-        apply_shear(b, c, -t);
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        stage_rotation_ubos(u, b, c, theta);
+        cb->beginComputePass(u);
+        record_rotation(cb, mul_groups, b, c);
+        cb->endComputePass();
+        rhi_->endOffscreenFrame();
     }
     void rotate_z_shear(double theta) { rotate_axis_shear(2, theta); }
 
     // Magnetic Strang step: R(a) . real-step . R(a), a = (B/2)(dt/2), rotating
     // about the field `axis`. half_ must hold the diamagnetic-augmented table
-    // (set_half_potential). Mirrors GpuEngine::magnetic_step.
+    // (set_half_potential). The half-angle is the SAME for every rotation in
+    // the batch, so the two shear parameter sets are staged once and the WHOLE
+    // batch records as a single offscreen frame (per-step frames serialize on
+    // GPU completion and gut the magnetic-path sim rate).
     void magnetic_step(int axis, double half_angle, int nsteps) {
         if (!ensure_magnetic()) { return; }
+        const int mul_groups = static_cast<int>((cells_ + 255) / 256);
+        const int b = (axis + 1) % 3;
+        const int c = (axis + 2) % 3;
+        QRhiCommandBuffer* cb = nullptr;
+        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
+        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
+        update_step_ubos(u);
+        stage_rotation_ubos(u, b, c, half_angle);
+        cb->beginComputePass(u);
         for (int s = 0; s < nsteps; ++s) {
-            rotate_axis_shear(axis, half_angle);
-            step(1);
-            rotate_axis_shear(axis, half_angle);
+            record_rotation(cb, mul_groups, b, c);
+            run_step_body(cb, mul_groups, mul_half_srb_.data(), mul_kin_srb_.data());
+            record_rotation(cb, mul_groups, b, c);
         }
+        cb->endComputePass();
+        rhi_->endOffscreenFrame();
     }
 
     // ---- SSBO -> 3D volume texture bridge (renderer seed for M3) --------
@@ -969,9 +1002,8 @@ private:
         multiply(cb, half_srb, mul_groups);
     }
 
-    // psi <- exp(-i theta axis.r) psi, one dipole half-kick (own frame).
-    void kick(const ses::Vec3d& axis, double theta) {
-        const int groups = static_cast<int>((cells_ + 255) / 256);
+    // The dipole half-kick parameter block for psi <- exp(-i theta axis.r) psi.
+    KickParams make_kick_params(const ses::Vec3d& axis, double theta) const {
         KickParams kp{};
         kp.n = static_cast<quint32>(cells_);
         kp.nx = grid_.x.n;
@@ -986,16 +1018,33 @@ private:
         kp.axis[0] = static_cast<float>(axis.x);
         kp.axis[1] = static_cast<float>(axis.y);
         kp.axis[2] = static_cast<float>(axis.z);
-        QRhiCommandBuffer* cb = nullptr;
-        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
-        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
-        u->updateDynamicBuffer(kick_ubo_.data(), 0, sizeof(KickParams), &kp);
-        cb->beginComputePass(u);
+        return kp;
+    }
+
+    // Record one half-kick dispatch in the current pass, sourcing its params
+    // from the dynamic-offset slot at `offset` in kick_ubo_.
+    void record_kick(QRhiCommandBuffer* cb, int groups, quint32 offset) {
         cb->setComputePipeline(kick_pipe_.data());
-        cb->setShaderResources(kick_srb_.data());
+        const QRhiCommandBuffer::DynamicOffset off(1, offset);
+        cb->setShaderResources(kick_srb_.data(), 1, &off);
         cb->dispatch(groups, 1, 1);
-        cb->endComputePass();
-        rhi_->endOffscreenFrame();
+    }
+
+    // Grow the kick parameter UBO to hold `kicks` slots (kick_stride_ apart, the
+    // backend's dynamic-offset alignment). The SRB re-points at the new buffer;
+    // the pipeline keeps its (unchanged) layout.
+    bool ensure_kick_capacity(int kicks) {
+        const quint32 need = kick_stride_ * static_cast<quint32>(kicks);
+        if (!kick_ubo_.isNull() && kick_ubo_->size() >= need) { return true; }
+        kick_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, need));
+        if (!kick_ubo_->create()) { return false; }
+        using B = QRhiShaderResourceBinding;
+        const auto cs = B::ComputeStage;
+        kick_srb_.reset(rhi_->newShaderResourceBindings());
+        kick_srb_->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
+                                 B::uniformBufferWithDynamicOffset(1, cs, kick_ubo_.data(),
+                                                                   sizeof(KickParams)) });
+        return kick_srb_->create();
     }
 
     // A live-handle lookup that tolerates released slots (nullptr buf).
@@ -1205,7 +1254,9 @@ private:
         return true;
     }
 
-    // Lazily build the shear pipeline + its UBO/SRB and the per-axis inverse-FFT
+    // Lazily build the shear pipeline + TWO shear param UBOs/SRBs (a rotation
+    // is shear0 . shear1 . shear0, so two distinct parameter sets cover it and
+    // a whole batch can record in one pass) and the per-axis inverse-FFT
     // conj-scale (scale 1/n, not 1/cells) on the first magnetic call.
     bool ensure_magnetic() {
         if (!shear_pipe_.isNull()) { return true; }
@@ -1213,21 +1264,26 @@ private:
         if (!shearcs.isValid()) { return false; }
         using B = QRhiShaderResourceBinding;
         const auto cs = B::ComputeStage;
-        shear_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
-                                         sizeof(ShearParams)));
         conjA_ubo_.reset(rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
                                          sizeof(ConjParams)));
-        if (!shear_ubo_->create() || !conjA_ubo_->create()) { return false; }
-        shear_srb_.reset(rhi_->newShaderResourceBindings());
-        shear_srb_->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
-                                  B::uniformBuffer(1, cs, shear_ubo_.data()) });
+        if (!conjA_ubo_->create()) { return false; }
+        for (int i = 0; i < 2; ++i) {
+            shear_ubo_[i].reset(rhi_->newBuffer(QRhiBuffer::Dynamic,
+                                                QRhiBuffer::UniformBuffer,
+                                                sizeof(ShearParams)));
+            if (!shear_ubo_[i]->create()) { return false; }
+            shear_srb_[i].reset(rhi_->newShaderResourceBindings());
+            shear_srb_[i]->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
+                                         B::uniformBuffer(1, cs, shear_ubo_[i].data()) });
+            if (!shear_srb_[i]->create()) { return false; }
+        }
         conjA_srb_.reset(rhi_->newShaderResourceBindings());
         conjA_srb_->setBindings({ B::bufferLoadStore(0, cs, psi_.data()),
                                   B::uniformBuffer(1, cs, conjA_ubo_.data()) });
-        if (!shear_srb_->create() || !conjA_srb_->create()) { return false; }
+        if (!conjA_srb_->create()) { return false; }
         shear_pipe_.reset(rhi_->newComputePipeline());
         shear_pipe_->setShaderStage(QRhiShaderStage(QRhiShaderStage::Compute, shearcs));
-        shear_pipe_->setShaderResourceBindings(shear_srb_.data());
+        shear_pipe_->setShaderResourceBindings(shear_srb_[0].data());
         // Per-axis inverse FFT scales by 1/n (the single transformed axis).
         conjA_ = ConjParams{ static_cast<quint32>(cells_), 1.0f / static_cast<float>(n_),
                              0.0f, 0.0f };
@@ -1514,11 +1570,9 @@ private:
         return pack_pipe_->create() && unpack_pipe_->create();
     }
 
-    // One shear (own frame): FFT along freq_axis, phase-shift by coeff*coord,
-    // then inverse FFT along that axis (conj -> FFT -> conj/n). The freq/conj
-    // UBOs are constant per axis; only shear_ubo_ carries this shear's geometry.
-    void apply_shear(int freq_axis, int coord_axis, double coeff) {
-        const int mul_groups = static_cast<int>((cells_ + 255) / 256);
+    // The shear parameter block: in the mixed representation (FFT along
+    // freq_axis), shift each line by coeff * (its coord_axis coordinate).
+    ShearParams make_shear_params(int freq_axis, int coord_axis, double coeff) const {
         const ses::Grid1D& fa = axis_grid(freq_axis);
         const ses::Grid1D& ca = axis_grid(coord_axis);
         const double two_pi = 6.283185307179586;
@@ -1534,25 +1588,44 @@ private:
         sp.cmin = static_cast<float>(ca.xmin);
         sp.ch = static_cast<float>(ca.spacing());
         sp.coeff = static_cast<float>(coeff);
+        return sp;
+    }
 
-        QRhiCommandBuffer* cb = nullptr;
-        if (rhi_->beginOffscreenFrame(&cb) != QRhi::FrameOpSuccess) { return; }
-        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
-        u->updateDynamicBuffer(shear_ubo_.data(), 0, sizeof(ShearParams), &sp);
+    // Stage everything one (or many) three-shear rotation(s) about the axis
+    // perpendicular to (b, c) need in this frame: the two shear parameter sets
+    // (set0 = (b, c, -tan(theta/2)) used twice, set1 = (c, b, sin(theta))),
+    // the in-plane FFT axis params, and the conj scales.
+    void stage_rotation_ubos(QRhiResourceUpdateBatch* u, int b, int c, double theta) {
+        const double t = std::tan(0.5 * theta);
+        const double sn = std::sin(theta);
+        const ShearParams s0 = make_shear_params(b, c, -t);
+        const ShearParams s1 = make_shear_params(c, b, sn);
+        u->updateDynamicBuffer(shear_ubo_[0].data(), 0, sizeof(ShearParams), &s0);
+        u->updateDynamicBuffer(shear_ubo_[1].data(), 0, sizeof(ShearParams), &s1);
+        u->updateDynamicBuffer(fft_ubo_[b].data(), 0, sizeof(FftParams), &fftp_[b]);
+        u->updateDynamicBuffer(fft_ubo_[c].data(), 0, sizeof(FftParams), &fftp_[c]);
         u->updateDynamicBuffer(conj1_ubo_.data(), 0, sizeof(ConjParams), &conj1_);
         u->updateDynamicBuffer(conjA_ubo_.data(), 0, sizeof(ConjParams), &conjA_);
-        u->updateDynamicBuffer(fft_ubo_[freq_axis].data(), 0, sizeof(FftParams),
-                               &fftp_[freq_axis]);
-        cb->beginComputePass(u);
+    }
+
+    // Record one staged shear in the current pass: FFT along freq_axis,
+    // phase-shift (shear_srb_[which]), then the inverse FFT along that axis
+    // (conj -> FFT -> conj/n).
+    void record_shear(QRhiCommandBuffer* cb, int mul_groups, int which, int freq_axis) {
         fft_axis(cb, freq_axis);
         cb->setComputePipeline(shear_pipe_.data());
-        cb->setShaderResources(shear_srb_.data());
+        cb->setShaderResources(shear_srb_[which].data());
         cb->dispatch(mul_groups, 1, 1);
         conjscale(cb, conj1_srb_.data(), mul_groups);  // conj (scale 1)
         fft_axis(cb, freq_axis);
         conjscale(cb, conjA_srb_.data(), mul_groups);  // conj + scale 1/n
-        cb->endComputePass();
-        rhi_->endOffscreenFrame();
+    }
+
+    // Record one full three-shear rotation (set0 on b, set1 on c, set0 on b).
+    void record_rotation(QRhiCommandBuffer* cb, int mul_groups, int b, int c) {
+        record_shear(cb, mul_groups, 0, b);
+        record_shear(cb, mul_groups, 1, c);
+        record_shear(cb, mul_groups, 0, b);
     }
 
     const ses::Grid1D& axis_grid(int a) const {
@@ -1576,7 +1649,9 @@ private:
         conjN_srb_, fft_srb_[3];
     QScopedPointer<QRhiComputePipeline> mul_pipe_, conj_pipe_, fft_pipe_;
 
-    // Dipole kick (driven_step): exp(-i theta axis.r) applied in place.
+    // Dipole kick (driven_step): exp(-i theta axis.r) applied in place; the
+    // params UBO holds one dynamic-offset slot per half-kick of a batch.
+    quint32 kick_stride_ = 256;
     QScopedPointer<QRhiBuffer> kick_ubo_;
     QScopedPointer<QRhiShaderResourceBindings> kick_srb_;
     QScopedPointer<QRhiComputePipeline> kick_pipe_;
@@ -1599,10 +1674,11 @@ private:
     QScopedPointer<QRhiComputePipeline> force_pipe_;
 
     // Magnetic (ensure_magnetic / rotate_axis_shear / magnetic_step): the shear
-    // kernel plus a per-axis inverse-FFT conj-scale (scale 1/n, not 1/cells).
+    // kernel (two staged parameter sets) plus a per-axis inverse-FFT
+    // conj-scale (scale 1/n, not 1/cells).
     ConjParams conjA_{};
-    QScopedPointer<QRhiBuffer> shear_ubo_, conjA_ubo_;
-    QScopedPointer<QRhiShaderResourceBindings> shear_srb_, conjA_srb_;
+    QScopedPointer<QRhiBuffer> shear_ubo_[2], conjA_ubo_;
+    QScopedPointer<QRhiShaderResourceBindings> shear_srb_[2], conjA_srb_;
     QScopedPointer<QRhiComputePipeline> shear_pipe_;
 
     // Orbital synthesis (synthesize_into_psi): the radial u_nl(r) table plus the

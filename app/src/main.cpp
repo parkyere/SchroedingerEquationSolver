@@ -156,7 +156,14 @@ ses::WavepacketSimulation make_simulation() {
 }
 
 constexpr int kStepsPerTick = 1;
-constexpr int kMaxPendingGpuSteps = 8;  // backlog cap: a stalled paint cannot spiral
+// Backlog cap: a stalled paint cannot spiral (time is credited at execution,
+// dropped ticks drop cleanly). Throughput note (measured on the P5000): the
+// laser path saturates the GPU at ~26 steps/s (~38 ms/step at 256^3 -- the
+// hand-rolled FFT's uncoalesced y/z passes), so raising this cap does NOT
+// raise the sim rate (verified 8 vs 32: 1.02 vs 1.04 au/s); it only lengthens
+// the per-paint block. 8 keeps paints ~300 ms. The real lever is the M4
+// VkFFT swap (coalesced transposes).
+constexpr int kMaxPendingGpuSteps = 8;
 constexpr int kRelaxStepsPerTick = 1;
 constexpr double kRelaxDtau = 0.05;
 constexpr int kTickMs = 16;
