@@ -70,6 +70,7 @@
 #include <core/vram_budget.hpp>
 
 #include "qrhi_engine.hpp"
+#include "atom_model.hpp"
 #include "scene_renderer.hpp"
 #include "selftest_arcs.hpp"
 #include "manifold_spec.hpp"
@@ -291,11 +292,11 @@ protected:
                 static_cast<std::int64_t>(sim_.grid().size()) * 2 *
                 static_cast<std::int64_t>(sizeof(float));
             bool atlas_fits = true;
-            state_precision_ = ses::choose_state_precision(
+            atom_.set_precision(ses::choose_state_precision(
                 query_free_vram_bytes(), kNumStates, bytes_per_state,
-                kVramHeadroomBytes, &atlas_fits);
+                kVramHeadroomBytes, &atlas_fits));
             std::fprintf(stderr, "vram: atlas precision = %s%s\n",
-                         state_precision_ == ses::GpuPrecision::Fp16 ? "fp16 (half)"
+                         atom_.precision() == ses::GpuPrecision::Fp16 ? "fp16 (half)"
                                                                      : "fp32",
                          atlas_fits ? ""
                                     : "  [WARNING: even fp16 is tight -- consider a "
@@ -323,17 +324,17 @@ protected:
             // below); the 3D tracked manifold (n <= 6, what the box holds)
             // is then synthesized chunked across frames so decay is armed
             // BY DEFAULT and every demo entry point is instant afterwards.
-            solve_radial_atom();
+            atom_.solve_radial_atom(sim_.grid().x.xmax);
             // Orbital-free projection index (Phase 5): the static counting-sort
             // geometry, uploaded once. Populations then come from ONE project_psi
             // deposit pass (state-count independent) instead of a per-state
             // inner_with_psi over the resident atlas.
             {
                 const ses::RadialBinIndex bin_idx =
-                    ses::build_radial_bin_index(sim_.grid(), radial_grid_);
+                    ses::build_radial_bin_index(sim_.grid(), atom_.radial_grid());
                 proj_ready_ = engine_.set_projection_index(
-                    bin_idx.sorted_cell, bin_idx.bin_off, radial_grid_.n,
-                    radial_grid_.h(), 5);
+                    bin_idx.sorted_cell, bin_idx.bin_off, atom_.radial_grid().n,
+                    atom_.radial_grid().h(), 5);
                 if (!proj_ready_) {
                     std::fprintf(stderr, "engine: projection index setup failed -- "
                                          "populations/decay/laser disabled\n");
@@ -419,18 +420,18 @@ protected:
                 engine_.project_psi();
                 std::vector<double> pop(static_cast<std::size_t>(kNumStates));
                 for (int s = 0; s < kNumStates; ++s) {
-                    pop[static_cast<std::size_t>(s)] = project_population(s);
+                    pop[static_cast<std::size_t>(s)] = atom_.project_population(engine_, s);
                 }
                 std::uniform_real_distribution<double> uniform(0.0, 1.0);
                 const int n = ses::sample_energy_eigenstate(pop, uniform(rng_));
                 last_measured_index_ = n;  // >=0 eigenstate, -1 outside manifold
                 if (n >= 0) {
-                    collapse_onto(n);
+                    atom_.collapse_onto(engine_, n);
                     write_display_texture();
                     last_measure_ =
                         QStringLiteral("%1 (E %2 eV)")
                             .arg(QLatin1String(kStateSpec[static_cast<std::size_t>(n)].name))
-                            .arg(state_energy_[static_cast<std::size_t>(n)] * kHaToEv, 0,
+                            .arg(atom_.state_energy(n) * kHaToEv, 0,
                                  'f', 3);
                 } else {
                     last_measure_ = QStringLiteral("outside tracked manifold");
@@ -502,7 +503,7 @@ protected:
                     // title tick (state-count independent) -- replaces the
                     // per-state inner_with_psi over the resident atlas.
                     if (gpu_title_due_ && proj_ready_ &&
-                        ((decay_on_ && !channels_.empty()) ||
+                        ((decay_on_ && !atom_.channels().empty()) ||
                          laser_pol_ != LaserPol::Off)) {
                         engine_.project_psi();
                     }
@@ -515,17 +516,17 @@ protected:
                     // frame). Selection arithmetic is the core-tested
                     // pick_decay_channel; a jump collapses onto the fired
                     // channel's destination ("photon out").
-                    if (decay_on_ && !channels_.empty()) {
+                    if (decay_on_ && !atom_.channels().empty()) {
                         decay_accum_dt_ += pending_gpu_steps_ * sim_.dt();
                         if (gpu_title_due_) {
                             std::array<double, kNumStates> pop{};
                             for (int s = 1; s < kNumStates; ++s) {
-                                pop[s] = project_population(s);
+                                pop[s] = atom_.project_population(engine_, s);
                             }
-                            std::vector<double> rates(channels_.size());
-                            for (std::size_t c = 0; c < channels_.size(); ++c) {
-                                rates[c] = channels_[c].gamma_display *
-                                           pop[channels_[c].from];
+                            std::vector<double> rates(atom_.channels().size());
+                            for (std::size_t c = 0; c < atom_.channels().size(); ++c) {
+                                rates[c] = atom_.channels()[c].gamma_display *
+                                           pop[atom_.channels()[c].from];
                             }
                             std::uniform_real_distribution<double> uniform(0.0, 1.0);
                             const ses::ChannelPick pick = ses::pick_decay_channel(
@@ -533,8 +534,8 @@ protected:
                             decay_accum_dt_ = 0.0;
                             if (pick.channel >= 0) {
                                 const ShellChannel& ch =
-                                    channels_[static_cast<std::size_t>(pick.channel)];
-                                collapse_onto(ch.to);
+                                    atom_.channels()[static_cast<std::size_t>(pick.channel)];
+                                atom_.collapse_onto(engine_, ch.to);
                                 flash_ticks_ = 25;
                                 ++photon_count_;
                                 last_jump_ = QStringLiteral("%1->%2").arg(
@@ -550,8 +551,8 @@ protected:
                     // cadence -- two 2 KB reductions every ~10 ticks.
                     if (laser_pol_ != LaserPol::Off && gpu_title_due_ &&
                         manifold_ready()) {
-                        pop_excited_ = project_population(kP2Z);
-                        pop_ground_ = project_population(kS1);
+                        pop_excited_ = atom_.project_population(engine_, kP2Z);
+                        pop_ground_ = atom_.project_population(engine_, kS1);
                         rabi_peak_ = std::max(rabi_peak_, pop_excited_);
                     }
                 } else {
@@ -771,7 +772,7 @@ public:
             if (mode_ != ViewMode::Cloud) {
                 mode_ = ViewMode::Cloud;  // jump trials run on the GPU path only
             }
-            if (!prepare_manifold_cache()) {
+            if (!atom_.prepare_manifold_cache(engine_, kDecayGammaDisplay)) {
                 return;
             }
             decay_accum_dt_ = 0.0;  // no hazard accrues while decay is off
@@ -783,7 +784,7 @@ public:
     // Selftest access: the computed Einstein A for a channel (0 if absent)
     // and the cached eigenenergies.
     double channel_a(int from, int to) const {
-        for (const ShellChannel& c : channels_) {
+        for (const ShellChannel& c : atom_.channels()) {
             if (c.from == from && c.to == to) {
                 return c.a_true;
             }
@@ -793,7 +794,7 @@ public:
     bool solving() const { return gpu_ok_ && !atlas_done_; }
     // Ready only once the FULL table is assembled (channels_ fills
     // incrementally during the pair phase -- do not race it).
-    bool manifold_ready() const { return atlas_done_ && !channels_.empty(); }
+    bool manifold_ready() const { return atlas_done_ && !atom_.channels().empty(); }
 
     // T7: instantly excite an n = 3 state (cycles through a small set) and
     // watch the CASCADE: e.g. 3d -> 2p (photon) -> 1s (photon).
@@ -804,17 +805,17 @@ public:
         if (mode_ != ViewMode::Cloud) {
             mode_ = ViewMode::Cloud;
         }
-        if (!prepare_manifold_cache()) {
+        if (!atom_.prepare_manifold_cache(engine_, kDecayGammaDisplay)) {
             return;
         }
         static constexpr int kCycle[] = {k3DZ0, k4F0, k3S, k4S};
         const int idx = kCycle[excite_cycle_++ % 4];
-        collapse_onto(idx);
+        atom_.collapse_onto(engine_, idx);
         cpu_is_truth_ = false;  // the GPU state is ahead now
         stepping_ = Stepping::RealTime;
         after_control();
     }
-    double state_energy(int idx) const { return state_energy_[static_cast<std::size_t>(idx)]; }
+    double state_energy(int idx) const { return atom_.state_energy(idx); }
 
     // Transitions arc T3: cycle the laser off -> Z-pol -> X-pol -> off. The
     // carrier w comes from OUR spectrum (the cached ITP energies) and E0
@@ -843,9 +844,9 @@ public:
             const double e_1s = (relax_energy_display_ < -0.35)
                                     ? relax_energy_display_
                                     : (grid_energy_1s_ != 0.0 ? grid_energy_1s_
-                                                              : state_energy_[kS1]);
-            laser_omega_ = state_energy_[kP2Z] - e_1s;
-            laser_e0_ = dipole_z_ > 0.0 ? kRabiTargetOmega / dipole_z_ : 0.0;
+                                                              : atom_.state_energy(kS1));
+            laser_omega_ = atom_.state_energy(kP2Z) - e_1s;
+            laser_e0_ = atom_.dipole_z() > 0.0 ? kRabiTargetOmega / atom_.dipole_z() : 0.0;
             rabi_peak_ = 0.0;
             laser_pol_ = LaserPol::Z;
             stepping_ = Stepping::RealTime;  // the drive lives in real time
@@ -958,7 +959,7 @@ public:
         if (!manifold_ready() || idx < 0 || idx >= kNumStates) {
             return;
         }
-        collapse_onto(idx);
+        atom_.collapse_onto(engine_, idx);
         cpu_is_truth_ = false;
         stepping_ = Stepping::RealTime;
         after_control();
@@ -968,7 +969,7 @@ public:
             return 0.0;
         }
         engine_.project_psi();
-        const double p = project_population(idx);
+        const double p = atom_.project_population(engine_, idx);
         return p;
     }
 
@@ -1006,11 +1007,11 @@ protected:
         // atlas): freed at auto-complete / reset / the next relaxation.
         // relax_deflated_step reads them as fp32 phi every relax frame.
         free_deflation_buffers();
-        relax_deflate_.push_back(synth_transient(kS1));
+        relax_deflate_.push_back(atom_.synth_transient(engine_, kS1));
         if (deflate_p_triplet) {
-            relax_deflate_.push_back(synth_transient(kP2X));
-            relax_deflate_.push_back(synth_transient(kP2Y));
-            relax_deflate_.push_back(synth_transient(kP2Z));
+            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2X));
+            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2Y));
+            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2Z));
         }
         relax_deflate_owned_ = relax_deflate_;
         sim_.set_psi(seed);
@@ -1039,57 +1040,6 @@ protected:
         return seed;
     }
 
-    // T7: solve the radial atom once (blocking, well under a second).
-    // In-box levels back the tracked manifold (u(R_box) = 0 is exactly what
-    // the periodic grid supports); the free-atom table to n = 10 is the
-    // full lifetime atlas, printed for the record.
-    void solve_radial_atom() {
-        const double r_box = sim_.grid().x.xmax;  // 64 Bohr
-        radial_grid_ = ses::RadialGrid{r_box, 5119};
-        std::vector<double> v(static_cast<std::size_t>(radial_grid_.n));
-        for (int i = 0; i < radial_grid_.n; ++i) {
-            v[static_cast<std::size_t>(i)] = -1.0 / radial_grid_.r(i);  // r=(i+1)h>0
-        }
-        for (int lev = 0; lev < kNumLevels; ++lev) {
-            const ses::RadialState st = ses::radial_eigenstate(
-                radial_grid_,
-                ses::radial_hamiltonian(radial_grid_, v, kLevelSpec[lev].l),
-                kLevelSpec[lev].k);
-            radial_u_[static_cast<std::size_t>(lev)] = st.u;
-            radial_energy_[static_cast<std::size_t>(lev)] = st.energy;
-        }
-        radial_ready_ = true;
-
-        // The full free-atom lifetime table to n = 10 (55 levels).
-        const ses::RadialGrid free_grid{600.0, 14999};
-        std::vector<double> vf(static_cast<std::size_t>(free_grid.n));
-        for (int i = 0; i < free_grid.n; ++i) {
-            vf[static_cast<std::size_t>(i)] = -1.0 / free_grid.r(i);
-        }
-        const std::vector<ses::LevelInfo> table =
-            ses::bound_level_table(free_grid, vf, 10);
-        std::fprintf(stderr,
-                     "spectrum: free hydrogen atom (true -1/r), ALL %d bound levels to "
-                     "n = 10 (E1 lifetimes from our radial engine)\n",
-                     static_cast<int>(table.size()));
-        const char* kSpdf = "spdfghijkl";
-        for (const ses::LevelInfo& e : table) {
-            std::fprintf(stderr,
-                         "spectrum: %2d%c  E = %11.6f Ha   tau = %.3e au (%.3e ns)%s\n",
-                         e.n, kSpdf[e.l], e.energy, e.lifetime,
-                         e.lifetime * 2.4188843e-17 * 1e9,
-                         e.lifetime == 0.0 ? "  [E1-stable]" : "");
-        }
-    }
-
-    // Synthesize (and cache) tracked state `idx` from the radial solution:
-    // psi = (u/r) Y_lm -- exact separation of variables, no ITP ladder.
-    // Needs a current GL context for the buffer upload.
-    // Synthesize state `idx` = (u/r) Y_lm STRAIGHT into a resident GPU buffer:
-    // the radial u_nl(r) table goes to the GPU and a compute shader places the
-    // orbital + normalizes it on-device -- no CPU field, no host copy. Caches
-    // the energy; *out_peak (if given) receives the normalized peak density.
-    // Needs a current GL context.
     // Free VRAM in bytes via Vulkan's VK_EXT_memory_budget (heap budget minus
     // current usage, summed over device-local heaps), or ses::kVramUnknown when
     // the extension / entry points are absent. Physical-device property queries
@@ -1145,85 +1095,6 @@ protected:
         return any ? free_total : ses::kVramUnknown;
     }
 
-    // Whether atlas state `idx` is stored fp16. Fp32 is kept for the h-audit
-    // s-states (E_radial vs <H>_grid amplifies fp16 noise through the Laplacian)
-    // and the deflation set (relax_deflated_step reads them as fp32 phi buffers).
-    bool state_is_fp16(int idx) const {
-        if (state_precision_ != ses::GpuPrecision::Fp16) {
-            return false;
-        }
-        switch (idx) {
-            case kS1:
-            case kP2X:
-            case kP2Y:
-            case kP2Z:
-            case k4S:
-            case k5S:
-            case k6S:
-                return false;
-            default:
-                return true;
-        }
-    }
-
-    // The engine handle for atlas state `idx` (precision lives inside the
-    // engine's state record, so an int handle carries both).
-    int handle(int idx) const { return state_buf_[static_cast<std::size_t>(idx)]; }
-
-    int gpu_synthesize(int idx, double* out_peak = nullptr) {
-        const std::size_t s = static_cast<std::size_t>(idx);
-        const StateSpec& sp = kStateSpec[s];
-        state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
-        if (state_is_fp16(idx)) {
-            return engine_.synthesize_state_half(
-                radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-                radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
-                &state_norm2_[s]);
-        }
-        return engine_.synthesize_state(
-            radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
-            &state_norm2_[s]);
-    }
-
-    // Population |<n|psi>|^2 from the last engine_.project_psi() pass: the 1-D
-    // radial dot g_lm . u_nl, grid-normalized to be value-identical to the
-    // retired inner_with_psi(grid-normalized orbital) path.
-    double project_population(int idx) const {
-        const StateSpec& sp = kStateSpec[static_cast<std::size_t>(idx)];
-        const double n2 = state_norm2_[static_cast<std::size_t>(idx)];
-        if (n2 <= 0.0) {
-            return 0.0;
-        }
-        return ses::norm_sq(engine_.project_amplitude(
-                   radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m)) /
-               n2;
-    }
-
-    // Collapse psi onto eigenstate `idx` by synthesizing it ON DEMAND (no
-    // resident atlas): psi_buf_ is overwritten with the normalized orbital.
-    void collapse_onto(int idx) {
-        const StateSpec& sp = kStateSpec[static_cast<std::size_t>(idx)];
-        engine_.synthesize_into_psi(radial_u_[static_cast<std::size_t>(sp.level)],
-                                    sp.l, sp.m, radial_grid_.h(), radial_grid_.rmax,
-                                    radial_grid_.n);
-    }
-
-    // Synthesize eigenstate idx into a FRESH fp32 buffer (caller frees); captures
-    // its grid norm (for populations) and energy. ALL build/deflation work uses
-    // these transients -- no resident atlas -- so the startup montage holds ONE
-    // orbital at a time (not all 91) and 512^3, where a resident atlas is
-    // physically impossible, becomes feasible. (fp16 is kept dormant for a future
-    // big-box preset; it only ever mattered for a RESIDENT atlas.)
-    int synth_transient(int idx, double* out_norm2 = nullptr, double* out_peak = nullptr) {
-        const StateSpec& sp = kStateSpec[static_cast<std::size_t>(idx)];
-        state_energy_[static_cast<std::size_t>(idx)] =
-            radial_energy_[static_cast<std::size_t>(sp.level)];
-        return engine_.synthesize_state(radial_u_[static_cast<std::size_t>(sp.level)],
-                                        sp.l, sp.m, radial_grid_.h(), radial_grid_.rmax,
-                                        radial_grid_.n, out_peak, out_norm2);
-    }
-
     // Free the OWNED transient deflation buffers (synthesized at relax-start).
     void free_deflation_buffers() {
         for (int b : relax_deflate_owned_) {
@@ -1231,19 +1102,6 @@ protected:
         }
         relax_deflate_owned_.clear();
         relax_deflate_.clear();
-    }
-
-    // Ensure state `idx` has a resident GPU buffer, synthesized on the GPU.
-    bool ensure_state(int idx) {
-        const std::size_t s = static_cast<std::size_t>(idx);
-        if (state_buf_[s] >= 0) {
-            return true;
-        }
-        if (!radial_ready_) {
-            return false;
-        }
-        state_buf_[s] = gpu_synthesize(idx);
-        return state_buf_[s] >= 0;
     }
 
     // T7: advance the startup atlas build by one chunk (current context:
@@ -1258,17 +1116,17 @@ protected:
         if (!synth_queue_.empty()) {
             const int idx = synth_queue_.front();
             synth_queue_.erase(synth_queue_.begin());
-            if (!radial_ready_) {
+            if (!atom_.radial_ready()) {
                 atlas_done_ = true;  // no radial solve: give up gracefully
                 return;
             }
-            const std::size_t s = static_cast<std::size_t>(idx);
-            // Synthesize into a TRANSIENT fp32 buffer: capture its grid norm (for
-            // populations), SHOW it (montage), audit, then FREE. The orbital-free
-            // projection keeps no atlas, so the montage holds ONE orbital at a
-            // time instead of accumulating all 91 (the old startup VRAM ramp).
+            // Synthesize into a TRANSIENT fp32 buffer: the model captures its
+            // grid norm (for populations), SHOW it (montage), audit, then FREE.
+            // The orbital-free projection keeps no atlas, so the montage holds
+            // ONE orbital at a time instead of accumulating all 91 (the old
+            // startup VRAM ramp).
             double pk = 0.0;
-            const int buf = synth_transient(idx, &state_norm2_[s], &pk);
+            const int buf = atom_.synth_transient(engine_, idx, &pk);
             if (buf < 0) {
                 atlas_done_ = true;  // GPU buffer alloc failed: give up gracefully
                 return;
@@ -1290,10 +1148,10 @@ protected:
                 }
                 std::fprintf(stderr,
                              "atlas: %-8s E_radial = %.6f Ha   <H>_grid = %.6f Ha\n",
-                             kStateSpec[s].name, state_energy_[s], e_grid);
+                             kStateSpec[idx].name, atom_.state_energy(idx), e_grid);
             } else {
                 std::fprintf(stderr, "atlas: %-8s E_radial = %.6f Ha\n",
-                             kStateSpec[s].name, state_energy_[s]);
+                             kStateSpec[idx].name, atom_.state_energy(idx));
             }
             engine_.release_state(buf);  // TRANSIENT: freed after show + audit
             if (pk > 0.0) {
@@ -1303,167 +1161,27 @@ protected:
             volume_dirty_ = false;
             montage_hold_ = kAtlasMontageFrames;
             if (synth_queue_.empty()) {
-                collect_channel_pairs();
+                atom_.collect_channel_pairs();
             }
             return;
         }
-        if (!pair_queue_.empty()) {
-            for (int c = 0; c < kAtlasPairsPerFrame && !pair_queue_.empty(); ++c) {
-                evaluate_channel_pair(pair_queue_.back());
-                pair_queue_.pop_back();
+        if (!atom_.pair_queue().empty()) {
+            for (int c = 0; c < kAtlasPairsPerFrame && !atom_.pair_queue().empty(); ++c) {
+                atom_.evaluate_channel_pair(engine_, atom_.pair_queue().back());
+                atom_.pair_queue().pop_back();
             }
-            if (pair_queue_.empty()) {
-                finalize_channel_table();
+            if (atom_.pair_queue().empty()) {
+                atom_.finalize_channel_table(kDecayGammaDisplay);
                 // Free the channel-build 'from' cache; nothing else is resident
                 // (montage + pairs were transient). Populations come from the
                 // projection and collapse/deflation re-synthesize on demand -- NO
                 // resident atlas -> ~1.2 GB runtime, and 512^3 is feasible.
-                if (pair_from_buf_ >= 0) {
-                    engine_.release_state(pair_from_buf_);
-                    pair_from_buf_ = -1;
-                }
-                pair_from_idx_ = -1;
+                atom_.release_pair_cache(engine_);
                 atlas_done_ = true;
                 cpu_is_truth_ = true;  // resume the untouched wavepacket
                 refresh_title();
             }
         }
-    }
-
-    // Downward pairs worth a dipole integral: gap > 1e-3 skips both the
-    // degenerate m-splittings (zero by construction here) and sub-mHa
-    // radio-frequency channels whose omega^3 rates are irrelevant; the
-    // |dl| = 1 filter applies the E1 selection rule analytically (the
-    // synthesis KNOWS each state's l -- emergence was demonstrated in T5,
-    // and 30 states would otherwise cost ~450 forbidden integrals).
-    void collect_channel_pairs() {
-        pair_queue_.clear();
-        for (int from = 0; from < kNumStates; ++from) {
-            for (int to = 0; to < kNumStates; ++to) {
-                const bool downward =
-                    state_energy_[static_cast<std::size_t>(from)] -
-                        state_energy_[static_cast<std::size_t>(to)] >
-                    1e-3;
-                const bool e1_allowed =
-                    std::abs(kStateSpec[from].l - kStateSpec[to].l) == 1;
-                if (downward && e1_allowed) {
-                    pair_queue_.push_back({from, to});
-                }
-            }
-        }
-    }
-
-    void evaluate_channel_pair(const std::pair<int, int>& p) {
-        const std::size_t from = static_cast<std::size_t>(p.first);
-        const std::size_t to = static_cast<std::size_t>(p.second);
-        const double gap = state_energy_[from] - state_energy_[to];
-        // Transient endpoints (no resident atlas): cache the 'from' orbital
-        // across its consecutive channels (pairs are grouped by 'from'), and
-        // synthesize each 'to' fresh -- peak residency is 2 orbitals, never 91.
-        if (pair_from_idx_ != p.first) {
-            if (pair_from_buf_ >= 0) {
-                engine_.release_state(pair_from_buf_);
-            }
-            pair_from_buf_ = synth_transient(p.first);
-            pair_from_idx_ = p.first;
-        }
-        const int to_buf = synth_transient(p.second);
-        const ses::DipoleMatrixElement d = engine_.dipole_between(to_buf, pair_from_buf_);
-        engine_.release_state(to_buf);
-        channels_.push_back(ShellChannel{
-            p.first, p.second, ses::einstein_a(gap, ses::dipole_strength_sq(d)), 0.0});
-        if (p.first == kP2Z && p.second == kS1) {
-            dipole_z_ = std::abs(d.z);  // T3 laser E0, ready for free
-        }
-    }
-
-    bool finalize_channel_table() {
-        double a_max = 0.0;
-        for (const ShellChannel& c : channels_) {
-            a_max = std::max(a_max, c.a_true);
-        }
-        if (a_max <= 0.0) {
-            channels_.clear();
-            return false;
-        }
-        accel_display_ = kDecayGammaDisplay / a_max;
-        for (ShellChannel& c : channels_) {
-            c.gamma_display = c.a_true * accel_display_;
-        }
-        std::fprintf(stderr, "manifold: display acceleration x%.3e\n", accel_display_);
-        for (int s = 0; s < kNumStates; ++s) {
-            std::fprintf(stderr, "manifold: E(%s) = %.6f Ha\n", kStateSpec[s].name,
-                         state_energy_[static_cast<std::size_t>(s)]);
-        }
-        for (const ShellChannel& c : channels_) {
-            std::fprintf(stderr, "manifold: %s -> %s  A = %.3e /au  tau = %.3e au%s\n",
-                         kStateSpec[c.from].name, kStateSpec[c.to].name, c.a_true,
-                         c.a_true > 0.0 ? 1.0 / c.a_true : 0.0,
-                         c.a_true < 1e-3 * a_max ? "  [forbidden/suppressed]" : "");
-        }
-        return true;
-    }
-
-    // T7: the blocking fallbacks are now thin wrappers over synthesis --
-    // after the startup atlas everything is already cached, so these cost
-    // nothing; if called early they synthesize just what is needed. The
-    // engine drives its own offscreen frames, so no context bracket is
-    // needed (legal any time between widget paints).
-    bool prepare_ground_cache() { return ensure_state(kS1); }
-
-    // The laser pair (1s + 2p_z); dipole_z_ (the T3 drive strength) comes
-    // from the channel table or is computed here if the table is not up.
-    bool prepare_excited_cache() {
-        const bool ok = ensure_state(kS1) && ensure_state(kP2Z);
-        if (ok && dipole_z_ == 0.0) {
-            const ses::DipoleMatrixElement d =
-                engine_.dipole_between(handle(kP2Z), handle(kS1));
-            dipole_z_ = std::abs(d.z);
-        }
-        return ok;
-    }
-
-    bool prepare_p_triplet() {
-        if (!prepare_excited_cache()) {
-            return false;
-        }
-        return ensure_state(kP2X) && ensure_state(kP2Y);
-    }
-
-    bool prepare_manifold_cache() {
-        if (!channels_.empty()) {
-            return true;
-        }
-        // The whole blocking build: ensure_state uploads the buffers and
-        // evaluate_channel_pair reduces the dipoles on the GPU (the dipoles no
-        // longer touch the CPU); the engine owns its frames.
-        bool ok = true;
-        for (int idx = 0; idx < kNumStates && ok; ++idx) {
-            ok = ensure_state(idx);
-        }
-        if (ok) {
-            collect_channel_pairs();
-            while (!pair_queue_.empty()) {
-                evaluate_channel_pair(pair_queue_.back());
-                pair_queue_.pop_back();
-            }
-        }
-        if (!ok) {
-            return false;
-        }
-        return finalize_channel_table();
-    }
-
-    // Total decay lifetime of a tracked state (sum over its channels), in
-    // TRUE atomic units; 0 means no open channel (stable/metastable).
-    double lifetime_of(int state) const {
-        double a_sum = 0.0;
-        for (const ShellChannel& c : channels_) {
-            if (c.from == state) {
-                a_sum += c.a_true;
-            }
-        }
-        return a_sum > 0.0 ? 1.0 / a_sum : 0.0;
     }
 
     void keyPressEvent(QKeyEvent* e) override {
@@ -1640,19 +1358,19 @@ private:
             (solving()
                  ? (synth_queue_.empty()
                         ? QStringLiteral("  solving atom: dipole channels (%1 left)")
-                              .arg(static_cast<int>(pair_queue_.size()))
+                              .arg(static_cast<int>(atom_.pair_queue().size()))
                         : QStringLiteral("  solving atom: %1 (%2/%3)")
                               .arg(QLatin1String(kStateSpec[synth_queue_.front()].name))
                               .arg(kNumStates -
                                    static_cast<int>(synth_queue_.size()) + 1)
                               .arg(kNumStates))
                  : QString()) +
-            (decay_on_ && !channels_.empty()
+            (decay_on_ && !atom_.channels().empty()
                  ? QStringLiteral("  decay ON: tau(2p) %1 au, tau(2s) %2 au, x%3, "
                                   "photons %4%5")
-                       .arg(lifetime_of(kP2Z), 0, 'e', 2)
-                       .arg(lifetime_of(kS2), 0, 'e', 2)
-                       .arg(accel_display_, 0, 'e', 1)
+                       .arg(atom_.lifetime_of(kP2Z), 0, 'e', 2)
+                       .arg(atom_.lifetime_of(kS2), 0, 'e', 2)
+                       .arg(atom_.accel_display(), 0, 'e', 1)
                        .arg(photon_count_)
                        .arg(last_jump_.isEmpty()
                                 ? QString()
@@ -1715,41 +1433,26 @@ private:
     double radiated_power_ = 0.0;  // semiclassical Larmor power (au)
     std::vector<float> readback_buf_;
 
-    // Transitions arc T1/T4/T5: the cached eigenstate manifold, the decay
-    // channel table (built on first decay toggle), and jump bookkeeping.
-    // Engine handles are ints; -1 = not resident.
-    std::array<int, kNumStates> state_buf_ = make_unset_handles();
-    // Atlas storage precision, decided at startup from free VRAM: the fp32
-    // n<=6 manifold is ~12 GB and oversubscribes a small card. Fp16 halves it.
-    ses::GpuPrecision state_precision_ = ses::GpuPrecision::Fp32;
-    // Orbital-free projection (Phase 5): grid norm of each raw (u/r)Ylm orbital
-    // (captured at synthesis) normalizes projected populations to match the
-    // retired inner_with_psi path; proj_ready_ once the static index is uploaded.
-    std::array<double, kNumStates> state_norm2_{};
-    bool proj_ready_ = false;
-    std::array<double, kNumStates> state_energy_{};
-    std::vector<ShellChannel> channels_;
-    double accel_display_ = 0.0;  // common display acceleration factor
+    // The tracked atom (Stage 5b): radial solve, eigenstate synthesis
+    // bookkeeping, and the E1 decay channel table live in AtomModel;
+    // engine-backed calls pass engine_ explicitly.
+    ses_shell::AtomModel atom_;
+    bool proj_ready_ = false;  // static projection index uploaded
+
+    // Transitions arc T1/T4/T5: jump bookkeeping.
     QString last_jump_;
     QString last_measure_;  // last energy-measurement readout (Key E)
     int last_measured_index_ = -2;  // last energy-measurement outcome (selftest)
     QString relax_label_ = QStringLiteral("2p");
     std::vector<int> relax_deflate_;        // live RelaxingExcited deflation set
     std::vector<int> relax_deflate_owned_;  // owned transient states to release
-    int pair_from_idx_ = -1;                // channel-build 'from' cache (transient)
-    int pair_from_buf_ = -1;
     double relax_prev_energy_ = 0.0;     // T7 auto-complete plateau tracking
     int relax_plateau_ = 0;
 
     // T7: startup atlas build (radial solve + synthesis, chunked in paint).
     std::vector<int> synth_queue_;
-    std::vector<std::pair<int, int>> pair_queue_;
     int montage_hold_ = 0;
     bool atlas_done_ = false;
-    ses::RadialGrid radial_grid_{};
-    std::array<std::vector<double>, kNumLevels> radial_u_;
-    std::array<double, kNumLevels> radial_energy_{};
-    bool radial_ready_ = false;
     double decay_accum_dt_ = 0.0;  // sim time since the last decay trial
     int excite_cycle_ = 0;         // key-5 n=3 cycle position
     // Decay is the DEFAULT, as in nature; D is the off-switch for studying
@@ -1765,7 +1468,6 @@ private:
     double efield_e0_ = 0.0;  // static +z electric field magnitude (au); 0 = off
     double bfield_b_ = 0.0;      // magnetic field strength (au); 0 = off
     int bfield_axis_ = 2;        // field direction: 2=z, 0=x, 1=y
-    double dipole_z_ = 0.0;   // |<2p_z| z |1s>| from the cached states
     double grid_energy_1s_ = 0.0;  // <H>_grid of the 1s (from the h-audit); the
                                    // laser drives THIS (grid) resonance, not the
                                    // radial label, since bare Coulomb leaves the
@@ -1786,12 +1488,6 @@ private:
     bool mesh_dirty_ = false;
     bool volume_dirty_ = false;
     long long ticks_ = 0;
-
-    static std::array<int, kNumStates> make_unset_handles() {
-        std::array<int, kNumStates> a{};
-        a.fill(-1);
-        return a;
-    }
 
     // The whole render layer (Stage 4): pipelines, buffers, textures, and the
     // per-frame record live in SceneRenderer; the shell hands it FrameInputs.
