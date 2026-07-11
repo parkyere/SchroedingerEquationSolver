@@ -20,6 +20,7 @@
 #include "vk_compute.hpp"
 
 #include <core/complex.hpp>
+#include <core/decay.hpp>
 #include <core/drive.hpp>
 #include <core/grid.hpp>
 #include <core/vec.hpp>
@@ -60,6 +61,10 @@ struct EngineKernels {
     std::size_t synth_size = 0;
     const unsigned char* force = nullptr;  // mean_force.comp
     std::size_t force_size = 0;
+    const unsigned char* dipole = nullptr;   // dipole.comp
+    std::size_t dipole_size = 0;
+    const unsigned char* project = nullptr;  // project_deposit.comp
+    std::size_t project_size = 0;
 };
 
 class Engine {
@@ -157,7 +162,18 @@ public:
                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
                             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                            {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
+                            {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !dipole_.create(ctx, blobs.dipole, blobs.dipole_size,
+                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                             {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !project_.create(ctx, blobs.project, blobs.project_size,
+                             {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                              {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                              {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                              {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                              {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
             return false;
         }
 
@@ -221,9 +237,9 @@ public:
             return false;
         }
 
-        // Descriptor sets: 13 base + 2 relax + 4 per resident state (the
-        // harness-scale pool; the atlas stage brings a growable arena).
-        if (!arena_.create(ctx_ ? *ctx_ : ctx, 48, 96, 48, 2)) {
+        // Descriptor sets: 16 base + 3 any-target + 2 relax + 4 per resident
+        // state (harness-scale pool; the GUI stage brings a growable arena).
+        if (!arena_.create(ctx_ ? *ctx_ : ctx, 96, 192, 96, 2)) {
             return false;
         }
         half_set_ = make_mul_set(half_.buf);
@@ -256,13 +272,18 @@ public:
                                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                 partials_.buf);
         }
+        synth_any_set_ = arena_.allocate(*ctx_, synth_.set_layout());
+        norm_any_set_ = arena_.allocate(*ctx_, norm_.set_layout());
+        scale_any_set_ = arena_.allocate(*ctx_, scale_.set_layout());
         if (half_set_ == VK_NULL_HANDLE || kin_set_ == VK_NULL_HANDLE ||
             conj1_set_ == VK_NULL_HANDLE || conjN_set_ == VK_NULL_HANDLE ||
             fft_set_[0] == VK_NULL_HANDLE || fft_set_[1] == VK_NULL_HANDLE ||
             fft_set_[2] == VK_NULL_HANDLE || scale_set_ == VK_NULL_HANDLE ||
             norm_set_ == VK_NULL_HANDLE || conjA_set_ == VK_NULL_HANDLE ||
             shear_set_[0] == VK_NULL_HANDLE || shear_set_[1] == VK_NULL_HANDLE ||
-            kick_set_ == VK_NULL_HANDLE) {
+            kick_set_ == VK_NULL_HANDLE || synth_any_set_ == VK_NULL_HANDLE ||
+            norm_any_set_ == VK_NULL_HANDLE ||
+            scale_any_set_ == VK_NULL_HANDLE) {
             return false;
         }
 
@@ -436,42 +457,16 @@ public:
     // Upload a CPU state into its own resident fp32 buffer; returns a handle
     // usable with every per-state op, or -1 on failure.
     int create_state_buffer(const std::vector<ses::Complex<double>>& state) {
-        State st;
-        if (!ctx_->create_device_buffer(field_bytes_, &st.buf) ||
-            !upload_field(st.buf, state)) {
-            ctx_->destroy_buffer(&st.buf);
+        const int handle = create_state_buffer_uninit();
+        if (handle < 0) {
             return -1;
         }
-        st.inner_set = arena_.allocate(*ctx_, inner_.set_layout());
-        st.axpy_set = arena_.allocate(*ctx_, axpy_.set_layout());
-        st.copy_set = arena_.allocate(*ctx_, copy_.set_layout());
-        st.mul_set = arena_.allocate(*ctx_, mul_.set_layout());
-        if (st.inner_set == VK_NULL_HANDLE || st.axpy_set == VK_NULL_HANDLE ||
-            st.copy_set == VK_NULL_HANDLE || st.mul_set == VK_NULL_HANDLE) {
-            ctx_->destroy_buffer(&st.buf);
+        State* st = state_at(handle);
+        if (!upload_field(st->buf, state)) {
+            ctx_->destroy_buffer(&st->buf);
             return -1;
         }
-        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        arena_.write_buffer(*ctx_, st.inner_set, 0, storage, psi_.buf);
-        arena_.write_buffer(*ctx_, st.inner_set, 1, uniform, muln_ubo_.buf,
-                            sizeof(MulParams));
-        arena_.write_buffer(*ctx_, st.inner_set, 2, storage, partials_.buf);
-        arena_.write_buffer(*ctx_, st.inner_set, 3, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.axpy_set, 0, storage, psi_.buf);
-        arena_.write_buffer(*ctx_, st.axpy_set, 1, uniform, axpy_ubo_.buf,
-                            sizeof(AxpyParams));
-        arena_.write_buffer(*ctx_, st.axpy_set, 3, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.copy_set, 0, storage, psi_.buf);
-        arena_.write_buffer(*ctx_, st.copy_set, 1, uniform, muln_ubo_.buf,
-                            sizeof(MulParams));
-        arena_.write_buffer(*ctx_, st.copy_set, 3, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 0, storage, psi_.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 1, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 2, uniform, muln_ubo_.buf,
-                            sizeof(MulParams));
-        states_.push_back(st);
-        return static_cast<int>(states_.size()) - 1;
+        return handle;
     }
 
     // Free a resident state's buffer; the slot stays so handles remain
@@ -695,67 +690,195 @@ public:
     // radial table u_nl(r). h_radial = rmax/(n_radial+1).
     bool synthesize_into_psi(const std::vector<double>& u, int l, int m,
                              double h_radial, double rmax, int n_radial) {
-        std::vector<float> uf(u.size());
-        for (std::size_t i = 0; i < u.size(); ++i) {
-            uf[i] = static_cast<float>(u[i]);
-        }
-        const VkDeviceSize rbytes = uf.size() * sizeof(float);
-        if (radial_buf_.buf == VK_NULL_HANDLE || radial_bytes_ != rbytes) {
-            vkDeviceWaitIdle(ctx_->device);
-            ctx_->destroy_buffer(&radial_buf_);
-            if (!ctx_->create_device_buffer(rbytes, &radial_buf_)) {
-                return false;
-            }
-            radial_bytes_ = rbytes;
-            if (synth_set_ == VK_NULL_HANDLE) {
-                synth_set_ = arena_.allocate(*ctx_, synth_.set_layout());
-                if (synth_set_ == VK_NULL_HANDLE) {
-                    return false;
-                }
-            }
-            const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            arena_.write_buffer(*ctx_, synth_set_, 0, storage, psi_.buf);
-            arena_.write_buffer(*ctx_, synth_set_, 1,
-                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                synth_ubo_.buf, sizeof(SynthParams));
-            arena_.write_buffer(*ctx_, synth_set_, 5, storage, radial_buf_.buf);
-        }
-        if (!upload_raw(radial_buf_, uf.data(), rbytes)) {
-            return false;
-        }
+        return synthesize_into_buffer(psi_, u, l, m, h_radial, rmax, n_radial);
+    }
 
-        SynthParams sp{};
-        sp.n = static_cast<std::uint32_t>(cells_);
-        sp.nx = grid_.x.n;
-        sp.ny = grid_.y.n;
-        sp.l = l;
-        sp.m = m;
-        sp.n_radial = n_radial;
-        sp.h_radial = static_cast<float>(h_radial);
-        sp.rmax = static_cast<float>(rmax);
-        sp.box_min[0] = static_cast<float>(grid_.x.xmin);
-        sp.box_min[1] = static_cast<float>(grid_.y.xmin);
-        sp.box_min[2] = static_cast<float>(grid_.z.xmin);
-        sp.cell_h[0] = static_cast<float>(grid_.x.spacing());
-        sp.cell_h[1] = static_cast<float>(grid_.y.spacing());
-        sp.cell_h[2] = static_cast<float>(grid_.z.spacing());
-        std::memcpy(synth_ubo_.mapped, &sp, sizeof(sp));
-        vmaFlushAllocation(ctx_->allocator, synth_ubo_.alloc, 0, VK_WHOLE_SIZE);
+    // Synthesize a normalized fp32 eigenstate into its OWN resident state
+    // buffer (the atlas path; psi is untouched) and return a handle.
+    // *out_peak gets the normalized peak |psi|^2; *out_norm2 the
+    // PRE-normalization grid norm (the projection population normalizer).
+    int synthesize_state(const std::vector<double>& u, int l, int m,
+                         double h_radial, double rmax, int n_radial,
+                         double* out_peak = nullptr,
+                         double* out_norm2 = nullptr) {
+        const int handle = create_state_buffer_uninit();
+        if (handle < 0) {
+            return -1;
+        }
+        State* st = state_at(handle);
+        if (!synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
+                                    n_radial, out_peak, out_norm2)) {
+            ctx_->destroy_buffer(&st->buf);
+            return -1;
+        }
+        return handle;
+    }
+
+    // <to| r |from> = sum conj(to)*(x,y,z)*from * dV from two resident fp32
+    // states, component-wise complex (three complex reductions).
+    ses::DipoleMatrixElement dipole_between(int to_h, int from_h) {
+        State* to = state_at(to_h);
+        State* from = state_at(from_h);
+        if (to == nullptr || from == nullptr || !ensure_dipole()) {
+            return {};
+        }
+        DipoleParams dp{};
+        dp.n = static_cast<std::uint32_t>(cells_);
+        dp.nx = grid_.x.n;
+        dp.ny = grid_.y.n;
+        dp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        dp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        dp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        dp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        dp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        dp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        std::memcpy(dipole_ubo_.mapped, &dp, sizeof(dp));
+        vmaFlushAllocation(ctx_->allocator, dipole_ubo_.alloc, 0,
+                           VK_WHOLE_SIZE);
+        // The shared set is re-pointed per call (all submissions fence-wait,
+        // so the set is never in flight when rewritten).
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        arena_.write_buffer(*ctx_, dipole_set_, 0, storage, to->buf.buf);
+        arena_.write_buffer(*ctx_, dipole_set_, 3, storage, from->buf.buf);
 
         OneShot shot;
         if (!shot.begin(*ctx_)) {
+            return {};
+        }
+        dipole_.bind(shot.cb(), dipole_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_buffer_readback(shot.cb(), dipole_partials_,
+                               6 * kGroups * sizeof(float));
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return {};
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        double d6[6] = {0, 0, 0, 0, 0, 0};
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            for (int c = 0; c < 6; ++c) {
+                d6[c] += p[6 * g + c];
+            }
+        }
+        return ses::DipoleMatrixElement{
+            ses::Complex<double>{d6[0] * cell_volume_, d6[1] * cell_volume_},
+            ses::Complex<double>{d6[2] * cell_volume_, d6[3] * cell_volume_},
+            ses::Complex<double>{d6[4] * cell_volume_, d6[5] * cell_volume_}};
+    }
+
+    // ---- orbital-free angular projection --------------------------------
+    // Upload the static counting-sort geometry (ses::build_radial_bin_index)
+    // and allocate g_lm[ncomp*nr]. Call once after the radial grid is fixed.
+    bool set_projection_index(const std::vector<std::uint32_t>& sorted_cell,
+                              const std::vector<std::uint32_t>& bin_off,
+                              int n_radial, double h_radial, int l_max) {
+        proj_nr_ = n_radial;
+        proj_ncomp_ = (l_max + 1) * (l_max + 1);
+        proj_h_radial_ = h_radial;
+        const VkDeviceSize glm_bytes =
+            2ull * proj_ncomp_ * proj_nr_ * sizeof(float);
+        const ProjectParams pp0{};
+        if (!ctx_->create_device_buffer(sorted_cell.size() * 4,
+                                        &proj_sorted_buf_) ||
+            !ctx_->create_device_buffer(bin_off.size() * 4, &proj_binoff_buf_) ||
+            !ctx_->create_device_buffer(glm_bytes, &glm_buf_) ||
+            !write_ubo(&proj_ubo_, &pp0, sizeof(pp0))) {
             return false;
         }
-        synth_.bind(shot.cb(), synth_set_);
-        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
-
-        // Grid normalization: norm reduction (x dV) then 1/sqrt(norm).
-        const NormPeak np = norm_and_peak();
-        scale(static_cast<float>((np.sum > 0.0) ? 1.0 / std::sqrt(np.sum)
-                                                : 0.0));
+        if (!upload_raw(proj_sorted_buf_, sorted_cell.data(),
+                        sorted_cell.size() * 4) ||
+            !upload_raw(proj_binoff_buf_, bin_off.data(), bin_off.size() * 4)) {
+            return false;
+        }
+        proj_set_ = arena_.allocate(*ctx_, project_.set_layout());
+        if (proj_set_ == VK_NULL_HANDLE) {
+            return false;
+        }
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        arena_.write_buffer(*ctx_, proj_set_, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, proj_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, proj_ubo_.buf,
+                            sizeof(ProjectParams));
+        arena_.write_buffer(*ctx_, proj_set_, 6, storage, proj_sorted_buf_.buf);
+        arena_.write_buffer(*ctx_, proj_set_, 7, storage, proj_binoff_buf_.buf);
+        arena_.write_buffer(*ctx_, proj_set_, 8, storage, glm_buf_.buf);
         return true;
+    }
+
+    // Deposit psi -> g_lm (ONE grid pass, independent of state count), read
+    // back to glm_host_ as double. Then call project_amplitude per state.
+    void project_psi() {
+        if (proj_set_ == VK_NULL_HANDLE) {
+            return;  // set_projection_index failed/absent
+        }
+        ProjectParams pp{};
+        pp.nx = grid_.x.n;
+        pp.ny = grid_.y.n;
+        pp.nr = proj_nr_;
+        pp.h_radial = static_cast<float>(proj_h_radial_);
+        pp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        pp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        pp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        pp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        pp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        pp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        pp.dv = static_cast<float>(cell_volume_);
+        std::memcpy(proj_ubo_.mapped, &pp, sizeof(pp));
+        vmaFlushAllocation(ctx_->allocator, proj_ubo_.alloc, 0, VK_WHOLE_SIZE);
+
+        const VkDeviceSize glm_bytes =
+            2ull * proj_ncomp_ * proj_nr_ * sizeof(float);
+        if (!ensure_staging(glm_bytes)) {
+            return;
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        project_.bind(shot.cb(), proj_set_);
+        vkCmdDispatch(shot.cb(), static_cast<std::uint32_t>(proj_nr_), 1, 1);
+        record_buffer_readback(shot.cb(), glm_buf_, glm_bytes);
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* raw = static_cast<const float*>(staging_.mapped);
+        glm_host_.assign(
+            static_cast<std::size_t>(proj_ncomp_),
+            std::vector<ses::Complex<double>>(static_cast<std::size_t>(proj_nr_)));
+        for (int c = 0; c < proj_ncomp_; ++c) {
+            for (int j = 0; j < proj_nr_; ++j) {
+                const std::size_t o =
+                    2 * (static_cast<std::size_t>(c) * proj_nr_ +
+                         static_cast<std::size_t>(j));
+                glm_host_[static_cast<std::size_t>(c)]
+                         [static_cast<std::size_t>(j)] =
+                             ses::Complex<double>{raw[o], raw[o + 1]};
+            }
+        }
+    }
+
+    // <n|psi> raw amplitude = sum_j u_nl[j] g_lm[lm(l,m)][j] (double CPU
+    // finish). Needs a prior project_psi().
+    ses::Complex<double> project_amplitude(const std::vector<double>& u, int l,
+                                           int m) const {
+        const std::size_t comp = static_cast<std::size_t>(l * l + (l + m));
+        if (comp >= glm_host_.size()) {
+            return {};
+        }
+        const std::vector<ses::Complex<double>>& gc = glm_host_[comp];
+        ses::Complex<double> raw{};
+        const int n = std::min(static_cast<int>(u.size()), proj_nr_);
+        for (int j = 0; j < n; ++j) {
+            raw += u[static_cast<std::size_t>(j)] * gc[static_cast<std::size_t>(j)];
+        }
+        return raw;
     }
 
     // psi <- s * psi (fp32 drift renormalization).
@@ -807,6 +930,8 @@ public:
         }
         states_.clear();
         arena_.destroy(*ctx_);
+        project_.destroy(*ctx_);
+        dipole_.destroy(*ctx_);
         force_.destroy(*ctx_);
         synth_.destroy(*ctx_);
         copy_.destroy(*ctx_);
@@ -821,6 +946,12 @@ public:
         mul_.destroy(*ctx_);
         ctx_->destroy_buffer(&relax_kin_);
         ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&proj_ubo_);
+        ctx_->destroy_buffer(&glm_buf_);
+        ctx_->destroy_buffer(&proj_binoff_buf_);
+        ctx_->destroy_buffer(&proj_sorted_buf_);
+        ctx_->destroy_buffer(&dipole_partials_);
+        ctx_->destroy_buffer(&dipole_ubo_);
         ctx_->destroy_buffer(&force_partials_);
         ctx_->destroy_buffer(&grad_buf_);
         ctx_->destroy_buffer(&radial_buf_);
@@ -871,6 +1002,21 @@ private:
         float box_min[4];
         float cell_h[4];
         float axis[4];
+    };
+    // std140: n@0, nx@4, ny@8, pad@12, box_min@16, cell_h@32 (dipole.comp).
+    struct alignas(16) DipoleParams {
+        std::uint32_t n;
+        std::int32_t nx, ny, pad0;
+        float box_min[4];
+        float cell_h[4];
+    };
+    // std140: nx@0, ny@4, nr@8, h_radial@12, box_min@16, cell_h@32, dv@48.
+    struct alignas(16) ProjectParams {
+        std::int32_t nx, ny, nr;
+        float h_radial;
+        float box_min[4];
+        float cell_h[4];
+        float dv, pad0, pad1, pad2;
     };
     // std140: vec4-padded box_min/cell_h at 16/32, matches synth.comp order.
     struct alignas(16) SynthParams {
@@ -970,16 +1116,8 @@ private:
     }
 
     bool upload_raw(Buffer& dst, const void* data, VkDeviceSize bytes) {
-        if (bytes > staging_bytes_) {  // grow-only (e.g. long radial tables)
-            vkDeviceWaitIdle(ctx_->device);
-            ctx_->destroy_buffer(&staging_);
-            if (!ctx_->create_host_buffer(bytes,
-                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                          &staging_)) {
-                return false;
-            }
-            staging_bytes_ = bytes;
+        if (!ensure_staging(bytes)) {
+            return false;
         }
         std::memcpy(staging_.mapped, data, bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
@@ -1023,6 +1161,207 @@ private:
     }
     void record_partials_readback(VkCommandBuffer cb) {
         record_buffer_readback(cb, partials_, 2 * kGroups * sizeof(float));
+    }
+
+    // Allocate a state's buffer + descriptor sets without uploading content
+    // (create_state_buffer fills it from the host; synthesize_state on GPU).
+    int create_state_buffer_uninit() {
+        State st;
+        if (!ctx_->create_device_buffer(field_bytes_, &st.buf)) {
+            return -1;
+        }
+        st.inner_set = arena_.allocate(*ctx_, inner_.set_layout());
+        st.axpy_set = arena_.allocate(*ctx_, axpy_.set_layout());
+        st.copy_set = arena_.allocate(*ctx_, copy_.set_layout());
+        st.mul_set = arena_.allocate(*ctx_, mul_.set_layout());
+        if (st.inner_set == VK_NULL_HANDLE || st.axpy_set == VK_NULL_HANDLE ||
+            st.copy_set == VK_NULL_HANDLE || st.mul_set == VK_NULL_HANDLE) {
+            ctx_->destroy_buffer(&st.buf);
+            return -1;
+        }
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        arena_.write_buffer(*ctx_, st.inner_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.inner_set, 1, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        arena_.write_buffer(*ctx_, st.inner_set, 2, storage, partials_.buf);
+        arena_.write_buffer(*ctx_, st.inner_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.axpy_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.axpy_set, 1, uniform, axpy_ubo_.buf,
+                            sizeof(AxpyParams));
+        arena_.write_buffer(*ctx_, st.axpy_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.copy_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.copy_set, 1, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        arena_.write_buffer(*ctx_, st.copy_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 1, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 2, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        states_.push_back(st);
+        return static_cast<int>(states_.size()) - 1;
+    }
+
+    // Synthesize (u/r)Ylm into `out` via the shared any-target sets (re-
+    // pointed per call; every submission fence-waits so never in flight),
+    // then grid-normalize it. Reports pre-norm grid norm + normalized peak.
+    bool synthesize_into_buffer(Buffer& out, const std::vector<double>& u,
+                                int l, int m, double h_radial, double rmax,
+                                int n_radial, double* out_peak = nullptr,
+                                double* out_norm2 = nullptr) {
+        std::vector<float> uf(u.size());
+        for (std::size_t i = 0; i < u.size(); ++i) {
+            uf[i] = static_cast<float>(u[i]);
+        }
+        const VkDeviceSize rbytes = uf.size() * sizeof(float);
+        if (radial_buf_.buf == VK_NULL_HANDLE || radial_bytes_ != rbytes) {
+            vkDeviceWaitIdle(ctx_->device);
+            ctx_->destroy_buffer(&radial_buf_);
+            if (!ctx_->create_device_buffer(rbytes, &radial_buf_)) {
+                return false;
+            }
+            radial_bytes_ = rbytes;
+        }
+        if (!upload_raw(radial_buf_, uf.data(), rbytes)) {
+            return false;
+        }
+
+        SynthParams sp{};
+        sp.n = static_cast<std::uint32_t>(cells_);
+        sp.nx = grid_.x.n;
+        sp.ny = grid_.y.n;
+        sp.l = l;
+        sp.m = m;
+        sp.n_radial = n_radial;
+        sp.h_radial = static_cast<float>(h_radial);
+        sp.rmax = static_cast<float>(rmax);
+        sp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        sp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        sp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        sp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        sp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        sp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        std::memcpy(synth_ubo_.mapped, &sp, sizeof(sp));
+        vmaFlushAllocation(ctx_->allocator, synth_ubo_.alloc, 0, VK_WHOLE_SIZE);
+
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        arena_.write_buffer(*ctx_, synth_any_set_, 0, storage, out.buf);
+        arena_.write_buffer(*ctx_, synth_any_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, synth_ubo_.buf,
+                            sizeof(SynthParams));
+        arena_.write_buffer(*ctx_, synth_any_set_, 5, storage, radial_buf_.buf);
+
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        synth_.bind(shot.cb(), synth_any_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+
+        const NormPeak np = normalize_buffer(out);
+        if (out_norm2 != nullptr) {
+            *out_norm2 = np.sum;
+        }
+        if (out_peak != nullptr) {
+            *out_peak = (np.sum > 0.0) ? np.peak / np.sum : 0.0;
+        }
+        return true;
+    }
+
+    // Grid normalization of `buf` via the re-pointed any-target norm/scale
+    // sets. Returns {pre-normalization grid norm (x dV), raw peak density}.
+    NormPeak normalize_buffer(Buffer& buf) {
+        NormPeak np;
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        arena_.write_buffer(*ctx_, norm_any_set_, 0, storage, buf.buf);
+        arena_.write_buffer(*ctx_, norm_any_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, muln_ubo_.buf,
+                            sizeof(MulParams));
+        arena_.write_buffer(*ctx_, norm_any_set_, 2, storage, partials_.buf);
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return np;
+        }
+        norm_.bind(shot.cb(), norm_any_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_partials_readback(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return np;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            np.sum += p[2 * g];
+            np.peak = std::max(np.peak, static_cast<double>(p[2 * g + 1]));
+        }
+        np.sum *= cell_volume_;
+
+        const ConjParams sp{static_cast<std::uint32_t>(cells_),
+                            static_cast<float>((np.sum > 0.0)
+                                                   ? 1.0 / std::sqrt(np.sum)
+                                                   : 0.0),
+                            0.0f, 0.0f};
+        std::memcpy(scale_ubo_.mapped, &sp, sizeof(sp));
+        vmaFlushAllocation(ctx_->allocator, scale_ubo_.alloc, 0, VK_WHOLE_SIZE);
+        arena_.write_buffer(*ctx_, scale_any_set_, 0, storage, buf.buf);
+        arena_.write_buffer(*ctx_, scale_any_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, scale_ubo_.buf,
+                            sizeof(ConjParams));
+        OneShot s2;
+        if (!s2.begin(*ctx_)) {
+            return np;
+        }
+        scale_.bind(s2.cb(), scale_any_set_);
+        vkCmdDispatch(s2.cb(), mul_groups_, 1, 1);
+        s2.submit_and_wait(*ctx_);
+        s2.destroy(*ctx_);
+        return np;
+    }
+
+    // Lazily build the dipole reduction resources (shared re-pointed set).
+    bool ensure_dipole() {
+        if (dipole_set_ != VK_NULL_HANDLE) {
+            return true;
+        }
+        const DipoleParams dp0{};
+        if (!ctx_->create_device_buffer(6 * kGroups * sizeof(float),
+                                        &dipole_partials_) ||
+            !write_ubo(&dipole_ubo_, &dp0, sizeof(dp0))) {
+            return false;
+        }
+        dipole_set_ = arena_.allocate(*ctx_, dipole_.set_layout());
+        if (dipole_set_ == VK_NULL_HANDLE) {
+            return false;
+        }
+        arena_.write_buffer(*ctx_, dipole_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, dipole_ubo_.buf,
+                            sizeof(DipoleParams));
+        arena_.write_buffer(*ctx_, dipole_set_, 2,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                            dipole_partials_.buf);
+        return true;
+    }
+
+    // Grow-only staging capacity (large glm/radial transfers).
+    bool ensure_staging(VkDeviceSize bytes) {
+        if (bytes <= staging_bytes_) {
+            return true;
+        }
+        vkDeviceWaitIdle(ctx_->device);
+        ctx_->destroy_buffer(&staging_);
+        if (!ctx_->create_host_buffer(bytes,
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      &staging_)) {
+            return false;
+        }
+        staging_bytes_ = bytes;
+        return true;
     }
 
     // psi -= (cre + i cim) * state (the Gram-Schmidt projection subtract).
@@ -1223,10 +1562,16 @@ private:
     Kernel copy_;
     Kernel synth_;
     Kernel force_;
+    Kernel dipole_;
+    Kernel project_;
     DescriptorArena arena_;
     std::vector<State> states_;
     VkDeviceSize staging_bytes_ = 0;
     VkDeviceSize radial_bytes_ = 0;
+    int proj_nr_ = 0;
+    int proj_ncomp_ = 0;
+    double proj_h_radial_ = 0.0;
+    std::vector<std::vector<ses::Complex<double>>> glm_host_;
 
     Buffer psi_{};
     Buffer half_{};
@@ -1246,6 +1591,12 @@ private:
     Buffer radial_buf_{};
     Buffer grad_buf_{};
     Buffer force_partials_{};
+    Buffer dipole_ubo_{};
+    Buffer dipole_partials_{};
+    Buffer proj_sorted_buf_{};
+    Buffer proj_binoff_buf_{};
+    Buffer glm_buf_{};
+    Buffer proj_ubo_{};
     Buffer relax_half_{};
     Buffer relax_kin_{};
 
@@ -1262,8 +1613,12 @@ private:
     VkDescriptorSet kick_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_half_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet synth_set_ = VK_NULL_HANDLE;
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet dipole_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet proj_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet synth_any_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet norm_any_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet scale_any_set_ = VK_NULL_HANDLE;
 };
 
 }  // namespace ses_vk

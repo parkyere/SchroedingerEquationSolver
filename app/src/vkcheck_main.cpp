@@ -33,6 +33,7 @@
 #include <core/magnetic.hpp>
 #include <core/radial.hpp>
 #include <core/potential.hpp>
+#include <core/projection.hpp>
 #include <core/propagator.hpp>
 #include <core/rotation.hpp>
 #include <core/vec.hpp>
@@ -52,6 +53,7 @@
 #include <axpy_spv.h>
 #include <copy_state_spv.h>
 #include <synth_spv.h>
+#include <project_deposit_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
@@ -1094,6 +1096,10 @@ ses_vk::EngineKernels engine_blobs_8() {
     b.synth_size = k_synth_spv_size;
     b.force = k_mean_force_spv;
     b.force_size = k_mean_force_spv_size;
+    b.dipole = k_dipole_spv;
+    b.dipole_size = k_dipole_spv_size;
+    b.project = k_project_deposit_spv;
+    b.project_size = k_project_deposit_spv_size;
     return b;
 }
 
@@ -1565,6 +1571,166 @@ bool check_engine_force(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// Orbital-free angular projection: GPU deposit (sorted-gather per radial
+// bin) + CPU-double radial dot vs project_radial_angular, plus determinism
+// (second deposit reproduces the amplitude bit-for-bit). Same oracle as
+// qrhicheck's check_project.
+bool check_engine_project(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D seed = ses::gaussian_wavepacket(
+        g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           prop.half_potential_phase(), prop.kinetic_phase(),
+                           seed.data())) {
+        std::printf("orbital-free projection (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+    const ses::RadialGrid rg{8.0, 200};
+    std::vector<std::vector<double>> u_by_level(2);
+    for (int lev = 0; lev < 2; ++lev) {
+        u_by_level[static_cast<std::size_t>(lev)].resize(
+            static_cast<std::size_t>(rg.n));
+        for (int i = 0; i < rg.n; ++i) {
+            const double r = rg.r(i);
+            u_by_level[static_cast<std::size_t>(lev)][static_cast<std::size_t>(i)] =
+                (lev == 0) ? r * std::exp(-r) : r * r * std::exp(-0.5 * r);
+        }
+    }
+    const int l_max = 5;
+    const ses::RadialBinIndex idx = ses::build_radial_bin_index(g, rg);
+    if (!engine.set_projection_index(idx.sorted_cell, idx.bin_off, rg.n, rg.h(),
+                                     l_max)) {
+        std::printf(
+            "orbital-free projection (raw Vulkan): set_projection_index "
+            "FAIL\n");
+        return false;
+    }
+
+    ses::Field3D psi = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.5, -0.4},
+                                                ses::Vec3d{1.7, 1.7, 1.7},
+                                                ses::Vec3d{0.3, -0.2, 0.1});
+    engine.upload_state(psi.data());
+    engine.project_psi();
+
+    const std::vector<ses::ProjectorState> states = {
+        {0, 0, 0}, {1, 1, 0}, {1, 1, 1}, {0, 2, -1}, {1, 4, 2}, {0, 5, 3}};
+    const ses::RadialAngularProjection cpu =
+        ses::project_radial_angular(psi, rg, u_by_level, states, l_max);
+    double worst = 0.0;
+    for (std::size_t s = 0; s < states.size(); ++s) {
+        const ses::ProjectorState& st = states[s];
+        const ses::Complex<double> gpu = engine.project_amplitude(
+            u_by_level[static_cast<std::size_t>(st.level)], st.l, st.m);
+        const ses::Complex<double> ref =
+            cpu.amp[s] * std::sqrt(cpu.norm2[static_cast<std::size_t>(s)]);
+        const double e = std::max(std::abs(gpu.real() - ref.real()),
+                                  std::abs(gpu.imag() - ref.imag())) /
+                         (1.0 + std::abs(ref));
+        worst = std::max(worst, e);
+    }
+    const ses::Complex<double> a1 = engine.project_amplitude(u_by_level[1], 1, 0);
+    engine.project_psi();
+    const ses::Complex<double> a2 = engine.project_amplitude(u_by_level[1], 1, 0);
+    const bool deterministic = (a1 == a2);
+    const bool ok = worst < 1e-3 && deterministic;
+    std::printf(
+        "orbital-free projection <n|psi> (raw Vulkan): max rel = %.3e, "
+        "deterministic = %d  [%s]\n",
+        worst, deterministic ? 1 : 0, ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+// dipole_between from two resident states (synthesized on the GPU via
+// synthesize_state -- also exercising the psi-untouched atlas path) vs the
+// CPU double reduction over the same synthesized orbitals.
+bool check_engine_dipole_between(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D seed = ses::gaussian_wavepacket(
+        g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           prop.half_potential_phase(), prop.kinetic_phase(),
+                           seed.data())) {
+        std::printf("dipole_between (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+
+    // Two harmonic-well eigenstates (1s-like and 2p-like) via the GPU path.
+    const ses::RadialGrid rg{8.0, 1599};
+    std::vector<double> vr(static_cast<std::size_t>(rg.n));
+    for (int i = 0; i < rg.n; ++i) {
+        vr[static_cast<std::size_t>(i)] = 0.5 * rg.r(i) * rg.r(i);
+    }
+    const ses::RadialState s0 =
+        ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
+    const ses::RadialState p0 =
+        ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 1), 0);
+    const int to_h = engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n);
+    const int from_h = engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n);
+    if (to_h < 0 || from_h < 0) {
+        std::printf("dipole_between (raw Vulkan): synthesize_state FAIL\n");
+        return false;
+    }
+    const ses::DipoleMatrixElement gpu = engine.dipole_between(to_h, from_h);
+
+    // CPU: same normalized orbitals in double, same reduction.
+    ses::Field3D to_f = ses::synthesize_orbital(g, rg, s0.u, 0, 0);
+    ses::Field3D from_f = ses::synthesize_orbital(g, rg, p0.u, 1, 0);
+    const double dv = g.cell_volume();
+    double d6[6] = {0, 0, 0, 0, 0, 0};
+    const int n = g.x.n;
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const std::size_t id = static_cast<std::size_t>(g.flat(i, j, k));
+                const double r[3] = {g.x.xmin + i * g.x.spacing(),
+                                     g.y.xmin + j * g.y.spacing(),
+                                     g.z.xmin + k * g.z.spacing()};
+                const double ar = to_f.data()[id].real();
+                const double ai = to_f.data()[id].imag();
+                const double br = from_f.data()[id].real();
+                const double bi = from_f.data()[id].imag();
+                const double c_re = ar * br + ai * bi;
+                const double c_im = ar * bi - ai * br;
+                for (int a = 0; a < 3; ++a) {
+                    d6[2 * a + 0] += c_re * r[a];
+                    d6[2 * a + 1] += c_im * r[a];
+                }
+            }
+        }
+    }
+    const ses::Complex<double> cpu[3] = {
+        ses::Complex<double>{d6[0] * dv, d6[1] * dv},
+        ses::Complex<double>{d6[2] * dv, d6[3] * dv},
+        ses::Complex<double>{d6[4] * dv, d6[5] * dv}};
+    const ses::Complex<double> gv[3] = {gpu.x, gpu.y, gpu.z};
+    double mag2 = 0.0;
+    double err2 = 0.0;
+    for (int c = 0; c < 3; ++c) {
+        mag2 += cpu[c].real() * cpu[c].real() + cpu[c].imag() * cpu[c].imag();
+        const double dr = gv[c].real() - cpu[c].real();
+        const double di = gv[c].imag() - cpu[c].imag();
+        err2 += dr * dr + di * di;
+    }
+    const double rel = (mag2 > 0.0) ? std::sqrt(err2 / mag2) : std::sqrt(err2);
+    const bool pass = rel < 1e-4;
+    std::printf("dipole_between resident states (raw Vulkan): rel err = %.3e  "
+                "[%s]\n",
+                rel, pass ? "PASS" : "FAIL");
+    engine.release_state(from_h);
+    engine.release_state(to_h);
+    return pass;
+}
+
 }  // namespace
 
 int main() {
@@ -1608,6 +1774,8 @@ int main() {
     failures += check_engine_deflation(ctx) ? 0 : 1;
     failures += check_engine_synth(ctx) ? 0 : 1;
     failures += check_engine_force(ctx) ? 0 : 1;
+    failures += check_engine_project(ctx) ? 0 : 1;
+    failures += check_engine_dipole_between(ctx) ? 0 : 1;
 
     const int verrs = ses_vk::g_validation_errors.load();
     if (ctx.validation_active && verrs != 0) {
