@@ -50,6 +50,12 @@ struct EngineKernels {
     std::size_t kick_size = 0;
     const unsigned char* shear = nullptr;  // shear.comp
     std::size_t shear_size = 0;
+    const unsigned char* inner = nullptr;  // inner_product.comp
+    std::size_t inner_size = 0;
+    const unsigned char* axpy = nullptr;   // axpy.comp
+    std::size_t axpy_size = 0;
+    const unsigned char* copy = nullptr;   // copy_state.comp
+    std::size_t copy_size = 0;
 };
 
 class Engine {
@@ -58,6 +64,11 @@ public:
     // renormalization (QRhi/GL RelaxStats parity).
     struct RelaxStats {
         double energy = 0.0;
+        double peak = 0.0;
+    };
+    // GPU-reduced norm (sum |psi|^2 dV) and raw peak density.
+    struct NormPeak {
+        double sum = 0.0;
         double peak = 0.0;
     };
 
@@ -120,7 +131,20 @@ public:
                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}}) ||
             !shear_.create(ctx, blobs.shear, blobs.shear_size,
                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}})) {
+                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !inner_.create(ctx, blobs.inner, blobs.inner_size,
+                           {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                            {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !axpy_.create(ctx, blobs.axpy, blobs.axpy_size,
+                          {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                           {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                           {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !copy_.create(ctx, blobs.copy, blobs.copy_size,
+                          {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                           {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                           {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
             return false;
         }
 
@@ -173,8 +197,16 @@ public:
         }
         kick_slots_ = 2;
 
-        // Descriptor sets: 13 now + 2 relax sets later.
-        if (!arena_.create(ctx_ ? *ctx_ : ctx, 24, 48, 24, 2)) {
+        // conj (0,0) coefficients: the axpy UBO is rewritten per projection.
+        const AxpyParams axpy0{static_cast<std::uint32_t>(cells_), 0, 0.0f,
+                               0.0f};
+        if (!write_ubo(&axpy_ubo_, &axpy0, sizeof(axpy0))) {
+            return false;
+        }
+
+        // Descriptor sets: 13 base + 2 relax + 4 per resident state (the
+        // harness-scale pool; the atlas stage brings a growable arena).
+        if (!arena_.create(ctx_ ? *ctx_ : ctx, 48, 96, 48, 2)) {
             return false;
         }
         half_set_ = make_mul_set(half_.buf);
@@ -370,40 +402,9 @@ public:
             const VkBufferCopy down{0, 0, 2 * kGroups * sizeof(float)};
             vkCmdCopyBuffer(shot.cb(), partials_.buf, staging_.buf, 1, &down);
             barrier_transfer_to_host(shot.cb());
-            const bool ok = shot.submit_and_wait(*ctx_);
+            shot.submit_and_wait(*ctx_);
             shot.destroy(*ctx_);
-            if (!ok) {
-                return stats;
-            }
-            vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                    VK_WHOLE_SIZE);
-            const float* p = static_cast<const float*>(staging_.mapped);
-            double sum = 0.0;
-            double peak = 0.0;
-            for (std::uint32_t g = 0; g < kGroups; ++g) {
-                sum += p[2 * g];
-                peak = std::max(peak, static_cast<double>(p[2 * g + 1]));
-            }
-            const double norm_sq = sum * cell_volume_;
-            const double inv = (norm_sq > 0.0) ? 1.0 / std::sqrt(norm_sq) : 0.0;
-            stats.energy = (norm_sq > 0.0 && dtau_ > 0.0)
-                               ? -std::log(norm_sq) / (2.0 * dtau_)
-                               : 0.0;
-            stats.peak = (norm_sq > 0.0) ? peak / norm_sq : 0.0;
-
-            const ConjParams sp{static_cast<std::uint32_t>(cells_),
-                                static_cast<float>(inv), 0.0f, 0.0f};
-            std::memcpy(scale_ubo_.mapped, &sp, sizeof(sp));
-            vmaFlushAllocation(ctx_->allocator, scale_ubo_.alloc, 0,
-                               VK_WHOLE_SIZE);
-            OneShot s2;
-            if (!s2.begin(*ctx_)) {
-                return stats;
-            }
-            scale_.bind(s2.cb(), scale_set_);
-            vkCmdDispatch(s2.cb(), mul_groups_, 1, 1);
-            s2.submit_and_wait(*ctx_);
-            s2.destroy(*ctx_);
+            stats = renormalize_and_estimate();
         }
         return stats;
     }
@@ -411,6 +412,185 @@ public:
     // Reset psi from a host field.
     bool upload_state(const std::vector<ses::Complex<double>>& psi) {
         return upload_field(psi_, psi);
+    }
+
+    // ---- resident states (one int handle space, QRhi/GL parity) ----------
+
+    // Upload a CPU state into its own resident fp32 buffer; returns a handle
+    // usable with every per-state op, or -1 on failure.
+    int create_state_buffer(const std::vector<ses::Complex<double>>& state) {
+        State st;
+        if (!ctx_->create_device_buffer(field_bytes_, &st.buf) ||
+            !upload_field(st.buf, state)) {
+            ctx_->destroy_buffer(&st.buf);
+            return -1;
+        }
+        st.inner_set = arena_.allocate(*ctx_, inner_.set_layout());
+        st.axpy_set = arena_.allocate(*ctx_, axpy_.set_layout());
+        st.copy_set = arena_.allocate(*ctx_, copy_.set_layout());
+        st.mul_set = arena_.allocate(*ctx_, mul_.set_layout());
+        if (st.inner_set == VK_NULL_HANDLE || st.axpy_set == VK_NULL_HANDLE ||
+            st.copy_set == VK_NULL_HANDLE || st.mul_set == VK_NULL_HANDLE) {
+            ctx_->destroy_buffer(&st.buf);
+            return -1;
+        }
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        arena_.write_buffer(*ctx_, st.inner_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.inner_set, 1, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        arena_.write_buffer(*ctx_, st.inner_set, 2, storage, partials_.buf);
+        arena_.write_buffer(*ctx_, st.inner_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.axpy_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.axpy_set, 1, uniform, axpy_ubo_.buf,
+                            sizeof(AxpyParams));
+        arena_.write_buffer(*ctx_, st.axpy_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.copy_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.copy_set, 1, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        arena_.write_buffer(*ctx_, st.copy_set, 3, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 1, storage, st.buf.buf);
+        arena_.write_buffer(*ctx_, st.mul_set, 2, uniform, muln_ubo_.buf,
+                            sizeof(MulParams));
+        states_.push_back(st);
+        return static_cast<int>(states_.size()) - 1;
+    }
+
+    // Free a resident state's buffer; the slot stays so handles remain
+    // stable (its pool sets are simply abandoned until the arena resets).
+    void release_state(int handle) {
+        State* st = state_at(handle);
+        if (st == nullptr) {
+            return;
+        }
+        vkDeviceWaitIdle(ctx_->device);
+        ctx_->destroy_buffer(&st->buf);
+    }
+
+    // <state|psi> = sum conj(state)*psi * dV.
+    ses::Complex<double> inner_with_psi(int handle) {
+        State* st = state_at(handle);
+        if (st == nullptr) {
+            return {};
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return {};
+        }
+        inner_.bind(shot.cb(), st->inner_set);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_partials_readback(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return {};
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        double re = 0.0;
+        double im = 0.0;
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            re += p[2 * g];
+            im += p[2 * g + 1];
+        }
+        return ses::Complex<double>{re * cell_volume_, im * cell_volume_};
+    }
+
+    // Deflated imaginary-time relax: imaginary Strang body, Gram-Schmidt
+    // project-out of every `lower` state (psi -= <phi|psi> phi), renorm.
+    RelaxStats relax_deflated_step(const std::vector<int>& lower, int nsteps) {
+        RelaxStats stats;
+        for (int s = 0; s < nsteps; ++s) {
+            OneShot shot;
+            if (!shot.begin(*ctx_)) {
+                return stats;
+            }
+            Recorder r{shot.cb(), true};
+            run_step_body(r, relax_half_set_, relax_kin_set_);
+            shot.submit_and_wait(*ctx_);
+            shot.destroy(*ctx_);
+            for (int h : lower) {
+                const ses::Complex<double> c = inner_with_psi(h);
+                subtract_projection(h, c.real(), c.imag());
+            }
+            stats = renormalize_and_estimate();
+        }
+        return stats;
+    }
+
+    // psi <- src (bitwise; the quantum-jump collapse path).
+    void copy_into_psi(int handle) {
+        State* st = state_at(handle);
+        if (st == nullptr) {
+            return;
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        copy_.bind(shot.cb(), st->copy_set);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+
+    // psi <- psi * state (elementwise): the absorbing-boundary damp.
+    void apply_mask(int handle) {
+        State* st = state_at(handle);
+        if (st == nullptr) {
+            return;
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        mul_.bind(shot.cb(), st->mul_set);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+
+    // GPU-reduced norm (sum |psi|^2 dV) and raw peak density.
+    NormPeak norm_and_peak() {
+        NormPeak out;
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return out;
+        }
+        norm_.bind(shot.cb(), norm_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_partials_readback(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return out;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            out.sum += p[2 * g];
+            out.peak = std::max(out.peak, static_cast<double>(p[2 * g + 1]));
+        }
+        out.sum *= cell_volume_;
+        return out;
+    }
+
+    // psi <- s * psi (fp32 drift renormalization).
+    void scale(float s) {
+        const ConjParams sp{static_cast<std::uint32_t>(cells_), s, 0.0f, 0.0f};
+        std::memcpy(scale_ubo_.mapped, &sp, sizeof(sp));
+        vmaFlushAllocation(ctx_->allocator, scale_ubo_.alloc, 0, VK_WHOLE_SIZE);
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        scale_.bind(shot.cb(), scale_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
     }
 
     // Interleaved RG floats, 2 per cell.
@@ -442,7 +622,14 @@ public:
         if (ctx_->device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(ctx_->device);
         }
+        for (State& st : states_) {
+            ctx_->destroy_buffer(&st.buf);
+        }
+        states_.clear();
         arena_.destroy(*ctx_);
+        copy_.destroy(*ctx_);
+        axpy_.destroy(*ctx_);
+        inner_.destroy(*ctx_);
         shear_.destroy(*ctx_);
         kick_.destroy(*ctx_);
         scale_.destroy(*ctx_);
@@ -452,6 +639,7 @@ public:
         mul_.destroy(*ctx_);
         ctx_->destroy_buffer(&relax_kin_);
         ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&axpy_ubo_);
         ctx_->destroy_buffer(&kick_ubo_);
         ctx_->destroy_buffer(&shear_ubo_[1]);
         ctx_->destroy_buffer(&shear_ubo_[0]);
@@ -484,6 +672,11 @@ private:
     };
     struct alignas(16) FftParams {
         std::int32_t mod_a, mul_b, mul_c, stride, n_lines, p0, p1, p2;
+    };
+    // std140 {uint n; vec2 c}: c aligns to offset 8 (uint + 4 bytes pad).
+    struct alignas(16) AxpyParams {
+        std::uint32_t n, pad;
+        float cx, cy;
     };
     struct alignas(16) KickParams {
         std::uint32_t n;
@@ -594,6 +787,87 @@ private:
         const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         return ok;
+    }
+
+    // A resident state: its fp32 buffer + the four per-op descriptor sets
+    // (inner/axpy/copy/mask-multiply against live psi).
+    struct State {
+        Buffer buf{};
+        VkDescriptorSet inner_set = VK_NULL_HANDLE;
+        VkDescriptorSet axpy_set = VK_NULL_HANDLE;
+        VkDescriptorSet copy_set = VK_NULL_HANDLE;
+        VkDescriptorSet mul_set = VK_NULL_HANDLE;
+    };
+
+    State* state_at(int handle) {
+        if (handle < 0 || handle >= static_cast<int>(states_.size())) {
+            return nullptr;
+        }
+        State* st = &states_[static_cast<std::size_t>(handle)];
+        return (st->buf.buf == VK_NULL_HANDLE) ? nullptr : st;
+    }
+
+    // Record: compute -> transfer edge, partials -> staging copy, host edge.
+    void record_partials_readback(VkCommandBuffer cb) {
+        barrier_compute_to_transfer(cb);
+        const VkBufferCopy down{0, 0, 2 * kGroups * sizeof(float)};
+        vkCmdCopyBuffer(cb, partials_.buf, staging_.buf, 1, &down);
+        barrier_transfer_to_host(cb);
+    }
+
+    // psi -= (cre + i cim) * state (the Gram-Schmidt projection subtract).
+    void subtract_projection(int handle, double cre, double cim) {
+        State* st = state_at(handle);
+        if (st == nullptr) {
+            return;
+        }
+        const AxpyParams ap{static_cast<std::uint32_t>(cells_), 0,
+                            static_cast<float>(cre), static_cast<float>(cim)};
+        std::memcpy(axpy_ubo_.mapped, &ap, sizeof(ap));
+        vmaFlushAllocation(ctx_->allocator, axpy_ubo_.alloc, 0, VK_WHOLE_SIZE);
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        axpy_.bind(shot.cb(), st->axpy_set);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+
+    // Norm reduction + readback -> host finish -> 1/sqrt(norm) scale. The
+    // pre-renorm norm decays as e^{-2 E dtau} -> free-energy estimate.
+    RelaxStats renormalize_and_estimate() {
+        RelaxStats stats;
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return stats;
+        }
+        norm_.bind(shot.cb(), norm_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_partials_readback(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return stats;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        double sum = 0.0;
+        double peak = 0.0;
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            sum += p[2 * g];
+            peak = std::max(peak, static_cast<double>(p[2 * g + 1]));
+        }
+        const double norm_sq = sum * cell_volume_;
+        const double inv = (norm_sq > 0.0) ? 1.0 / std::sqrt(norm_sq) : 0.0;
+        stats.energy = (norm_sq > 0.0 && dtau_ > 0.0)
+                           ? -std::log(norm_sq) / (2.0 * dtau_)
+                           : 0.0;
+        stats.peak = (norm_sq > 0.0) ? peak / norm_sq : 0.0;
+        scale(static_cast<float>(inv));
+        return stats;
     }
 
     KickParams make_kick_params(const ses::Vec3d& axis, double theta) const {
@@ -734,7 +1008,11 @@ private:
     Kernel scale_;
     Kernel kick_;
     Kernel shear_;
+    Kernel inner_;
+    Kernel axpy_;
+    Kernel copy_;
     DescriptorArena arena_;
+    std::vector<State> states_;
 
     Buffer psi_{};
     Buffer half_{};
@@ -749,6 +1027,7 @@ private:
     Buffer conjA_ubo_{};
     Buffer shear_ubo_[2]{};
     Buffer kick_ubo_{};
+    Buffer axpy_ubo_{};
     Buffer relax_half_{};
     Buffer relax_kin_{};
 
