@@ -28,8 +28,10 @@
 #include <core/field.hpp>
 #include <core/grid.hpp>
 #include <core/drive.hpp>
+#include <core/harmonics.hpp>
 #include <core/imaginary_time.hpp>
 #include <core/magnetic.hpp>
+#include <core/radial.hpp>
 #include <core/potential.hpp>
 #include <core/propagator.hpp>
 #include <core/rotation.hpp>
@@ -49,6 +51,7 @@
 #include <shear_spv.h>
 #include <axpy_spv.h>
 #include <copy_state_spv.h>
+#include <synth_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
@@ -1087,6 +1090,10 @@ ses_vk::EngineKernels engine_blobs_8() {
     b.axpy_size = k_axpy_spv_size;
     b.copy = k_copy_state_spv;
     b.copy_size = k_copy_state_spv_size;
+    b.synth = k_synth_spv;
+    b.synth_size = k_synth_spv_size;
+    b.force = k_mean_force_spv;
+    b.force_size = k_mean_force_spv_size;
     return b;
 }
 
@@ -1430,6 +1437,134 @@ bool check_engine_magnetic(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// Orbital synthesis: psi = (u(|r|)/|r|) Y_lm built on the GPU from a radial
+// table, vs core synthesize_orbital, across l = 0..5 and several m -- same
+// cases/tolerance as qrhicheck's check_synth.
+bool check_engine_synth(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D seed = ses::gaussian_wavepacket(
+        g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           prop.half_potential_phase(), prop.kinetic_phase(),
+                           seed.data())) {
+        std::printf("orbital synthesis (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+
+    const ses::RadialGrid rg{8.0, 1599};
+    std::vector<double> vr(static_cast<std::size_t>(rg.n));
+    for (int i = 0; i < rg.n; ++i) {
+        vr[static_cast<std::size_t>(i)] = 0.5 * rg.r(i) * rg.r(i);
+    }
+    struct SynCase {
+        int l, k, m;
+    };
+    const SynCase cases[] = {{0, 0, 0}, {1, 0, -1}, {2, 0, 1}, {3, 0, -2},
+                             {4, 0, 3}, {5, 0, 5},  {5, 0, 0}};
+    double worst = 0.0;
+    for (const SynCase& c : cases) {
+        const ses::RadialState st =
+            ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, c.l), c.k);
+        const ses::Field3D cpu = ses::synthesize_orbital(g, rg, st.u, c.l, c.m);
+        if (!engine.synthesize_into_psi(st.u, c.l, c.m, rg.h(), rg.rmax, rg.n)) {
+            std::printf("orbital synthesis (raw Vulkan): synthesize FAIL\n");
+            return false;
+        }
+        std::vector<float> gpu;
+        if (!engine.readback(gpu)) {
+            return false;
+        }
+        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+            worst = std::max(worst, std::abs(static_cast<double>(gpu[2 * i]) -
+                                             cpu.data()[i].real()));
+            worst = std::max(worst, std::abs(static_cast<double>(gpu[2 * i + 1]) -
+                                             cpu.data()[i].imag()));
+        }
+    }
+    const bool ok = worst < 1e-4;
+    std::printf(
+        "orbital synthesis (u/r)Ylm (raw Vulkan): max |gpu - cpu| = %.3e  "
+        "[%s]\n",
+        worst, ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+// Engine-level mean force: set_potential_gradient (host central differences,
+// periodic) + the <grad V> reduction, vs the same construction in CPU double
+// on the fp64 field. Rel tolerance covers the fp32 psi/grad narrowing.
+bool check_engine_force(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.3, 0.0},
+                                                 ses::Vec3d{1.2, 1.2, 1.2},
+                                                 ses::Vec3d{});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           prop.half_potential_phase(), prop.kinetic_phase(),
+                           psi0.data())) {
+        std::printf("mean force (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+    if (!engine.set_potential_gradient(v)) {
+        std::printf("mean force (raw Vulkan): set_potential_gradient FAIL\n");
+        return false;
+    }
+    const ses::Vec3d gpu = engine.mean_force();
+
+    // CPU double reference with the identical periodic central differences.
+    const int n = g.x.n;
+    double cpu[3] = {0.0, 0.0, 0.0};
+    const double i2h[3] = {1.0 / (2.0 * g.x.spacing()),
+                           1.0 / (2.0 * g.y.spacing()),
+                           1.0 / (2.0 * g.z.spacing())};
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                const std::size_t idx = static_cast<std::size_t>(g.flat(i, j, k));
+                const double d = psi0.data()[idx].real() * psi0.data()[idx].real() +
+                                 psi0.data()[idx].imag() * psi0.data()[idx].imag();
+                const double gx =
+                    (v[static_cast<std::size_t>(g.flat((i + 1) % n, j, k))] -
+                     v[static_cast<std::size_t>(g.flat((i - 1 + n) % n, j, k))]) *
+                    i2h[0];
+                const double gy =
+                    (v[static_cast<std::size_t>(g.flat(i, (j + 1) % n, k))] -
+                     v[static_cast<std::size_t>(g.flat(i, (j - 1 + n) % n, k))]) *
+                    i2h[1];
+                const double gz =
+                    (v[static_cast<std::size_t>(g.flat(i, j, (k + 1) % n))] -
+                     v[static_cast<std::size_t>(g.flat(i, j, (k - 1 + n) % n))]) *
+                    i2h[2];
+                cpu[0] += d * gx;
+                cpu[1] += d * gy;
+                cpu[2] += d * gz;
+            }
+        }
+    }
+    const double dv = g.cell_volume();
+    cpu[0] *= dv;
+    cpu[1] *= dv;
+    cpu[2] *= dv;
+    const double mag =
+        std::sqrt(cpu[0] * cpu[0] + cpu[1] * cpu[1] + cpu[2] * cpu[2]);
+    const double err = std::sqrt((gpu.x - cpu[0]) * (gpu.x - cpu[0]) +
+                                 (gpu.y - cpu[1]) * (gpu.y - cpu[1]) +
+                                 (gpu.z - cpu[2]) * (gpu.z - cpu[2]));
+    const double rel = (mag > 0.0) ? err / mag : err;
+    const bool pass = rel < 1e-4;
+    std::printf("engine mean force (raw Vulkan): rel err = %.3e  [%s]\n", rel,
+                pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main() {
@@ -1471,6 +1606,8 @@ int main() {
     failures += check_engine_driven(ctx) ? 0 : 1;
     failures += check_engine_magnetic(ctx) ? 0 : 1;
     failures += check_engine_deflation(ctx) ? 0 : 1;
+    failures += check_engine_synth(ctx) ? 0 : 1;
+    failures += check_engine_force(ctx) ? 0 : 1;
 
     const int verrs = ses_vk::g_validation_errors.load();
     if (ctx.validation_active && verrs != 0) {

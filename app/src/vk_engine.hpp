@@ -56,6 +56,10 @@ struct EngineKernels {
     std::size_t axpy_size = 0;
     const unsigned char* copy = nullptr;   // copy_state.comp
     std::size_t copy_size = 0;
+    const unsigned char* synth = nullptr;  // synth.comp
+    std::size_t synth_size = 0;
+    const unsigned char* force = nullptr;  // mean_force.comp
+    std::size_t force_size = 0;
 };
 
 class Engine {
@@ -144,7 +148,16 @@ public:
             !copy_.create(ctx, blobs.copy, blobs.copy_size,
                           {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
-                           {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
+                           {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !synth_.create(ctx, blobs.synth, blobs.synth_size,
+                           {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                            {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !force_.create(ctx, blobs.force, blobs.force_size,
+                           {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                            {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
             return false;
         }
 
@@ -158,6 +171,7 @@ public:
                                     &staging_)) {
             return false;
         }
+        staging_bytes_ = field_bytes_;
 
         // std140 parameter blocks, written once into host-mapped UBOs (every
         // submission fence-waits, so no in-flight aliasing; the scale UBO is
@@ -197,10 +211,13 @@ public:
         }
         kick_slots_ = 2;
 
-        // conj (0,0) coefficients: the axpy UBO is rewritten per projection.
+        // conj (0,0) coefficients: the axpy UBO is rewritten per projection;
+        // the synth UBO per synthesis.
         const AxpyParams axpy0{static_cast<std::uint32_t>(cells_), 0, 0.0f,
                                0.0f};
-        if (!write_ubo(&axpy_ubo_, &axpy0, sizeof(axpy0))) {
+        const SynthParams synth0{};
+        if (!write_ubo(&axpy_ubo_, &axpy0, sizeof(axpy0)) ||
+            !write_ubo(&synth_ubo_, &synth0, sizeof(synth0))) {
             return false;
         }
 
@@ -578,6 +595,169 @@ public:
         return out;
     }
 
+    // ---- semiclassical radiation (Ehrenfest mean force) -----------------
+    // Upload grad V (central differences on the periodic grid, packed vec4)
+    // so mean_force can reduce against it.
+    bool set_potential_gradient(const std::vector<double>& v) {
+        const int nx = grid_.x.n;
+        const int ny = grid_.y.n;
+        const int nz = grid_.z.n;
+        const double i2hx = 1.0 / (2.0 * grid_.x.spacing());
+        const double i2hy = 1.0 / (2.0 * grid_.y.spacing());
+        const double i2hz = 1.0 / (2.0 * grid_.z.spacing());
+        std::vector<float> packed(4 * cells_, 0.0f);
+        for (int k = 0; k < nz; ++k) {
+            const int kp = (k + 1) % nz;
+            const int km = (k - 1 + nz) % nz;
+            for (int j = 0; j < ny; ++j) {
+                const int jp = (j + 1) % ny;
+                const int jm = (j - 1 + ny) % ny;
+                for (int i = 0; i < nx; ++i) {
+                    const int ip = (i + 1) % nx;
+                    const int im = (i - 1 + nx) % nx;
+                    const std::size_t idx =
+                        static_cast<std::size_t>(grid_.flat(i, j, k));
+                    packed[4 * idx + 0] = static_cast<float>(
+                        (v[static_cast<std::size_t>(grid_.flat(ip, j, k))] -
+                         v[static_cast<std::size_t>(grid_.flat(im, j, k))]) *
+                        i2hx);
+                    packed[4 * idx + 1] = static_cast<float>(
+                        (v[static_cast<std::size_t>(grid_.flat(i, jp, k))] -
+                         v[static_cast<std::size_t>(grid_.flat(i, jm, k))]) *
+                        i2hy);
+                    packed[4 * idx + 2] = static_cast<float>(
+                        (v[static_cast<std::size_t>(grid_.flat(i, j, kp))] -
+                         v[static_cast<std::size_t>(grid_.flat(i, j, km))]) *
+                        i2hz);
+                }
+            }
+        }
+        if (grad_buf_.buf == VK_NULL_HANDLE) {
+            if (!ctx_->create_device_buffer(4 * cells_ * sizeof(float),
+                                            &grad_buf_) ||
+                !ctx_->create_device_buffer(4 * kGroups * sizeof(float),
+                                            &force_partials_)) {
+                return false;
+            }
+            force_set_ = arena_.allocate(*ctx_, force_.set_layout());
+            if (force_set_ == VK_NULL_HANDLE) {
+                return false;
+            }
+            const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            arena_.write_buffer(*ctx_, force_set_, 0, storage, psi_.buf);
+            arena_.write_buffer(*ctx_, force_set_, 1,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                muln_ubo_.buf, sizeof(MulParams));
+            arena_.write_buffer(*ctx_, force_set_, 2, storage,
+                                force_partials_.buf);
+            arena_.write_buffer(*ctx_, force_set_, 4, storage, grad_buf_.buf);
+        }
+        return upload_raw(grad_buf_, packed.data(),
+                          packed.size() * sizeof(float));
+    }
+
+    // <grad V> = sum |psi|^2 grad V * dV -- the Ehrenfest dipole
+    // acceleration. Zero if no gradient was uploaded.
+    ses::Vec3d mean_force() {
+        if (force_set_ == VK_NULL_HANDLE) {
+            return ses::Vec3d{};
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return ses::Vec3d{};
+        }
+        force_.bind(shot.cb(), force_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_buffer_readback(shot.cb(), force_partials_,
+                               4 * kGroups * sizeof(float));
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return ses::Vec3d{};
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        double gx = 0.0;
+        double gy = 0.0;
+        double gz = 0.0;
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            gx += p[4 * g + 0];
+            gy += p[4 * g + 1];
+            gz += p[4 * g + 2];
+        }
+        return ses::Vec3d{gx * cell_volume_, gy * cell_volume_,
+                          gz * cell_volume_};
+    }
+
+    // ---- orbital synthesis ----------------------------------------------
+    // psi <- normalized (u(|r|)/|r|) Y_lm, synthesized on the GPU from the
+    // radial table u_nl(r). h_radial = rmax/(n_radial+1).
+    bool synthesize_into_psi(const std::vector<double>& u, int l, int m,
+                             double h_radial, double rmax, int n_radial) {
+        std::vector<float> uf(u.size());
+        for (std::size_t i = 0; i < u.size(); ++i) {
+            uf[i] = static_cast<float>(u[i]);
+        }
+        const VkDeviceSize rbytes = uf.size() * sizeof(float);
+        if (radial_buf_.buf == VK_NULL_HANDLE || radial_bytes_ != rbytes) {
+            vkDeviceWaitIdle(ctx_->device);
+            ctx_->destroy_buffer(&radial_buf_);
+            if (!ctx_->create_device_buffer(rbytes, &radial_buf_)) {
+                return false;
+            }
+            radial_bytes_ = rbytes;
+            if (synth_set_ == VK_NULL_HANDLE) {
+                synth_set_ = arena_.allocate(*ctx_, synth_.set_layout());
+                if (synth_set_ == VK_NULL_HANDLE) {
+                    return false;
+                }
+            }
+            const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            arena_.write_buffer(*ctx_, synth_set_, 0, storage, psi_.buf);
+            arena_.write_buffer(*ctx_, synth_set_, 1,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                synth_ubo_.buf, sizeof(SynthParams));
+            arena_.write_buffer(*ctx_, synth_set_, 5, storage, radial_buf_.buf);
+        }
+        if (!upload_raw(radial_buf_, uf.data(), rbytes)) {
+            return false;
+        }
+
+        SynthParams sp{};
+        sp.n = static_cast<std::uint32_t>(cells_);
+        sp.nx = grid_.x.n;
+        sp.ny = grid_.y.n;
+        sp.l = l;
+        sp.m = m;
+        sp.n_radial = n_radial;
+        sp.h_radial = static_cast<float>(h_radial);
+        sp.rmax = static_cast<float>(rmax);
+        sp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        sp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        sp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        sp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        sp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        sp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        std::memcpy(synth_ubo_.mapped, &sp, sizeof(sp));
+        vmaFlushAllocation(ctx_->allocator, synth_ubo_.alloc, 0, VK_WHOLE_SIZE);
+
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        synth_.bind(shot.cb(), synth_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+
+        // Grid normalization: norm reduction (x dV) then 1/sqrt(norm).
+        const NormPeak np = norm_and_peak();
+        scale(static_cast<float>((np.sum > 0.0) ? 1.0 / std::sqrt(np.sum)
+                                                : 0.0));
+        return true;
+    }
+
     // psi <- s * psi (fp32 drift renormalization).
     void scale(float s) {
         const ConjParams sp{static_cast<std::uint32_t>(cells_), s, 0.0f, 0.0f};
@@ -627,6 +807,8 @@ public:
         }
         states_.clear();
         arena_.destroy(*ctx_);
+        force_.destroy(*ctx_);
+        synth_.destroy(*ctx_);
         copy_.destroy(*ctx_);
         axpy_.destroy(*ctx_);
         inner_.destroy(*ctx_);
@@ -639,6 +821,10 @@ public:
         mul_.destroy(*ctx_);
         ctx_->destroy_buffer(&relax_kin_);
         ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&force_partials_);
+        ctx_->destroy_buffer(&grad_buf_);
+        ctx_->destroy_buffer(&radial_buf_);
+        ctx_->destroy_buffer(&synth_ubo_);
         ctx_->destroy_buffer(&axpy_ubo_);
         ctx_->destroy_buffer(&kick_ubo_);
         ctx_->destroy_buffer(&shear_ubo_[1]);
@@ -685,6 +871,15 @@ private:
         float box_min[4];
         float cell_h[4];
         float axis[4];
+    };
+    // std140: vec4-padded box_min/cell_h at 16/32, matches synth.comp order.
+    struct alignas(16) SynthParams {
+        std::uint32_t n;
+        std::int32_t nx, ny, l;
+        float box_min[4];
+        float cell_h[4];
+        std::int32_t m, n_radial;
+        float h_radial, rmax;
     };
     // std140 all-scalar block (tight 4-byte packing), matches shear.comp;
     // the trailing pad makes the 16-byte alignment explicit (dodges C4324).
@@ -775,6 +970,17 @@ private:
     }
 
     bool upload_raw(Buffer& dst, const void* data, VkDeviceSize bytes) {
+        if (bytes > staging_bytes_) {  // grow-only (e.g. long radial tables)
+            vkDeviceWaitIdle(ctx_->device);
+            ctx_->destroy_buffer(&staging_);
+            if (!ctx_->create_host_buffer(bytes,
+                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                          &staging_)) {
+                return false;
+            }
+            staging_bytes_ = bytes;
+        }
         std::memcpy(staging_.mapped, data, bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
         OneShot shot;
@@ -807,12 +1013,16 @@ private:
         return (st->buf.buf == VK_NULL_HANDLE) ? nullptr : st;
     }
 
-    // Record: compute -> transfer edge, partials -> staging copy, host edge.
-    void record_partials_readback(VkCommandBuffer cb) {
+    // Record: compute -> transfer edge, src -> staging copy, host edge.
+    void record_buffer_readback(VkCommandBuffer cb, const Buffer& src,
+                                VkDeviceSize bytes) {
         barrier_compute_to_transfer(cb);
-        const VkBufferCopy down{0, 0, 2 * kGroups * sizeof(float)};
-        vkCmdCopyBuffer(cb, partials_.buf, staging_.buf, 1, &down);
+        const VkBufferCopy down{0, 0, bytes};
+        vkCmdCopyBuffer(cb, src.buf, staging_.buf, 1, &down);
         barrier_transfer_to_host(cb);
+    }
+    void record_partials_readback(VkCommandBuffer cb) {
+        record_buffer_readback(cb, partials_, 2 * kGroups * sizeof(float));
     }
 
     // psi -= (cre + i cim) * state (the Gram-Schmidt projection subtract).
@@ -1011,8 +1221,12 @@ private:
     Kernel inner_;
     Kernel axpy_;
     Kernel copy_;
+    Kernel synth_;
+    Kernel force_;
     DescriptorArena arena_;
     std::vector<State> states_;
+    VkDeviceSize staging_bytes_ = 0;
+    VkDeviceSize radial_bytes_ = 0;
 
     Buffer psi_{};
     Buffer half_{};
@@ -1028,6 +1242,10 @@ private:
     Buffer shear_ubo_[2]{};
     Buffer kick_ubo_{};
     Buffer axpy_ubo_{};
+    Buffer synth_ubo_{};
+    Buffer radial_buf_{};
+    Buffer grad_buf_{};
+    Buffer force_partials_{};
     Buffer relax_half_{};
     Buffer relax_kin_{};
 
@@ -1044,6 +1262,8 @@ private:
     VkDescriptorSet kick_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_half_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet synth_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet force_set_ = VK_NULL_HANDLE;
 };
 
 }  // namespace ses_vk
