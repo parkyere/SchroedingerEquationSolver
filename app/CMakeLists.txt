@@ -73,22 +73,17 @@ target_link_libraries(sesolver_app
 target_compile_features(sesolver_app PRIVATE cxx_std_20)
 ses_enable_vkfft(sesolver_app)
 
-# qsb bakes ONLY the render shaders now (SPIR-V only: the app is Vulkan-
-# backend). Every compute kernel reaches the ses_vk engine as offline-baked
-# SPIR-V headers instead (the ses_spv_headers rule below).
+# qsb bakes ONLY the blit pair now (Plan B): the scene renders in ses_vk;
+# Qt's whole remaining draw is one fullscreen textured triangle.
 qt6_add_shaders(sesolver_app "app_shaders"
     PREFIX "/shaders"
     NOGLSL NOHLSL NOMSL
     FILES
-        src/qrhi_shaders/mesh.vert
-        src/qrhi_shaders/mesh.frag
-        src/qrhi_shaders/volume.vert
-        src/qrhi_shaders/volume.frag
+        src/qrhi_shaders/blit.vert
+        src/qrhi_shaders/blit.frag
     OUTPUTS
-        mesh.vert.qsb
-        mesh.frag.qsb
-        volume.vert.qsb
-        volume.frag.qsb)
+        blit.vert.qsb
+        blit.frag.qsb)
 
 # Static Qt (the vcpkg x64-windows-static / x64-linux triplets) does NOT load
 # plugins at runtime -- the platform plugin must be linked in, or the executable
@@ -152,6 +147,26 @@ if(TARGET volk::volk AND TARGET GPUOpen::VulkanMemoryAllocator
                     -P "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
             DEPENDS "${_src}" "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
             COMMENT "glslangValidator: ${_k}.comp -> SPIR-V header"
+            VERBATIM)
+        list(APPEND _ses_vk_headers "${_hdr}")
+    endforeach()
+    # Render shader pairs for the raw-Vulkan scene renderer (Plan B). Dots in
+    # the stage extension are sanitized out of the symbol name.
+    foreach(_k IN ITEMS mesh.vert mesh.frag volume.vert volume.frag)
+        string(REPLACE "." "_" _sym "${_k}")
+        set(_src "${CMAKE_CURRENT_SOURCE_DIR}/src/qrhi_shaders/${_k}")
+        set(_spv "${_ses_vk_spv_dir}/${_sym}.spv")
+        set(_hdr "${_ses_vk_spv_dir}/${_sym}_spv.h")
+        add_custom_command(
+            OUTPUT "${_hdr}"
+            BYPRODUCTS "${_spv}"
+            COMMAND "${SES_GLSLANG_VALIDATOR}" -V --target-env vulkan1.1
+                    -o "${_spv}" "${_src}"
+            COMMAND "${CMAKE_COMMAND}" "-DIN=${_spv}" "-DOUT=${_hdr}"
+                    "-DNAME=k_${_sym}_spv"
+                    -P "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
+            DEPENDS "${_src}" "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
+            COMMENT "glslangValidator: ${_k} -> SPIR-V header"
             VERBATIM)
         list(APPEND _ses_vk_headers "${_hdr}")
     endforeach()

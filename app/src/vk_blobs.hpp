@@ -7,6 +7,7 @@
 // baked at concrete sizes; pick the one matching the (cubic) grid.
 
 #include "vk_engine.hpp"
+#include "vk_render.hpp"
 
 #include <phase_multiply_spv.h>
 #include <conj_scale_spv.h>
@@ -28,6 +29,10 @@
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
+#include <mesh_vert_spv.h>
+#include <mesh_frag_spv.h>
+#include <volume_vert_spv.h>
+#include <volume_frag_spv.h>
 
 #include <cstdio>
 
@@ -89,6 +94,20 @@ inline ses_vk::EngineKernels app_engine_blobs(int n) {
             break;
     }
     return b;
+}
+
+// The raw-Vulkan scene renderer's shader pair set.
+inline ses_vk::RenderKernels app_render_blobs() {
+    ses_vk::RenderKernels r;
+    r.mesh_vert = k_mesh_vert_spv;
+    r.mesh_vert_size = k_mesh_vert_spv_size;
+    r.mesh_frag = k_mesh_frag_spv;
+    r.mesh_frag_size = k_mesh_frag_spv_size;
+    r.volume_vert = k_volume_vert_spv;
+    r.volume_vert_size = k_volume_vert_spv_size;
+    r.volume_frag = k_volume_frag_spv;
+    r.volume_frag_size = k_volume_frag_spv_size;
+    return r;
 }
 
 }  // namespace ses_shell

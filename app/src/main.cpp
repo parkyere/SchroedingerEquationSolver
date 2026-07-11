@@ -74,13 +74,13 @@
 #include <core/vram_budget.hpp>
 
 #include "atom_model.hpp"
-#include "scene_renderer.hpp"
 #include "selftest_arcs.hpp"
 #include "manifold_spec.hpp"
 
 #include <cstring>  // std::strcmp for the VRAM extension probe
 
 #include <QApplication>
+#include <QFile>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMainWindow>
@@ -231,20 +231,23 @@ protected:
     void paintEvent(QPaintEvent* e) override {
         if (rhi_ready_) {
             run_gpu_frame();
+            render_scene_offscreen();  // the whole scene, in ses_vk
         }
         QRhiWidget::paintEvent(e);
     }
 
-    // The widget is about to lose its graphics resources for good: destroy
-    // the engine's RAW Vulkan objects (the VkFFT plan + pool/fence) while the
-    // device is still known-alive. The engine's QRhi-object members are
-    // handled by QRhi's own teardown accounting.
     // The widget's QRhi (and thus the adopted VkDevice) is about to go away:
     // the core must tear down EVERYTHING it created on that device first.
     // Simulation state on the GPU dies with it -- the fatal-on-rhi-change
     // guard in initialize() keeps the policy honest (no silent migration).
     void releaseResources() override {
-        volume_wrap_.reset();
+        blit_pipe_.reset();
+        blit_srb_.reset();
+        scene_wrap_.reset();
+        scene_wrapped_img_ = VK_NULL_HANDLE;
+        blit_sampler_.reset();
+        vk_renderer_.destroy();
+        vk_renderer_ready_ = false;
         engine_.destroy();
         vk_ctx_.destroy();
         gpu_ok_ = false;
@@ -268,47 +271,22 @@ protected:
         }
         rhi_ = rhi();
 
-        // The whole render layer (pipelines, samplers, UBOs, static vertex
-        // buffers, phase LUT) lives in SceneRenderer; uploads land on this
-        // frame's batch.
-        QRhiResourceUpdateBatch* u = rhi_->nextResourceUpdateBatch();
-        if (!renderer_.initialize(rhi_, renderTarget()->renderPassDescriptor(),
-                                  sim_.grid(), u)) {
+        // Plan B: the scene renders in ses_vk. Qt's whole render layer is
+        // one sampler + one fullscreen-blit pipeline (built lazily in
+        // render() once the scene image exists and can seed the SRB).
+        blit_sampler_.reset(rhi_->newSampler(
+            QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
+            QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge,
+            QRhiSampler::ClampToEdge));
+        if (!blit_sampler_->create()) {
             fatal_rhi_error("render resources",
-                            QStringLiteral("SceneRenderer initialization failed "
-                                           "(see stderr)"));
+                            QStringLiteral("blit sampler create failed"));
         }
-        cb->resourceUpdate(u);
+        Q_UNUSED(cb);
 
         mesh_dirty_ = true;
         volume_dirty_ = true;
         rhi_ready_ = true;
-    }
-
-    // The core's raw volume VkImage wrapped as a QRhiTexture for the render
-    // pass (createFrom = non-owning import). The engine hands the image over
-    // in SHADER_READ_ONLY_OPTIMAL after every write, and the wrapper's
-    // tracked layout says READ, so QRhi records no barriers of its own.
-    QRhiTexture* volume_wrapper() {
-        if (!volume_wrap_.isNull()) {
-            return volume_wrap_.data();
-        }
-        const VkImage img = engine_.volume_image();
-        if (img == VK_NULL_HANDLE) {
-            return nullptr;
-        }
-        const int n = sim_.grid().x.n;
-        volume_wrap_.reset(rhi_->newTexture(QRhiTexture::RGBA32F, n, n, n, 1,
-                                            QRhiTexture::ThreeDimensional));
-        QRhiTexture::NativeTexture src;
-        src.object = quint64(reinterpret_cast<std::uintptr_t>(img));
-        src.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        if (!volume_wrap_->createFrom(src)) {
-            std::fprintf(stderr, "volume import: createFrom failed\n");
-            volume_wrap_.reset();
-            return nullptr;
-        }
-        return volume_wrap_.data();
     }
 
     // COMPUTE setup, deferred to the first run_gpu_frame() (outside any widget
@@ -321,11 +299,23 @@ protected:
         // device provider + presentation layer; the physics runs in ses_vk.
         const auto* h =
             static_cast<const QRhiVulkanNativeHandles*>(rhi_->nativeHandles());
-        gpu_ok_ =
+        const bool adopted =
             h != nullptr && h->inst != nullptr &&
             vk_ctx_.adopt(h->inst->vkInstance(), h->physDev, h->dev,
                           h->gfxQueueFamilyIdx, h->gfxQueue) ==
-                ses_vk::Boot::ok &&
+                ses_vk::Boot::ok;
+        // The scene renderer needs only the DEVICE, not the engine: the CPU
+        // fallback path (engine init failure) still renders.
+        vk_renderer_ready_ =
+            adopted && vk_renderer_.initialize(vk_ctx_, sim_.grid(),
+                                               ses_shell::app_render_blobs());
+        if (!vk_renderer_ready_) {
+            fatal_rhi_error("render resources",
+                            QStringLiteral("ses_vk renderer initialization "
+                                           "failed (see stderr)"));
+        }
+        gpu_ok_ =
+            adopted &&
             engine_.initialize(vk_ctx_, sim_.grid(),
                                ses_shell::app_engine_blobs(sim_.grid().x.n),
                                sim_.propagator().half_potential_phase(),
@@ -654,8 +644,23 @@ protected:
     // The DRAW half of a frame: the shell computes the per-frame inputs
     // (camera, view mode, brightness, staged uploads) and SceneRenderer
     // records the resource updates + the one render pass.
-    void render(QRhiCommandBuffer* cb) override {
-        ses_shell::SceneRenderer::FrameInput in;
+    // Render the whole scene in ses_vk (called at the END of run_gpu_frame,
+    // outside any QRhi frame): resize the offscreen target to the widget's
+    // pixel size, assemble the per-frame inputs, submit.
+    void render_scene_offscreen() {
+        if (!vk_renderer_ready_) {
+            return;
+        }
+        const qreal dpr = devicePixelRatio();
+        const std::uint32_t w =
+            static_cast<std::uint32_t>(std::max<qreal>(1, width() * dpr));
+        const std::uint32_t h =
+            static_cast<std::uint32_t>(std::max<qreal>(1, height() * dpr));
+        if (!vk_renderer_.resize(w, h)) {
+            return;
+        }
+
+        ses_vk::SceneRenderer::FrameInput in;
         in.cloud = (mode_ == ViewMode::Cloud);
         in.azimuth = azimuth_;
         in.elevation = elevation_;
@@ -667,14 +672,14 @@ protected:
             in.flash = static_cast<float>(flash_ticks_) / 25.0f;
             --flash_ticks_;
         }
-        // The psi display volume: the engine's bridge texture on the GPU
-        // path; null lets the renderer fall back to its CPU-staged texture.
+        // The psi display volume: the engine's bridge image on the GPU path;
+        // null lets the renderer fall back to its CPU-staged texture.
         if (gpu_ok_) {
-            in.psi_volume = volume_wrapper();
+            in.psi_volume = engine_.volume_view();
         }
         if (in.cloud) {
             if (volume_dirty_) {
-                // CPU staging only -- the bridge owns the texture on the GPU
+                // CPU staging only -- the bridge owns the volume on the GPU
                 // path, and until compute init has been ATTEMPTED the 268 MB
                 // fallback texture must not be allocated (it would be orphaned
                 // one frame later and would deflate the VRAM-budget probe).
@@ -688,7 +693,85 @@ protected:
             in.mesh_colors = &colors_;
             mesh_dirty_ = false;
         }
-        renderer_.render(cb, renderTarget(), in);
+        vk_renderer_.render(in);
+    }
+
+    // Qt's entire remaining draw: one fullscreen triangle sampling the
+    // ses_vk scene image (imported via createFrom; re-imported when the
+    // offscreen target is recreated on resize).
+    void render(QRhiCommandBuffer* cb) override {
+        const VkImage scene_img = vk_renderer_.color_image();
+        if (scene_img == VK_NULL_HANDLE) {
+            // Nothing rendered yet: clear only.
+            cb->beginPass(renderTarget(), QColor(10, 13, 23),
+                          {1.0f, 0}, nullptr);
+            cb->endPass();
+            return;
+        }
+        if (scene_img != scene_wrapped_img_) {
+            scene_wrap_.reset(rhi_->newTexture(
+                QRhiTexture::RGBA8,
+                QSize(static_cast<int>(vk_renderer_.width()),
+                      static_cast<int>(vk_renderer_.height()))));
+            QRhiTexture::NativeTexture src;
+            src.object = quint64(reinterpret_cast<std::uintptr_t>(scene_img));
+            src.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            if (!scene_wrap_->createFrom(src)) {
+                std::fprintf(stderr, "blit: scene image import failed\n");
+                scene_wrap_.reset();
+                scene_wrapped_img_ = VK_NULL_HANDLE;
+                return;
+            }
+            scene_wrapped_img_ = scene_img;
+            blit_srb_.reset(rhi_->newShaderResourceBindings());
+            blit_srb_->setBindings({QRhiShaderResourceBinding::sampledTexture(
+                0, QRhiShaderResourceBinding::FragmentStage, scene_wrap_.data(),
+                blit_sampler_.data())});
+            if (!blit_srb_->create()) {
+                std::fprintf(stderr, "blit: SRB create failed\n");
+                blit_srb_.reset();
+                return;
+            }
+            if (blit_pipe_.isNull()) {
+                auto load_qsb = [](const char* path) {
+                    QFile f{QLatin1String(path)};
+                    if (!f.open(QIODevice::ReadOnly)) {
+                        return QShader();
+                    }
+                    return QShader::fromSerialized(f.readAll());
+                };
+                blit_pipe_.reset(rhi_->newGraphicsPipeline());
+                blit_pipe_->setShaderStages({
+                    {QRhiShaderStage::Vertex,
+                     load_qsb(":/shaders/blit.vert.qsb")},
+                    {QRhiShaderStage::Fragment,
+                     load_qsb(":/shaders/blit.frag.qsb")},
+                });
+                blit_pipe_->setVertexInputLayout({});
+                blit_pipe_->setShaderResourceBindings(blit_srb_.data());
+                blit_pipe_->setRenderPassDescriptor(
+                    renderTarget()->renderPassDescriptor());
+                blit_pipe_->setTopology(QRhiGraphicsPipeline::Triangles);
+                blit_pipe_->setDepthTest(false);
+                blit_pipe_->setDepthWrite(false);
+                if (!blit_pipe_->create()) {
+                    std::fprintf(stderr, "blit: pipeline create failed\n");
+                    blit_pipe_.reset();
+                    return;
+                }
+            }
+        }
+        if (blit_pipe_.isNull() || blit_srb_.isNull()) {
+            return;
+        }
+        cb->beginPass(renderTarget(), QColor(0, 0, 0), {1.0f, 0}, nullptr);
+        cb->setGraphicsPipeline(blit_pipe_.data());
+        const QSize px = renderTarget()->pixelSize();
+        cb->setViewport(QRhiViewport(0, 0, static_cast<float>(px.width()),
+                                     static_cast<float>(px.height())));
+        cb->setShaderResources(blit_srb_.data());
+        cb->draw(3);
+        cb->endPass();
     }
 
     void mousePressEvent(QMouseEvent* e) override { last_pos_ = e->position(); }
@@ -1471,7 +1554,14 @@ private:
     // psi buffer is ahead and must be read back before any CPU-side operation.
     ses_vk::DeviceContext vk_ctx_;  // adopts the QRhiWidget's device
     ses_vk::Engine engine_;
-    QScopedPointer<QRhiTexture> volume_wrap_;  // createFrom import (non-owning)
+    ses_vk::SceneRenderer vk_renderer_;  // the whole scene, framework-free
+    bool vk_renderer_ready_ = false;
+    // Qt's entire render surface: the imported scene image + one blit pass.
+    QScopedPointer<QRhiTexture> scene_wrap_;  // createFrom import (non-owning)
+    VkImage scene_wrapped_img_ = VK_NULL_HANDLE;
+    QScopedPointer<QRhiSampler> blit_sampler_;
+    QScopedPointer<QRhiShaderResourceBindings> blit_srb_;
+    QScopedPointer<QRhiGraphicsPipeline> blit_pipe_;
     QRhi* rhi_ = nullptr;             // the widget's QRhi, cached in initialize()
     bool rhi_ready_ = false;          // render resources built
     bool compute_init_done_ = false;  // engine + atom solve done (run_gpu_frame)
@@ -1542,10 +1632,6 @@ private:
     bool volume_dirty_ = false;
     long long ticks_ = 0;
 
-    // The whole render layer (Stage 4): pipelines, buffers, textures, and the
-    // per-frame record live in SceneRenderer; the shell hands it FrameInputs.
-    ses_shell::SceneRenderer renderer_;
-
     int mask_buf_ = -1;  // boundary absorber (mask, 0) complex state handle
     std::mt19937 rng_{std::random_device{}()};
 
@@ -1562,7 +1648,7 @@ private:
 int main(int argc, char** argv) {
     // GUI-subsystem stderr through a redirect is a fully buffered pipe; a
     // crash then eats every diagnostic. Unbuffered keeps them honest.
-    std::setbuf(stderr, nullptr);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
     // QRhi on the Vulkan backend (Viewport::setApi). No MSAA: the volume ray
     // marcher is a full-screen fragment pass where 4x multisampling only
     // multiplies its cost (it smooths nothing but the cube edges) -- at 256^3

@@ -146,12 +146,14 @@ public:
     bool create(DeviceContext& ctx, std::uint32_t max_sets,
                 std::uint32_t storage_descs, std::uint32_t uniform_descs,
                 std::uint32_t dynamic_uniform_descs = 0,
-                std::uint32_t storage_images = 0) {
+                std::uint32_t storage_images = 0,
+                std::uint32_t combined_samplers = 0) {
         max_sets_ = max_sets;
         storage_ = storage_descs;
         uniform_ = uniform_descs;
         dynamic_ = dynamic_uniform_descs;
         images_ = storage_images;
+        samplers_ = combined_samplers;
         return add_pool(ctx);
     }
 
@@ -197,6 +199,22 @@ public:
         vkUpdateDescriptorSets(ctx.device, 1, &w, 0, nullptr);
     }
 
+    void write_sampled(DeviceContext& ctx, VkDescriptorSet set,
+                       std::uint32_t binding, VkImageView view,
+                       VkSampler sampler,
+                       VkImageLayout layout =
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        const VkDescriptorImageInfo info{sampler, view, layout};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.dstBinding = binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.pImageInfo = &info;
+        vkUpdateDescriptorSets(ctx.device, 1, &w, 0, nullptr);
+    }
+
     void destroy(DeviceContext& ctx) {
         for (VkDescriptorPool p : pools_) {
             vkDestroyDescriptorPool(ctx.device, p, nullptr);
@@ -206,17 +224,19 @@ public:
 
 private:
     bool add_pool(DeviceContext& ctx) {
-        VkDescriptorPoolSize sizes[4] = {
+        VkDescriptorPoolSize sizes[5] = {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
              dynamic_ > 0 ? dynamic_ : 1},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, images_ > 0 ? images_ : 1},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             samplers_ > 0 ? samplers_ : 1},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets = max_sets_;
-        dpci.poolSizeCount = 4;
+        dpci.poolSizeCount = 5;
         dpci.pPoolSizes = sizes;
         VkDescriptorPool pool = VK_NULL_HANDLE;
         if (vkCreateDescriptorPool(ctx.device, &dpci, nullptr, &pool) !=
@@ -248,6 +268,7 @@ private:
     std::uint32_t uniform_ = 0;
     std::uint32_t dynamic_ = 0;
     std::uint32_t images_ = 0;
+    std::uint32_t samplers_ = 0;
 };
 
 // One-shot record/submit/wait: the raw analog of a QRhi offscreen frame.
