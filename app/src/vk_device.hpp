@@ -276,6 +276,62 @@ struct DeviceContext {
         }
     }
 
+    // A 3D storage image (+ its view). STORAGE for the compute bridge,
+    // SAMPLED so the render shell can import and sample the same image.
+    struct Image {
+        VkImage img = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VmaAllocation alloc = VK_NULL_HANDLE;
+    };
+
+    bool create_storage_image_3d(std::uint32_t w, std::uint32_t h,
+                                 std::uint32_t d, VkFormat format,
+                                 Image* out) {
+        VkImageCreateInfo ici{};
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_3D;
+        ici.format = format;
+        ici.extent = {w, h, d};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo alc{};
+        alc.usage = VMA_MEMORY_USAGE_AUTO;
+        if (vmaCreateImage(allocator, &ici, &alc, &out->img, &out->alloc,
+                           nullptr) != VK_SUCCESS) {
+            return false;
+        }
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = out->img;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_3D;
+        vci.format = format;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device, &vci, nullptr, &out->view) !=
+            VK_SUCCESS) {
+            vmaDestroyImage(allocator, out->img, out->alloc);
+            out->img = VK_NULL_HANDLE;
+            out->alloc = VK_NULL_HANDLE;
+            return false;
+        }
+        return true;
+    }
+
+    void destroy_image(Image* im) {
+        if (im->view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, im->view, nullptr);
+            im->view = VK_NULL_HANDLE;
+        }
+        if (im->img != VK_NULL_HANDLE) {
+            vmaDestroyImage(allocator, im->img, im->alloc);
+            im->img = VK_NULL_HANDLE;
+            im->alloc = VK_NULL_HANDLE;
+        }
+    }
+
     void destroy() {
         if (device != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(device);

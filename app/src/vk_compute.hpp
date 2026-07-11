@@ -144,16 +144,20 @@ public:
 
     bool create(DeviceContext& ctx, std::uint32_t max_sets,
                 std::uint32_t storage_descs, std::uint32_t uniform_descs,
-                std::uint32_t dynamic_uniform_descs = 0) {
-        VkDescriptorPoolSize sizes[3] = {
+                std::uint32_t dynamic_uniform_descs = 0,
+                std::uint32_t storage_images = 0) {
+        VkDescriptorPoolSize sizes[4] = {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_descs},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_descs},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, dynamic_uniform_descs},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+             dynamic_uniform_descs > 0 ? dynamic_uniform_descs : 1},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+             storage_images > 0 ? storage_images : 1},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets = max_sets;
-        dpci.poolSizeCount = (dynamic_uniform_descs > 0) ? 3 : 2;
+        dpci.poolSizeCount = 4;
         dpci.pPoolSizes = sizes;
         if (vkCreateDescriptorPool(ctx.device, &dpci, nullptr, &pool_) !=
             VK_SUCCESS) {
@@ -188,6 +192,20 @@ public:
         w.descriptorCount = 1;
         w.descriptorType = type;
         w.pBufferInfo = &info;
+        vkUpdateDescriptorSets(ctx.device, 1, &w, 0, nullptr);
+    }
+
+    void write_image(DeviceContext& ctx, VkDescriptorSet set,
+                     std::uint32_t binding, VkImageView view,
+                     VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL) {
+        const VkDescriptorImageInfo info{VK_NULL_HANDLE, view, layout};
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = set;
+        w.dstBinding = binding;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w.pImageInfo = &info;
         vkUpdateDescriptorSets(ctx.device, 1, &w, 0, nullptr);
     }
 
@@ -319,6 +337,27 @@ inline void barrier_transfer_to_host(VkCommandBuffer cb) {
     memory_barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                    VK_ACCESS_HOST_READ_BIT);
+}
+
+// Image layout transition (one mip, one layer, color aspect).
+inline void image_layout_barrier(VkCommandBuffer cb, VkImage img,
+                                 VkImageLayout from, VkImageLayout to,
+                                 VkPipelineStageFlags src_stage,
+                                 VkAccessFlags src_access,
+                                 VkPipelineStageFlags dst_stage,
+                                 VkAccessFlags dst_access) {
+    VkImageMemoryBarrier ib{};
+    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    ib.srcAccessMask = src_access;
+    ib.dstAccessMask = dst_access;
+    ib.oldLayout = from;
+    ib.newLayout = to;
+    ib.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.image = img;
+    ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr,
+                         1, &ib);
 }
 
 }  // namespace ses_vk

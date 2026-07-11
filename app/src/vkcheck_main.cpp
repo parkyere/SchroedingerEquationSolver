@@ -54,6 +54,8 @@
 #include <copy_state_spv.h>
 #include <synth_spv.h>
 #include <project_deposit_spv.h>
+#include <bridge_store_spv.h>
+#include <bridge_load_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
@@ -1101,6 +1103,10 @@ ses_vk::EngineKernels engine_blobs_8() {
     b.dipole_size = k_dipole_spv_size;
     b.project = k_project_deposit_spv;
     b.project_size = k_project_deposit_spv_size;
+    b.bridge_store = k_bridge_store_spv;
+    b.bridge_store_size = k_bridge_store_spv_size;
+    b.bridge_load = k_bridge_load_spv;
+    b.bridge_load_size = k_bridge_load_spv_size;
     return b;
 }
 
@@ -1793,6 +1799,48 @@ bool check_engine_dipole_between(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// SSBO -> 3D volume image bridge: copy psi into the RGBA32F volume via
+// imageStore, read it back through an SSBO (imageLoad). A store->load
+// round-trip that reproduces psi bit-for-bit proves imageStore wrote exactly
+// the SSBO contents. Same construction as qrhicheck's check_bridge, now on a
+// raw VkImage the render shell can import.
+bool check_engine_bridge(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.02};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 0.0},
+                                                 ses::Vec3d{1.2, 1.2, 1.2},
+                                                 ses::Vec3d{0.0, 0.5, 0.0});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           prop.half_potential_phase(), prop.kinetic_phase(),
+                           psi0.data())) {
+        std::printf("bridge (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+    engine.step(20);  // a non-trivial psi to copy
+
+    std::vector<float> psi_ref;
+    std::vector<float> roundtrip;
+    if (!engine.readback(psi_ref) || !engine.bridge_roundtrip(roundtrip) ||
+        roundtrip.size() != psi_ref.size()) {
+        std::printf("bridge (raw Vulkan): roundtrip FAIL\n");
+        return false;
+    }
+    double max_err = 0.0;
+    for (std::size_t i = 0; i < psi_ref.size(); ++i) {
+        max_err = std::max(
+            max_err, static_cast<double>(std::abs(roundtrip[i] - psi_ref[i])));
+    }
+    const bool pass = max_err == 0.0;  // pure copy: must be bitwise
+    std::printf(
+        "bridge psi -> volume -> SSBO (raw Vulkan): max err = %.3e  [%s]\n",
+        max_err, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main() {
@@ -1838,6 +1886,7 @@ int main() {
     failures += check_engine_force(ctx) ? 0 : 1;
     failures += check_engine_project(ctx) ? 0 : 1;
     failures += check_engine_dipole_between(ctx) ? 0 : 1;
+    failures += check_engine_bridge(ctx) ? 0 : 1;
 #ifdef SES_HAVE_VKFFT
     failures += check_native_vkfft_perf(ctx) ? 0 : 1;
 #endif

@@ -81,6 +81,10 @@ struct EngineKernels {
     std::size_t dipole_size = 0;
     const unsigned char* project = nullptr;  // project_deposit.comp
     std::size_t project_size = 0;
+    const unsigned char* bridge_store = nullptr;  // bridge_store.comp
+    std::size_t bridge_store_size = 0;
+    const unsigned char* bridge_load = nullptr;   // bridge_load.comp (checks)
+    std::size_t bridge_load_size = 0;
 };
 
 class Engine {
@@ -189,7 +193,16 @@ public:
                               {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
                               {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                               {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                              {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}})) {
+                              {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !bridge_store_.create(ctx, blobs.bridge_store,
+                                  blobs.bridge_store_size,
+                                  {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                   {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                   {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !bridge_load_.create(ctx, blobs.bridge_load, blobs.bridge_load_size,
+                                 {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                  {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                  {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}})) {
             return false;
         }
 
@@ -255,7 +268,7 @@ public:
 
         // Descriptor sets: 16 base + 3 any-target + 2 relax + 4 per resident
         // state (harness-scale pool; the GUI stage brings a growable arena).
-        if (!arena_.create(ctx_ ? *ctx_ : ctx, 96, 192, 96, 2)) {
+        if (!arena_.create(ctx_ ? *ctx_ : ctx, 96, 192, 96, 2, 4)) {
             return false;
         }
         half_set_ = make_mul_set(half_.buf);
@@ -623,6 +636,76 @@ public:
         return out;
     }
 
+    // ---- SSBO -> 3D volume texture bridge (the renderer feed) -----------
+    // The RGBA32F volume the render shell samples (psi in .xy). Created
+    // lazily; the image lives in GENERAL layout for compute writes -- the
+    // GUI import wraps it via QRhiTexture::createFrom + setNativeLayout.
+    VkImage volume_image() {
+        return ensure_volume() ? volume_.img : VK_NULL_HANDLE;
+    }
+    VkImageView volume_view() {
+        return ensure_volume() ? volume_.view : VK_NULL_HANDLE;
+    }
+
+    // Copy psi into the volume (imageStore, one texel per cell).
+    bool write_psi_to_volume() {
+        if (!ensure_volume()) {
+            return false;
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        barrier_compute_to_compute(shot.cb());  // psi vs prior compute
+        bridge_store_.bind(shot.cb(), store_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        return true;
+    }
+
+    // psi -> volume -> scratch SSBO -> host; bit-exact iff imageStore/
+    // imageLoad round-trip the RGBA32F texel .xy losslessly (check only).
+    bool bridge_roundtrip(std::vector<float>& out) {
+        if (!write_psi_to_volume()) {
+            return false;
+        }
+        if (scratch_bridge_.buf == VK_NULL_HANDLE) {
+            if (!ctx_->create_device_buffer(field_bytes_, &scratch_bridge_)) {
+                return false;
+            }
+            load_set_ = arena_.allocate(*ctx_, bridge_load_.set_layout());
+            if (load_set_ == VK_NULL_HANDLE) {
+                return false;
+            }
+            arena_.write_buffer(*ctx_, load_set_, 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                scratch_bridge_.buf);
+            arena_.write_image(*ctx_, load_set_, 1, volume_.view);
+            arena_.write_buffer(*ctx_, load_set_, 2,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                bridge_ubo_.buf, sizeof(BridgeParams));
+        }
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        barrier_compute_to_compute(shot.cb());  // image written by the store
+        bridge_load_.bind(shot.cb(), load_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        record_buffer_readback(shot.cb(), scratch_bridge_, field_bytes_);
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return false;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        out.assign(p, p + 2 * cells_);
+        return true;
+    }
+
     // ---- semiclassical radiation (Ehrenfest mean force) -----------------
     // Upload grad V (central differences on the periodic grid, packed vec4)
     // so mean_force can reduce against it.
@@ -964,6 +1047,8 @@ public:
         }
         states_.clear();
         arena_.destroy(*ctx_);
+        bridge_load_.destroy(*ctx_);
+        bridge_store_.destroy(*ctx_);
         project_.destroy(*ctx_);
         dipole_.destroy(*ctx_);
         force_.destroy(*ctx_);
@@ -980,6 +1065,9 @@ public:
         mul_.destroy(*ctx_);
         ctx_->destroy_buffer(&relax_kin_);
         ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&scratch_bridge_);
+        ctx_->destroy_buffer(&bridge_ubo_);
+        ctx_->destroy_image(&volume_);
         ctx_->destroy_buffer(&proj_ubo_);
         ctx_->destroy_buffer(&glm_buf_);
         ctx_->destroy_buffer(&proj_binoff_buf_);
@@ -1060,6 +1148,9 @@ private:
         float cell_h[4];
         std::int32_t m, n_radial;
         float h_radial, rmax;
+    };
+    struct alignas(16) BridgeParams {
+        std::int32_t nx, ny, nz, pad;
     };
     // std140 all-scalar block (tight 4-byte packing), matches shear.comp;
     // the trailing pad makes the 16-byte alignment explicit (dodges C4324).
@@ -1355,6 +1446,48 @@ private:
         s2.submit_and_wait(*ctx_);
         s2.destroy(*ctx_);
         return np;
+    }
+
+    // Lazily create the RGBA32F volume + the store side of the bridge: one
+    // submission transitions UNDEFINED -> GENERAL (compute writes/reads and
+    // the imported render sampling all run against GENERAL for now).
+    bool ensure_volume() {
+        if (store_set_ != VK_NULL_HANDLE) {
+            return true;
+        }
+        if (!ctx_->create_storage_image_3d(
+                static_cast<std::uint32_t>(n_), static_cast<std::uint32_t>(n_),
+                static_cast<std::uint32_t>(n_), VK_FORMAT_R32G32B32A32_SFLOAT,
+                &volume_)) {
+            return false;
+        }
+        const BridgeParams bp{grid_.x.n, grid_.y.n, grid_.z.n, 0};
+        if (!write_ubo(&bridge_ubo_, &bp, sizeof(bp))) {
+            return false;
+        }
+        store_set_ = arena_.allocate(*ctx_, bridge_store_.set_layout());
+        if (store_set_ == VK_NULL_HANDLE) {
+            return false;
+        }
+        arena_.write_buffer(*ctx_, store_set_, 0,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
+        arena_.write_image(*ctx_, store_set_, 1, volume_.view);
+        arena_.write_buffer(*ctx_, store_set_, 2,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bridge_ubo_.buf,
+                            sizeof(BridgeParams));
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        image_layout_barrier(shot.cb(), volume_.img, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_SHADER_READ_BIT |
+                                 VK_ACCESS_SHADER_WRITE_BIT);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        return true;
     }
 
     // Lazily build the dipole reduction resources (shared re-pointed set).
@@ -1704,7 +1837,10 @@ private:
     Kernel force_;
     Kernel dipole_;
     Kernel project_;
+    Kernel bridge_store_;
+    Kernel bridge_load_;
     DescriptorArena arena_;
+    DeviceContext::Image volume_{};
     std::vector<State> states_;
     VkDeviceSize staging_bytes_ = 0;
     VkDeviceSize radial_bytes_ = 0;
@@ -1737,6 +1873,8 @@ private:
     Buffer proj_binoff_buf_{};
     Buffer glm_buf_{};
     Buffer proj_ubo_{};
+    Buffer bridge_ubo_{};
+    Buffer scratch_bridge_{};
     Buffer relax_half_{};
     Buffer relax_kin_{};
 
@@ -1756,6 +1894,8 @@ private:
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
     VkDescriptorSet dipole_set_ = VK_NULL_HANDLE;
     VkDescriptorSet proj_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet store_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet load_set_ = VK_NULL_HANDLE;
     VkDescriptorSet synth_any_set_ = VK_NULL_HANDLE;
     VkDescriptorSet norm_any_set_ = VK_NULL_HANDLE;
     VkDescriptorSet scale_any_set_ = VK_NULL_HANDLE;
