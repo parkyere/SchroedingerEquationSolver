@@ -118,6 +118,15 @@ public:
                                 1, &set, 0, nullptr);
     }
 
+    // For kernels whose UBO binding is UNIFORM_BUFFER_DYNAMIC: bind with one
+    // dynamic offset (a slot in a multi-slot parameter buffer).
+    void bind(VkCommandBuffer cb, VkDescriptorSet set,
+              std::uint32_t dynamic_offset) const {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout_, 0,
+                                1, &set, 1, &dynamic_offset);
+    }
+
 private:
     VkShaderModule module_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout dsl_ = VK_NULL_HANDLE;
@@ -134,15 +143,17 @@ public:
     DescriptorArena& operator=(const DescriptorArena&) = delete;
 
     bool create(DeviceContext& ctx, std::uint32_t max_sets,
-                std::uint32_t storage_descs, std::uint32_t uniform_descs) {
-        const VkDescriptorPoolSize sizes[2] = {
+                std::uint32_t storage_descs, std::uint32_t uniform_descs,
+                std::uint32_t dynamic_uniform_descs = 0) {
+        VkDescriptorPoolSize sizes[3] = {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_descs},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_descs},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, dynamic_uniform_descs},
         };
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets = max_sets;
-        dpci.poolSizeCount = 2;
+        dpci.poolSizeCount = (dynamic_uniform_descs > 0) ? 3 : 2;
         dpci.pPoolSizes = sizes;
         if (vkCreateDescriptorPool(ctx.device, &dpci, nullptr, &pool_) !=
             VK_SUCCESS) {

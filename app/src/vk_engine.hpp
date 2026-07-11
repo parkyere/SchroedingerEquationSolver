@@ -20,7 +20,9 @@
 #include "vk_compute.hpp"
 
 #include <core/complex.hpp>
+#include <core/drive.hpp>
 #include <core/grid.hpp>
+#include <core/vec.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +46,10 @@ struct EngineKernels {
     std::size_t norm_size = 0;
     const unsigned char* scale = nullptr;  // scale.comp
     std::size_t scale_size = 0;
+    const unsigned char* kick = nullptr;   // dipole_kick.comp
+    std::size_t kick_size = 0;
+    const unsigned char* shear = nullptr;  // shear.comp
+    std::size_t shear_size = 0;
 };
 
 class Engine {
@@ -68,6 +74,7 @@ public:
                     const std::vector<ses::Complex<double>>& kinetic,
                     const std::vector<ses::Complex<double>>& psi0) {
         ctx_ = &ctx;
+        grid_ = grid;
         n_ = grid.x.n;
         cells_ = static_cast<std::size_t>(grid.size());
         cell_volume_ = grid.cell_volume();
@@ -77,6 +84,19 @@ public:
         }
         mul_groups_ = static_cast<std::uint32_t>((cells_ + 255) / 256);
         field_bytes_ = 2 * cells_ * sizeof(float);
+
+        // Dynamic-offset UBO slot stride: the device's minimum offset
+        // alignment, grown to hold one KickParams block.
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(ctx.phys_dev, &props);
+        kick_stride_ = static_cast<std::uint32_t>(
+            props.limits.minUniformBufferOffsetAlignment);
+        if (kick_stride_ == 0) {
+            kick_stride_ = 256;
+        }
+        while (kick_stride_ < sizeof(KickParams)) {
+            kick_stride_ *= 2;
+        }
 
         if (!mul_.create(ctx, blobs.mul, blobs.mul_size,
                          {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
@@ -93,6 +113,12 @@ public:
                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
                            {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
             !scale_.create(ctx, blobs.scale, blobs.scale_size,
+                           {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !kick_.create(ctx, blobs.kick, blobs.kick_size,
+                          {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                           {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}}) ||
+            !shear_.create(ctx, blobs.shear, blobs.shear_size,
                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}})) {
             return false;
@@ -123,18 +149,32 @@ public:
             {n_, 1, nn, n_, nn, 0, 0, 0},  // y-lines
             {nn, 1, 0, nn, nn, 0, 0, 0},   // z-lines
         };
+        // conjA: the per-axis inverse-FFT scale (1/n, the single transformed
+        // axis) used by the shear path.
+        const ConjParams conjA{static_cast<std::uint32_t>(cells_),
+                               1.0f / static_cast<float>(n_), 0.0f, 0.0f};
+        const ShearParams shear_zero{};
         if (!write_ubo(&muln_ubo_, &muln, sizeof(muln)) ||
             !write_ubo(&conj1_ubo_, &conj1, sizeof(conj1)) ||
             !write_ubo(&conjN_ubo_, &conjN, sizeof(conjN)) ||
             !write_ubo(&fft_ubo_[0], &fftp[0], sizeof(FftParams)) ||
             !write_ubo(&fft_ubo_[1], &fftp[1], sizeof(FftParams)) ||
             !write_ubo(&fft_ubo_[2], &fftp[2], sizeof(FftParams)) ||
-            !write_ubo(&scale_ubo_, &conj1, sizeof(conj1))) {
+            !write_ubo(&scale_ubo_, &conj1, sizeof(conj1)) ||
+            !write_ubo(&conjA_ubo_, &conjA, sizeof(conjA)) ||
+            !write_ubo(&shear_ubo_[0], &shear_zero, sizeof(shear_zero)) ||
+            !write_ubo(&shear_ubo_[1], &shear_zero, sizeof(shear_zero))) {
             return false;
         }
+        if (!ctx.create_host_buffer(2 * kick_stride_,
+                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                    &kick_ubo_)) {
+            return false;
+        }
+        kick_slots_ = 2;
 
-        // Descriptor sets: 9 now + 2 relax sets later.
-        if (!arena_.create(ctx_ ? *ctx_ : ctx, 16, 32, 16)) {
+        // Descriptor sets: 13 now + 2 relax sets later.
+        if (!arena_.create(ctx_ ? *ctx_ : ctx, 24, 48, 24, 2)) {
             return false;
         }
         half_set_ = make_mul_set(half_.buf);
@@ -145,6 +185,17 @@ public:
             fft_set_[a] = make_unary_set(fft_, fft_ubo_[a], sizeof(FftParams));
         }
         scale_set_ = make_unary_set(scale_, scale_ubo_, sizeof(ConjParams));
+        conjA_set_ = make_unary_set(conj_, conjA_ubo_, sizeof(ConjParams));
+        shear_set_[0] = make_unary_set(shear_, shear_ubo_[0], sizeof(ShearParams));
+        shear_set_[1] = make_unary_set(shear_, shear_ubo_[1], sizeof(ShearParams));
+        kick_set_ = arena_.allocate(*ctx_, kick_.set_layout());
+        if (kick_set_ != VK_NULL_HANDLE) {
+            arena_.write_buffer(*ctx_, kick_set_, 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
+            arena_.write_buffer(*ctx_, kick_set_, 1,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                                kick_ubo_.buf, sizeof(KickParams));
+        }
         norm_set_ = arena_.allocate(*ctx_, norm_.set_layout());
         if (norm_set_ != VK_NULL_HANDLE) {
             arena_.write_buffer(*ctx_, norm_set_, 0,
@@ -160,7 +211,9 @@ public:
             conj1_set_ == VK_NULL_HANDLE || conjN_set_ == VK_NULL_HANDLE ||
             fft_set_[0] == VK_NULL_HANDLE || fft_set_[1] == VK_NULL_HANDLE ||
             fft_set_[2] == VK_NULL_HANDLE || scale_set_ == VK_NULL_HANDLE ||
-            norm_set_ == VK_NULL_HANDLE) {
+            norm_set_ == VK_NULL_HANDLE || conjA_set_ == VK_NULL_HANDLE ||
+            shear_set_[0] == VK_NULL_HANDLE || shear_set_[1] == VK_NULL_HANDLE ||
+            kick_set_ == VK_NULL_HANDLE) {
             return false;
         }
 
@@ -178,6 +231,93 @@ public:
         Recorder r{shot.cb(), true};
         for (int s = 0; s < nsteps; ++s) {
             run_step_body(r, half_set_, kin_set_);
+        }
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+
+    // Driven Strang steps: kick(t) . step . kick(t+dt), theta = amplitude
+    // cos(omega t) dt/2. Per-kick thetas differ within the batch, so the kick
+    // parameters live in dynamic-offset slots of ONE host-mapped UBO and the
+    // whole batch records as a single submission (QRhi single-frame parity).
+    void driven_step(const ses::DipoleDrive& d, double t0, double dt,
+                     int nsteps) {
+        const int kicks = 2 * nsteps;
+        if (!ensure_kick_capacity(kicks)) {
+            return;
+        }
+        char* slots = static_cast<char*>(kick_ubo_.mapped);
+        for (int s = 0; s < nsteps; ++s) {
+            const double t = t0 + s * dt;
+            KickParams kp = make_kick_params(
+                d.axis, d.amplitude * std::cos(d.omega * t) * 0.5 * dt);
+            std::memcpy(slots + static_cast<std::size_t>(2 * s) * kick_stride_,
+                        &kp, sizeof(kp));
+            kp.theta = static_cast<float>(
+                d.amplitude * std::cos(d.omega * (t + dt)) * 0.5 * dt);
+            std::memcpy(
+                slots + static_cast<std::size_t>(2 * s + 1) * kick_stride_, &kp,
+                sizeof(kp));
+        }
+        vmaFlushAllocation(ctx_->allocator, kick_ubo_.alloc, 0, VK_WHOLE_SIZE);
+
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        Recorder r{shot.cb(), true};
+        for (int s = 0; s < nsteps; ++s) {
+            r.dispatch_dyn(kick_, kick_set_, mul_groups_,
+                           static_cast<std::uint32_t>(2 * s) * kick_stride_);
+            run_step_body(r, half_set_, kin_set_);
+            r.dispatch_dyn(kick_, kick_set_, mul_groups_,
+                           static_cast<std::uint32_t>(2 * s + 1) * kick_stride_);
+        }
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+
+    // Swap the half-potential phase table (e.g. the diamagnetic-augmented one
+    // before a magnetic run).
+    bool set_half_potential(const std::vector<ses::Complex<double>>& half_v) {
+        return upload_field(half_, half_v);
+    }
+
+    // Exact three-shear rotation of psi about coordinate `axis` by theta --
+    // the GPU transcription of core/rotation.hpp rotate_axis. One submission.
+    void rotate_axis_shear(int axis, double theta) {
+        const int b = (axis + 1) % 3;  // in-plane axes (b x c = axis)
+        const int c = (axis + 2) % 3;
+        stage_rotation_ubos(b, c, theta);
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        Recorder r{shot.cb(), true};
+        record_rotation(r, b, c);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+    }
+    void rotate_z_shear(double theta) { rotate_axis_shear(2, theta); }
+
+    // Magnetic Strang step: R(a) . real-step . R(a), a = (B/2)(dt/2), about
+    // the field axis. half_ must hold the diamagnetic-augmented table
+    // (set_half_potential). The half-angle is the same for every rotation in
+    // the batch, so the two shear parameter sets are staged once and the
+    // whole batch records as one submission.
+    void magnetic_step(int axis, double half_angle, int nsteps) {
+        const int b = (axis + 1) % 3;
+        const int c = (axis + 2) % 3;
+        stage_rotation_ubos(b, c, half_angle);
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return;
+        }
+        Recorder r{shot.cb(), true};
+        for (int s = 0; s < nsteps; ++s) {
+            record_rotation(r, b, c);
+            run_step_body(r, half_set_, kin_set_);
+            record_rotation(r, b, c);
         }
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
@@ -303,6 +443,8 @@ public:
             vkDeviceWaitIdle(ctx_->device);
         }
         arena_.destroy(*ctx_);
+        shear_.destroy(*ctx_);
+        kick_.destroy(*ctx_);
         scale_.destroy(*ctx_);
         norm_.destroy(*ctx_);
         fft_.destroy(*ctx_);
@@ -310,6 +452,10 @@ public:
         mul_.destroy(*ctx_);
         ctx_->destroy_buffer(&relax_kin_);
         ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&kick_ubo_);
+        ctx_->destroy_buffer(&shear_ubo_[1]);
+        ctx_->destroy_buffer(&shear_ubo_[0]);
+        ctx_->destroy_buffer(&conjA_ubo_);
         ctx_->destroy_buffer(&scale_ubo_);
         for (int a = 0; a < 3; ++a) {
             ctx_->destroy_buffer(&fft_ubo_[a]);
@@ -339,6 +485,23 @@ private:
     struct alignas(16) FftParams {
         std::int32_t mod_a, mul_b, mul_c, stride, n_lines, p0, p1, p2;
     };
+    struct alignas(16) KickParams {
+        std::uint32_t n;
+        std::int32_t nx, ny;
+        float theta;
+        float box_min[4];
+        float cell_h[4];
+        float axis[4];
+    };
+    // std140 all-scalar block (tight 4-byte packing), matches shear.comp;
+    // the trailing pad makes the 16-byte alignment explicit (dodges C4324).
+    struct alignas(16) ShearParams {
+        std::uint32_t n;
+        std::int32_t nx, ny, nz;
+        std::int32_t freq_axis, coord_axis, nf;
+        float kscale, cmin, ch, coeff;
+        float pad0;
+    };
 
     // Emits the compute-to-compute hazard edge before every dispatch except
     // the first of a command buffer (prior submissions are fence-complete).
@@ -352,6 +515,15 @@ private:
             }
             first = false;
             k.bind(cb, set);
+            vkCmdDispatch(cb, groups, 1, 1);
+        }
+        void dispatch_dyn(const Kernel& k, VkDescriptorSet set,
+                          std::uint32_t groups, std::uint32_t offset) {
+            if (!first) {
+                barrier_compute_to_compute(cb);
+            }
+            first = false;
+            k.bind(cb, set, offset);
             vkCmdDispatch(cb, groups, 1, 1);
         }
     };
@@ -424,6 +596,105 @@ private:
         return ok;
     }
 
+    KickParams make_kick_params(const ses::Vec3d& axis, double theta) const {
+        KickParams kp{};
+        kp.n = static_cast<std::uint32_t>(cells_);
+        kp.nx = grid_.x.n;
+        kp.ny = grid_.y.n;
+        kp.theta = static_cast<float>(theta);
+        kp.box_min[0] = static_cast<float>(grid_.x.xmin);
+        kp.box_min[1] = static_cast<float>(grid_.y.xmin);
+        kp.box_min[2] = static_cast<float>(grid_.z.xmin);
+        kp.cell_h[0] = static_cast<float>(grid_.x.spacing());
+        kp.cell_h[1] = static_cast<float>(grid_.y.spacing());
+        kp.cell_h[2] = static_cast<float>(grid_.z.spacing());
+        kp.axis[0] = static_cast<float>(axis.x);
+        kp.axis[1] = static_cast<float>(axis.y);
+        kp.axis[2] = static_cast<float>(axis.z);
+        return kp;
+    }
+
+    // Grow the dynamic-offset kick UBO to `kicks` slots and re-point the
+    // descriptor set at the new buffer (rewriting a fence-idle set is legal).
+    bool ensure_kick_capacity(int kicks) {
+        const VkDeviceSize need =
+            static_cast<VkDeviceSize>(kick_stride_) * kicks;
+        if (kick_ubo_.buf != VK_NULL_HANDLE && kick_slots_ >= kicks) {
+            return true;
+        }
+        ctx_->destroy_buffer(&kick_ubo_);
+        if (!ctx_->create_host_buffer(
+                need, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &kick_ubo_)) {
+            return false;
+        }
+        kick_slots_ = kicks;
+        arena_.write_buffer(*ctx_, kick_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                            kick_ubo_.buf, sizeof(KickParams));
+        return true;
+    }
+
+    const ses::Grid1D& axis_grid(int a) const {
+        return a == 0 ? grid_.x : (a == 1 ? grid_.y : grid_.z);
+    }
+
+    // Shearing lines along freq_axis (frequency space along freq_axis),
+    // shift each line by coeff * (its coord_axis coordinate).
+    ShearParams make_shear_params(int freq_axis, int coord_axis,
+                                  double coeff) const {
+        const ses::Grid1D& fa = axis_grid(freq_axis);
+        const ses::Grid1D& ca = axis_grid(coord_axis);
+        const double two_pi = 6.283185307179586;
+        ShearParams sp{};
+        sp.n = static_cast<std::uint32_t>(cells_);
+        sp.nx = grid_.x.n;
+        sp.ny = grid_.y.n;
+        sp.nz = grid_.z.n;
+        sp.freq_axis = freq_axis;
+        sp.coord_axis = coord_axis;
+        sp.nf = fa.n;
+        sp.kscale = static_cast<float>(two_pi / (fa.xmax - fa.xmin));
+        sp.cmin = static_cast<float>(ca.xmin);
+        sp.ch = static_cast<float>(ca.spacing());
+        sp.coeff = static_cast<float>(coeff);
+        return sp;
+    }
+
+    // Write the two shear parameter sets one (or many) three-shear
+    // rotation(s) about the axis perpendicular to (b, c) need: set0 =
+    // (b, c, -tan(theta/2)) used twice, set1 = (c, b, sin(theta)).
+    void stage_rotation_ubos(int b, int c, double theta) {
+        const double t = std::tan(0.5 * theta);
+        const double sn = std::sin(theta);
+        const ShearParams s0 = make_shear_params(b, c, -t);
+        const ShearParams s1 = make_shear_params(c, b, sn);
+        std::memcpy(shear_ubo_[0].mapped, &s0, sizeof(s0));
+        std::memcpy(shear_ubo_[1].mapped, &s1, sizeof(s1));
+        vmaFlushAllocation(ctx_->allocator, shear_ubo_[0].alloc, 0,
+                           VK_WHOLE_SIZE);
+        vmaFlushAllocation(ctx_->allocator, shear_ubo_[1].alloc, 0,
+                           VK_WHOLE_SIZE);
+    }
+
+    // One staged shear: FFT along freq_axis, phase-shift (shear_set_[which]),
+    // then the inverse FFT along that axis (conj -> FFT -> conj/n).
+    void record_shear(Recorder& r, int which, int freq_axis) {
+        const std::uint32_t nn = static_cast<std::uint32_t>(n_) *
+                                 static_cast<std::uint32_t>(n_);
+        r.dispatch(fft_, fft_set_[freq_axis], nn);
+        r.dispatch(shear_, shear_set_[which], mul_groups_);
+        r.dispatch(conj_, conj1_set_, mul_groups_);
+        r.dispatch(fft_, fft_set_[freq_axis], nn);
+        r.dispatch(conj_, conjA_set_, mul_groups_);
+    }
+
+    // One full three-shear rotation (set0 on b, set1 on c, set0 on b).
+    void record_rotation(Recorder& r, int b, int c) {
+        record_shear(r, 0, b);
+        record_shear(r, 1, c);
+        record_shear(r, 0, b);
+    }
+
     // halfV . IFFT . kin . FFT . halfV (the inverse FFT = conj . FFT .
     // conj/N) -- the QRhi engine's hand-rolled chain, barriers explicit.
     void run_step_body(Recorder& r, VkDescriptorSet half_set,
@@ -446,18 +717,23 @@ private:
     }
 
     DeviceContext* ctx_ = nullptr;
+    ses::Grid3D grid_{};
     int n_ = 0;
     std::size_t cells_ = 0;
     std::uint32_t mul_groups_ = 0;
     VkDeviceSize field_bytes_ = 0;
     double cell_volume_ = 1.0;
     double dtau_ = 0.0;
+    std::uint32_t kick_stride_ = 256;
+    int kick_slots_ = 0;
 
     Kernel mul_;
     Kernel conj_;
     Kernel fft_;
     Kernel norm_;
     Kernel scale_;
+    Kernel kick_;
+    Kernel shear_;
     DescriptorArena arena_;
 
     Buffer psi_{};
@@ -470,6 +746,9 @@ private:
     Buffer conjN_ubo_{};
     Buffer fft_ubo_[3]{};
     Buffer scale_ubo_{};
+    Buffer conjA_ubo_{};
+    Buffer shear_ubo_[2]{};
+    Buffer kick_ubo_{};
     Buffer relax_half_{};
     Buffer relax_kin_{};
 
@@ -481,6 +760,9 @@ private:
                                    VK_NULL_HANDLE};
     VkDescriptorSet norm_set_ = VK_NULL_HANDLE;
     VkDescriptorSet scale_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet conjA_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet shear_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDescriptorSet kick_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_half_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
 };

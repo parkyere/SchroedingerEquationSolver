@@ -27,9 +27,12 @@
 #include <core/fft.hpp>
 #include <core/field.hpp>
 #include <core/grid.hpp>
+#include <core/drive.hpp>
 #include <core/imaginary_time.hpp>
+#include <core/magnetic.hpp>
 #include <core/potential.hpp>
 #include <core/propagator.hpp>
+#include <core/rotation.hpp>
 #include <core/vec.hpp>
 #include <core/wavepacket.hpp>
 
@@ -43,6 +46,7 @@
 #include <dipole_spv.h>
 #include <pack_half_spv.h>
 #include <unpack_half_spv.h>
+#include <shear_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
@@ -1071,6 +1075,10 @@ ses_vk::EngineKernels engine_blobs_8() {
     b.norm_size = k_norm_peak_spv_size;
     b.scale = k_scale_spv;
     b.scale_size = k_scale_spv_size;
+    b.kick = k_dipole_kick_spv;
+    b.kick_size = k_dipole_kick_spv_size;
+    b.shear = k_shear_spv;
+    b.shear_size = k_shear_spv_size;
     return b;
 }
 
@@ -1176,6 +1184,143 @@ bool check_engine_relax(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// The driven Strang step (dipole half-kicks around the static tables) vs
+// core/drive.hpp driven_step -- same adversarial drive as qrhicheck: skew
+// (non-unit) polarization axis, nonzero omega, nonzero start time, so every
+// kick uniform (axis/box_min/cell_h/theta) is exercised, per-kick through
+// the dynamic-offset UBO slots.
+bool check_engine_driven(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const double dt = 0.02;
+    const ses::SplitOperator3D cpu_prop{g, v, dt};
+    const ses::DipoleDrive drive{ses::Vec3d{0.3, -0.2, 1.0}, 0.5, 0.6};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.0, 0.0},
+                                                 ses::Vec3d{1.2, 1.2, 1.2},
+                                                 ses::Vec3d{0.0, 0.5, 0.0});
+
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           cpu_prop.half_potential_phase(),
+                           cpu_prop.kinetic_phase(), psi0.data())) {
+        std::printf("driven 20 steps (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+    engine.driven_step(drive, 1.3, dt, 20);
+    std::vector<float> gpu_out;
+    if (!engine.readback(gpu_out)) {
+        std::printf("driven 20 steps (raw Vulkan): readback FAIL\n");
+        return false;
+    }
+
+    ses::Field3D cpu = psi0;
+    ses::driven_step(cpu, cpu_prop, drive, 1.3, 20);
+
+    double max_err = 0.0;
+    double max_mag = 0.0;
+    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+        max_err = std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
+        max_err =
+            std::max(max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
+    }
+    const double tol = 1e-4 + 1e-5 * max_mag;
+    const bool pass = max_err < tol;
+    std::printf(
+        "driven 20 steps (raw Vulkan): max |gpu - cpu| = %.3e (tol %.3e)  "
+        "[%s]\n",
+        max_err, tol, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// Magnetic minimal coupling: the exact three-shear rotate_z vs core
+// ses::rotate_z, and the full magnetic Strang step (paramagnetic rotation +
+// diamagnetic potential) vs MagneticPropagator3D for a field along z and x.
+// Same oracles/tolerances as qrhicheck's check_magnetic.
+bool check_engine_magnetic(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const double dt = 0.02;
+    const double b = 0.5;
+    ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{1.0, 0.0, 0.5}, ses::Vec3d{1.4, 1.4, 1.4},
+        ses::Vec3d{0.0, 0.4, 0.0});
+
+    const ses::SplitOperator3D base{g, v, dt};
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(),
+                           base.half_potential_phase(), base.kinetic_phase(),
+                           psi0.data())) {
+        std::printf("magnetic (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+
+    // Exact three-shear rotation vs core rotate_z.
+    engine.rotate_z_shear(0.6);
+    std::vector<float> gpu_out;
+    if (!engine.readback(gpu_out)) {
+        return false;
+    }
+    ses::Field3D cpu = psi0;
+    ses::rotate_z(cpu, 0.6);
+    double rot_err = 0.0;
+    double rot_mag = 0.0;
+    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+        rot_err = std::max(rot_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
+        rot_err =
+            std::max(rot_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
+        rot_mag = std::max(rot_mag, std::abs(cpu.data()[i].real()));
+        rot_mag = std::max(rot_mag, std::abs(cpu.data()[i].imag()));
+    }
+    const double rot_tol = 1e-3 + 1e-4 * rot_mag;
+    const bool rot_ok = rot_err < rot_tol;
+    std::printf(
+        "  rotate_z (three-shear, raw Vulkan): max |gpu - cpu| = %.3e "
+        "(tol %.3e)  [%s]\n",
+        rot_err, rot_tol, rot_ok ? "PASS" : "FAIL");
+
+    // Full magnetic step vs MagneticPropagator3D, field along z then x.
+    bool step_ok = true;
+    for (int fa = 2; fa >= 0; fa -= 2) {  // axis z then x
+        const ses::MagneticPropagator3D mprop{g, v, dt, b, fa};
+        const ses::SplitOperator3D core_diamag{g, mprop.effective_potential(),
+                                               dt};
+        engine.set_half_potential(core_diamag.half_potential_phase());
+        engine.upload_state(psi0.data());
+        engine.magnetic_step(fa, 0.5 * b * (0.5 * dt), 20);
+        if (!engine.readback(gpu_out)) {
+            return false;
+        }
+        ses::Field3D cpu2 = psi0;
+        mprop.step(cpu2, 20);
+        double err = 0.0;
+        double mag = 0.0;
+        for (std::size_t i = 0; i < cpu2.data().size(); ++i) {
+            err = std::max(err, std::abs(gpu_out[2 * i] - cpu2.data()[i].real()));
+            err = std::max(err,
+                           std::abs(gpu_out[2 * i + 1] - cpu2.data()[i].imag()));
+            mag = std::max(mag, std::abs(cpu2.data()[i].real()));
+            mag = std::max(mag, std::abs(cpu2.data()[i].imag()));
+        }
+        const double tol = 2e-3 + 1e-4 * mag;
+        const bool ok = err < tol;
+        std::printf(
+            "  magnetic step %c (raw Vulkan): max |gpu - cpu| = %.3e "
+            "(tol %.3e)  [%s]\n",
+            fa == 2 ? 'z' : 'x', err, tol, ok ? "PASS" : "FAIL");
+        step_ok = ok && step_ok;
+    }
+
+    const bool pass = rot_ok && step_ok;
+    std::printf("magnetic (raw Vulkan): [%s]\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 }  // namespace
 
 int main() {
@@ -1214,6 +1359,8 @@ int main() {
     failures += check_fft3(ctx) ? 0 : 1;
     failures += check_engine_step(ctx) ? 0 : 1;
     failures += check_engine_relax(ctx) ? 0 : 1;
+    failures += check_engine_driven(ctx) ? 0 : 1;
+    failures += check_engine_magnetic(ctx) ? 0 : 1;
 
     const int verrs = ses_vk::g_validation_errors.load();
     if (ctx.validation_active && verrs != 0) {
