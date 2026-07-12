@@ -456,7 +456,9 @@ public:
     }
 
     // Imaginary-time weight tables (packed vec2(w,0)) + dtau/dV for the
-    // renormalization; call after initialize().
+    // renormalization. Re-entrant: the tables are TRANSIENT (268 MB) --
+    // directors upload them on entering relaxation and release_relax_tables
+    // on leaving; the descriptor sets are allocated once and re-pointed.
     bool set_relax_tables(const std::vector<double>& half_w,
                           const std::vector<double>& kin_w, double dtau,
                           double cell_volume) {
@@ -468,18 +470,44 @@ public:
             hf[2 * i] = static_cast<float>(half_w[i]);
             kf[2 * i] = static_cast<float>(kin_w[i]);
         }
-        if (!ctx_->create_device_buffer(field_bytes_, &relax_half_) ||
-            !ctx_->create_device_buffer(field_bytes_, &relax_kin_)) {
+        if (relax_half_.buf == VK_NULL_HANDLE &&
+            (!ctx_->create_device_buffer(field_bytes_, &relax_half_) ||
+             !ctx_->create_device_buffer(field_bytes_, &relax_kin_))) {
             return false;
         }
         if (!upload_raw(relax_half_, hf.data(), field_bytes_) ||
             !upload_raw(relax_kin_, kf.data(), field_bytes_)) {
             return false;
         }
-        relax_half_set_ = make_mul_set(relax_half_.buf);
-        relax_kin_set_ = make_mul_set(relax_kin_.buf);
+        if (relax_half_set_ == VK_NULL_HANDLE) {
+            relax_half_set_ = make_mul_set(relax_half_.buf);
+            relax_kin_set_ = make_mul_set(relax_kin_.buf);
+        } else {
+            // Re-point the once-allocated sets at the fresh buffers (legal:
+            // every submission fence-waits).
+            arena_.write_buffer(*ctx_, relax_half_set_, 1,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                relax_half_.buf);
+            arena_.write_buffer(*ctx_, relax_kin_set_, 1,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                relax_kin_.buf);
+        }
         return relax_half_set_ != VK_NULL_HANDLE &&
                relax_kin_set_ != VK_NULL_HANDLE;
+    }
+
+    // Free the transient imaginary-time tables (the sets stay, re-pointed by
+    // the next set_relax_tables).
+    void release_relax_tables() {
+        if (relax_half_.buf == VK_NULL_HANDLE) {
+            return;
+        }
+        vkDeviceWaitIdle(ctx_->device);
+        ctx_->destroy_buffer(&relax_half_);
+        ctx_->destroy_buffer(&relax_kin_);
+    }
+    bool relax_tables_ready() const {
+        return relax_half_.buf != VK_NULL_HANDLE;
     }
 
     // e^{-H dtau} Strang steps with per-step renormalization. Each step: one
@@ -488,6 +516,9 @@ public:
     // submission. The pre-renorm norm decays as e^{-2 E dtau} -> free energy.
     RelaxStats relax_step(int nsteps) {
         RelaxStats stats;
+        if (!relax_tables_ready()) {
+            return stats;
+        }
         for (int s = 0; s < nsteps; ++s) {
             OneShot shot;
             if (!shot.begin(*ctx_)) {
@@ -589,6 +620,9 @@ public:
     // project-out of every `lower` state (psi -= <phi|psi> phi), renorm.
     RelaxStats relax_deflated_step(const std::vector<int>& lower, int nsteps) {
         RelaxStats stats;
+        if (!relax_tables_ready()) {
+            return stats;
+        }
         for (int s = 0; s < nsteps; ++s) {
             OneShot shot;
             if (!shot.begin(*ctx_)) {

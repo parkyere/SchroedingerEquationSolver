@@ -132,16 +132,10 @@ public:
                          atlas_fits ? ""
                                     : "  [WARNING: even fp16 is tight -- consider a "
                                       "smaller box or manifold]");
-            // These uploads are FALLIBLE: a failed relax table would silently
-            // run REAL-TIME phase tables in imaginary time, so failure
-            // demotes to the CPU fallback wholesale.
-            const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
-                                                         kRelaxDtau};
-            if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
-                                          relaxer.kinetic_weight(), kRelaxDtau,
-                                          sim_.grid().cell_volume()) ||
-                !engine_.set_potential_gradient(sim_.potential())) {
-                std::fprintf(stderr, "engine: relax/gradient setup failed -- "
+            // Relax tables are TRANSIENT (uploaded on Key-2/3/4, freed on
+            // completion); only the gradient upload stays fallible-fatal.
+            if (!engine_.set_potential_gradient(sim_.potential())) {
+                std::fprintf(stderr, "engine: gradient setup failed -- "
                                      "falling back to CPU stepping\n");
                 gpu_ok_ = false;
                 decay_on_ = false;
@@ -314,9 +308,15 @@ public:
 
     // ---- controls (the shell's key/toolbar entry points) ----
 
-    void set_real_time() { stepping_ = Stepping::RealTime; }
+    void set_real_time() {
+        stepping_ = Stepping::RealTime;
+        drop_relax_tables();
+    }
 
     void set_relaxing() {
+        if (use_gpu_path() && !ensure_relax_tables()) {
+            return;  // no tables, no imaginary time
+        }
         stepping_ = Stepping::Relaxing;
         relax_plateau_ = 0;
         relax_prev_energy_ = 0.0;
@@ -353,6 +353,7 @@ public:
         sim_ = make_simulation();
         stepping_ = Stepping::RealTime;
         free_deflation_buffers();  // drop any owned deflation phi
+        drop_relax_tables();
         laser_pol_ = LaserPol::Off;  // reset returns to the vanilla packet demo
         bfield_b_ = 0.0;             // and to no magnetic field
         upload_field_tables();    // restore the base half-potential
@@ -831,6 +832,7 @@ private:
                 relax_plateau_ = 0;
                 stepping_ = Stepping::RealTime;
                 free_deflation_buffers();  // converged -> free the phi
+                drop_relax_tables();
             }
         }
     }
@@ -846,7 +848,7 @@ private:
         if (mode_ != ViewMode::Cloud) {
             mode_ = ViewMode::Cloud;
         }
-        if (!manifold_ready()) {
+        if (!manifold_ready() || !ensure_relax_tables()) {
             return;
         }
         // Deflation set: OWNED transient fp32 buffers (no resident atlas),
@@ -1052,6 +1054,25 @@ private:
         write_display_texture();
         volume_dirty_ = false;
     }
+
+    // Transient relax tables: uploaded on demand (a table build + 268 MB
+    // upload per relax entry), freed on completion -- they were the largest
+    // always-resident allocation after the phase tables.
+    bool ensure_relax_tables() {
+        if (engine_.relax_tables_ready()) {
+            return true;
+        }
+        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
+                                                     kRelaxDtau};
+        if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
+                                      relaxer.kinetic_weight(), kRelaxDtau,
+                                      sim_.grid().cell_volume())) {
+            std::fprintf(stderr, "engine: relax table upload failed\n");
+            return false;
+        }
+        return true;
+    }
+    void drop_relax_tables() { engine_.release_relax_tables(); }
 
     // Pull the GPU-evolved state back into the CPU double session (fp32
     // precision at the handoff).

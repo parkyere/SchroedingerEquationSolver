@@ -66,13 +66,10 @@ public:
         if (!gpu_ok_) {
             return;
         }
-        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
-                                                     kBaseRelaxDtau};
-        if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
-                                      relaxer.kinetic_weight(), kBaseRelaxDtau,
-                                      sim_.grid().cell_volume()) ||
-            !engine_.set_potential_gradient(sim_.potential())) {
-            std::fprintf(stderr, "engine: relax/gradient setup failed -- "
+        // Relax tables are TRANSIENT (uploaded on relax entry, freed on
+        // completion); only the gradient upload stays fallible-fatal.
+        if (!engine_.set_potential_gradient(sim_.potential())) {
+            std::fprintf(stderr, "engine: gradient setup failed -- "
                                  "falling back to CPU stepping\n");
             gpu_ok_ = false;
             return;
@@ -156,7 +153,10 @@ public:
 
     // ---- generic controls ----
 
-    void set_real_time() override { stepping_ = BaseStepping::RealTime; }
+    void set_real_time() override {
+        stepping_ = BaseStepping::RealTime;
+        engine_.release_relax_tables();
+    }
 
     void reset_simulation() override {
         sim_ = remake_simulation();
@@ -187,6 +187,9 @@ public:
 
     void set_relaxing() {
         if (!relax_allowed()) {
+            return;
+        }
+        if (use_gpu_path() && !ensure_relax_tables()) {
             return;
         }
         stepping_ = BaseStepping::Relaxing;
@@ -327,8 +330,20 @@ protected:
             if (relax_plateau_ >= 12) {
                 relax_plateau_ = 0;
                 stepping_ = BaseStepping::RealTime;
+                engine_.release_relax_tables();
             }
         }
+    }
+
+    bool ensure_relax_tables() {
+        if (engine_.relax_tables_ready()) {
+            return true;
+        }
+        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
+                                                     kBaseRelaxDtau};
+        return engine_.set_relax_tables(relaxer.half_potential_weight(),
+                                        relaxer.kinetic_weight(), kBaseRelaxDtau,
+                                        sim_.grid().cell_volume());
     }
 
     void ensure_cpu_current() {
