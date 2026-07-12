@@ -266,12 +266,14 @@ public:
             }
             if (pending_gpu_steps_ > 0) {
                 if (stepping_ == Stepping::RealTime) {
+                    // Mask + bridge ride the step submission (batch tail).
                     run_real_time_batch();
+                    volume_written_ = true;
                 } else {
                     run_relax_batch();
+                    write_display_texture();
                 }
                 pending_gpu_steps_ = 0;
-                write_display_texture();
                 volume_dirty_ = false;
                 if (gpu_title_due_) {
                     gpu_title_due_ = false;
@@ -730,28 +732,24 @@ private:
             // phase cos(w t) stays continuous across batches/pauses.
             const ses::DipoleDrive d{laser_axis(), laser_e0_, laser_omega_};
             engine_.driven_step(d, sim_.time() + gpu_time_, sim_.dt(),
-                                pending_gpu_steps_);
+                                pending_gpu_steps_, mask_buf_, true);
         } else if (bfield_b_ > 0.0) {
             // Minimal-coupling magnetic step: static E + diamagnetic are
             // already folded into the half-potential (upload_field_tables);
             // the paramagnetic L_axis is the exact three-shear rotation.
             engine_.magnetic_step(bfield_axis_,
                                   0.5 * bfield_b_ * (0.5 * sim_.dt()),
-                                  pending_gpu_steps_);
+                                  pending_gpu_steps_, mask_buf_, true);
         } else {
             // The static E-field (if any) is folded into the half-potential,
-            // so a plain step polarizes / field-ionizes correctly.
-            engine_.step(pending_gpu_steps_);
+            // so a plain step polarizes / field-ionizes correctly. The
+            // absorbing mask and the display bridge record into the same
+            // submission (batch tail).
+            engine_.step(pending_gpu_steps_, mask_buf_, true);
         }
         // Time is credited where steps EXECUTE, so a stalled or
         // occluded paint cannot desync the clock from the state.
         gpu_time_ += pending_gpu_steps_ * sim_.dt();
-
-        // Boundary absorber (real-time only): damp outgoing flux so it
-        // leaves instead of wrapping around the periodic FFT box.
-        if (mask_buf_ >= 0) {
-            engine_.apply_mask(mask_buf_);
-        }
 
         // Orbital-free populations: ONE deposit pass on the post-step psi,
         // shared by the decay and laser readouts this title tick.

@@ -349,7 +349,9 @@ public:
 
     // psi <- (halfV . IFFT . kin . FFT . halfV)^nsteps psi. One submission;
     // a compute-to-compute barrier precedes every psi-aliasing dispatch.
-    void step(int nsteps) {
+    // mask_handle >= 0 records the absorbing-mask multiply and bridge=true
+    // the psi -> volume store into the SAME submission (no extra fences).
+    void step(int nsteps, int mask_handle = -1, bool bridge = false) {
         OneShot shot;
         if (!shot.begin(*ctx_)) {
             return;
@@ -358,6 +360,7 @@ public:
         for (int s = 0; s < nsteps; ++s) {
             run_step_body(r, half_set_, kin_set_);
         }
+        record_batch_tail(shot.cb(), mask_handle, bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
     }
@@ -367,7 +370,7 @@ public:
     // parameters live in dynamic-offset slots of ONE host-mapped UBO and the
     // whole batch records as a single submission.
     void driven_step(const ses::DipoleDrive& d, double t0, double dt,
-                     int nsteps) {
+                     int nsteps, int mask_handle = -1, bool bridge = false) {
         const int kicks = 2 * nsteps;
         if (!ensure_kick_capacity(kicks)) {
             return;
@@ -399,6 +402,7 @@ public:
             r.dispatch_dyn(kick_, kick_set_, mul_groups_,
                            static_cast<std::uint32_t>(2 * s + 1) * kick_stride_);
         }
+        record_batch_tail(shot.cb(), mask_handle, bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
     }
@@ -431,7 +435,8 @@ public:
     // (set_half_potential). The half-angle is the same for every rotation in
     // the batch, so the two shear parameter sets are staged once and the
     // whole batch records as one submission.
-    void magnetic_step(int axis, double half_angle, int nsteps) {
+    void magnetic_step(int axis, double half_angle, int nsteps,
+                       int mask_handle = -1, bool bridge = false) {
         const int b = (axis + 1) % 3;
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, half_angle);
@@ -445,6 +450,7 @@ public:
             run_step_body(r, half_set_, kin_set_);
             record_rotation(r, b, c);
         }
+        record_batch_tail(shot.cb(), mask_handle, bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
     }
@@ -623,6 +629,27 @@ public:
     }
 
     // psi <- psi * state (elementwise): the absorbing-boundary damp.
+    // Record the real-time batch tail: the absorbing-mask multiply and/or
+    // the psi -> volume bridge into an ALREADY-recording command buffer.
+    void record_batch_tail(VkCommandBuffer cb, int mask_handle, bool bridge) {
+        if (mask_handle >= 0) {
+            State* st = state_at(mask_handle);
+            if (st != nullptr && !st->is_half) {
+                barrier_compute_to_compute(cb);
+                mul_.bind(cb, st->mul_set);
+                vkCmdDispatch(cb, mul_groups_, 1, 1);
+            }
+        }
+        if (bridge && ensure_volume()) {
+            barrier_compute_to_compute(cb);
+            transition_volume(cb, VK_IMAGE_LAYOUT_GENERAL);
+            bridge_store_.bind(cb, store_set_);
+            vkCmdDispatch(cb, mul_groups_, 1, 1);
+            transition_volume(cb,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+    }
+
     void apply_mask(int handle) {
         State* st = state_at(handle);
         if (st == nullptr || st->is_half) {

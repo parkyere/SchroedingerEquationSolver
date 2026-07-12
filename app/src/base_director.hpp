@@ -116,12 +116,14 @@ public:
         service_requests();
         if (pending_gpu_steps_ > 0) {
             if (stepping_ == BaseStepping::RealTime) {
+                // Mask + bridge ride the step submission (batch tail).
                 run_real_time_batch();
+                volume_written_ = true;
             } else {
                 run_relax_batch();
+                write_display_texture();
             }
             pending_gpu_steps_ = 0;
-            write_display_texture();
             volume_dirty_ = false;
             if (gpu_title_due_) {
                 gpu_title_due_ = false;
@@ -301,11 +303,8 @@ protected:
                 engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
             }
         }
-        engine_.step(pending_gpu_steps_);
+        engine_.step(pending_gpu_steps_, mask_buf_, true);
         gpu_time_ += pending_gpu_steps_ * sim_.dt();
-        if (mask_buf_ >= 0) {
-            engine_.apply_mask(mask_buf_);
-        }
         after_step_batch();
     }
 
