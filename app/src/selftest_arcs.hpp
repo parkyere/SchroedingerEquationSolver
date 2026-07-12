@@ -90,7 +90,10 @@ void register_verification_arcs(QApplication& app, ViewportT* viewport) {
         run_when_manifold_ready(viewport, [viewport, &app] {
             viewport->toggle_decay();  // OFF: keep the relaxed state stationary
             viewport->set_relaxing();  // cool to 1s
-            QTimer::singleShot(12000, viewport, [viewport, &app] {
+            // 20 s: the n = 5 shell seed is ~orthogonal to 1s, so the descent
+            // rides the 1% ground seed (see set_relaxing) -- slower than the
+            // old free packet cooled.
+            QTimer::singleShot(20000, viewport, [viewport, &app] {
                 viewport->measure_energy_now();
                 QTimer::singleShot(1500, viewport, [viewport, &app] {
                     const int idx = viewport->last_measured_index();
@@ -112,7 +115,7 @@ void register_verification_arcs(QApplication& app, ViewportT* viewport) {
         run_when_manifold_ready(viewport, [viewport, &app] {
             viewport->toggle_decay();  // OFF: keep the state put
             viewport->set_relaxing();  // cool to 1s
-            QTimer::singleShot(12000, viewport, [viewport, &app] {
+            QTimer::singleShot(20000, viewport, [viewport, &app] {
                 const double z0 = viewport->mean_z();
                 viewport->set_real_time();
                 viewport->set_efield_e0(0.02);  // sub-ionization: clean polarization
@@ -135,7 +138,7 @@ void register_verification_arcs(QApplication& app, ViewportT* viewport) {
         run_when_manifold_ready(viewport, [viewport, &app] {
             viewport->toggle_decay();  // OFF: study the clean coherent flop
             viewport->set_relaxing();  // cool to 1s
-            QTimer::singleShot(11500, viewport, [viewport, &app] {
+            QTimer::singleShot(20000, viewport, [viewport, &app] {
                 viewport->set_real_time();
                 viewport->toggle_laser();  // cached: instant
                 // 256^3 runs ~3 au/s of sim time: the half-flop (pi/Omega
@@ -247,7 +250,7 @@ void register_verification_arcs(QApplication& app, ViewportT* viewport) {
                 return;
             }
             viewport->set_relaxing();  // cool to 1s for the X-pol pump
-            QTimer::singleShot(12000, viewport, [viewport, &app] {
+            QTimer::singleShot(20000, viewport, [viewport, &app] {
                 viewport->set_real_time();
                 viewport->toggle_laser();  // Z (cached: no block)
                 viewport->toggle_laser();  // -> X

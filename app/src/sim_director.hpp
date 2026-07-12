@@ -76,19 +76,19 @@ constexpr int kAtlasPairsPerFrame = 4;  // dipole pairs evaluated per paint
 // Hamiltonian; the s-state cusp gap shows up in the startup h-audit.
 inline ses::WavepacketSimulation make_simulation() {
     // +-80 Bohr / 256^3 (power-of-two FFT): holds the n <= 6 shell; no
-    // resident atlas. The packet is the n = 5 circular Kepler orbit
-    // (r0 = n^2, k = 1/n tangential -> L = 5, E ~ -1/(2 n^2)): it populates
-    // the UPPER half of the tracked manifold, orbits at T = 2 pi n^3, and
-    // its decay cascade exercises the m-resolved channel table.
+    // resident atlas. This Gaussian is only the pre-solve placeholder and
+    // the no-GPU fallback: the GPU path replaces it with a random n = 5
+    // shell superposition at the atlas finale (seed_n5_superposition) --
+    // a free packet, unlike a bound superposition, leaks past the box.
     const ses::Grid1D axis{-80.0, 80.0, 256};
     const ses::Grid3D grid{axis, axis, axis};
     return ses::WavepacketSimulation{ses::WavepacketSimulation::Config{
         grid,
         ses::regularized_coulomb_potential(grid, 1.0, ses::Vec3d{}),
-        ses::Vec3d{25.0, 0.0, 0.0},  // r0: the n = 5 orbit radius (n^2)
-        ses::Vec3d{8.0, 8.0, 8.0},   // sigma: >~ n keeps confinement energy small
-        ses::Vec3d{0.0, 0.2, 0.0},   // k0: tangential, 1/n
-        0.04,                        // dt
+        ses::Vec3d{3.0, 0.0, 0.0},  // r0: beside the nucleus
+        ses::Vec3d{1.5, 1.5, 1.5},  // sigma
+        ses::Vec3d{0.0, 0.4, 0.0},  // k0: tangential kick
+        0.04,                       // dt
     }};
 }
 
@@ -321,6 +321,27 @@ public:
         relax_prev_energy_ = 0.0;
         if (!use_gpu_path()) {
             ensure_cpu_current();  // CPU relax (Surface view / no GPU)
+            return;
+        }
+        // ITP converges to the lowest component PRESENT in the seed: a state
+        // orthogonal to 1s (the n = 5 shell superposition) would stall
+        // in-shell until fp32 noise leaks, and the plateau auto-complete
+        // would fire first. Mix in 1% of an s-symmetric Gaussian so the
+        // descent starts immediately. Only needed when the GPU state is
+        // authoritative -- a CPU-truth state gets re-uploaded next frame.
+        if (!cpu_is_truth_) {
+            const ses::Field3D g = ses::gaussian_wavepacket(
+                sim_.grid(), ses::Vec3d{}, ses::Vec3d{2.0, 2.0, 2.0},
+                ses::Vec3d{});
+            const int buf = engine_.create_state_buffer(g.data());
+            if (buf >= 0) {
+                engine_.add_state_into_psi(buf, 0.1, 0.0);
+                engine_.release_state(buf);
+                const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
+                if (np.sum > 0.0) {
+                    engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
+                }
+            }
         }
     }
 
@@ -337,6 +358,9 @@ public:
         cpu_is_truth_ = true;  // GPU state discarded with the reset
         gpu_time_ = 0.0;
         pending_gpu_steps_ = 0;
+        if (gpu_ok_ && manifold_ready() && mode_ == ViewMode::Cloud) {
+            seed_n5_superposition();  // a fresh random draw each reset
+        }
         stage_active_view();
     }
 
@@ -959,10 +983,64 @@ private:
                 // -> ~1.2 GB runtime, 512^3 feasible).
                 atom_.release_pair_cache(engine_);
                 atlas_done_ = true;
-                cpu_is_truth_ = true;  // resume the untouched wavepacket
+                seed_n5_superposition();  // the demo starts bound, in-shell
                 title_dirty_ = true;
             }
         }
+    }
+
+    // Seed psi with a random complex superposition of the n = 5 shell
+    // ([k5S, k6S), 25 bound states): contained by construction -- zero
+    // continuum component, so nothing can leave the box (a free packet
+    // could). The shell is near-degenerate, so the density is quasi-static
+    // and the visible dynamics is the decay cascade.
+    void seed_n5_superposition() {
+        if (!gpu_ok_ || !atom_.radial_ready()) {
+            cpu_is_truth_ = true;  // fallback: resume the CPU packet
+            return;
+        }
+        // Complex-Gaussian coefficients = uniform on the state sphere after
+        // the final renormalization; c[0]'s phase is folded out (global).
+        constexpr int kShell = k6S - k5S;
+        std::normal_distribution<double> gauss(0.0, 1.0);
+        std::array<ses::Complex<double>, kShell> c{};
+        for (auto& z : c) {
+            z = ses::Complex<double>{gauss(rng_), gauss(rng_)};
+        }
+        const double mag0 = std::sqrt(ses::norm_sq(c[0]));
+        if (mag0 > 0.0) {
+            const ses::Complex<double> rot{c[0].real() / mag0,
+                                           -c[0].imag() / mag0};
+            for (auto& z : c) {
+                z = z * rot;  // c[0] is now real >= 0
+            }
+        }
+        int buf = atom_.synth_transient(engine_, k5S);
+        if (buf < 0) {
+            cpu_is_truth_ = true;
+            return;
+        }
+        engine_.copy_into_psi(buf);
+        engine_.release_state(buf);
+        engine_.scale(static_cast<float>(c[0].real()));
+        for (int s = k5S + 1; s < k6S; ++s) {
+            buf = atom_.synth_transient(engine_, s);
+            if (buf < 0) {
+                continue;  // shell member missing: superpose the rest
+            }
+            engine_.add_state_into_psi(buf, c[s - k5S].real(),
+                                       c[s - k5S].imag());
+            engine_.release_state(buf);
+        }
+        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
+        if (np.sum > 0.0) {
+            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
+            peak_ = np.peak / np.sum;
+        }
+        norm_display_ = 1.0;
+        cpu_is_truth_ = false;  // the GPU state is the seed
+        write_display_texture();
+        volume_dirty_ = false;
     }
 
     // Pull the GPU-evolved state back into the CPU double session (fp32

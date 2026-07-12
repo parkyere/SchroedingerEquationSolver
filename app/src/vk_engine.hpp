@@ -604,6 +604,11 @@ public:
         return stats;
     }
 
+    // psi += (cre + i cim) * state: superposition seeding. fp32 states only.
+    void add_state_into_psi(int handle, double cre, double cim) {
+        subtract_projection(handle, -cre, -cim);
+    }
+
     // psi <- src (bitwise; the quantum-jump collapse path). fp32 states only.
     void copy_into_psi(int handle) {
         State* st = state_at(handle);
