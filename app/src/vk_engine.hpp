@@ -478,8 +478,8 @@ public:
 
     // e^{-H dtau} Strang steps with per-step renormalization. Each step: one
     // submission for the imaginary body + norm reduction + partials readback,
-    // a host-double finish, then a submission scaling by 1/sqrt(norm). The
-    // pre-renorm norm decays as e^{-2 E dtau} -> free energy estimate.
+    // a host-double finish on THAT readback, then the 1/sqrt(norm) scale
+    // submission. The pre-renorm norm decays as e^{-2 E dtau} -> free energy.
     RelaxStats relax_step(int nsteps) {
         RelaxStats stats;
         for (int s = 0; s < nsteps; ++s) {
@@ -492,13 +492,10 @@ public:
             barrier_compute_to_compute(shot.cb());
             norm_.bind(shot.cb(), norm_set_);
             vkCmdDispatch(shot.cb(), kGroups, 1, 1);
-            barrier_compute_to_transfer(shot.cb());
-            const VkBufferCopy down{0, 0, 2 * kGroups * sizeof(float)};
-            vkCmdCopyBuffer(shot.cb(), partials_.buf, staging_.buf, 1, &down);
-            barrier_transfer_to_host(shot.cb());
+            record_partials_readback(shot.cb());
             shot.submit_and_wait(*ctx_);
             shot.destroy(*ctx_);
-            stats = renormalize_and_estimate();
+            stats = finish_renorm_from_staging();
         }
         return stats;
     }
@@ -1715,13 +1712,11 @@ private:
         shot.destroy(*ctx_);
     }
 
-    // Norm reduction + readback -> host finish -> 1/sqrt(norm) scale. The
-    // pre-renorm norm decays as e^{-2 E dtau} -> free-energy estimate.
+    // Norm reduction + readback -> host finish -> 1/sqrt(norm) scale.
     RelaxStats renormalize_and_estimate() {
-        RelaxStats stats;
         OneShot shot;
         if (!shot.begin(*ctx_)) {
-            return stats;
+            return {};
         }
         norm_.bind(shot.cb(), norm_set_);
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
@@ -1729,8 +1724,16 @@ private:
         const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         if (!ok) {
-            return stats;
+            return {};
         }
+        return finish_renorm_from_staging();
+    }
+
+    // Host finish over partials ALREADY copied into staging_ (relax_step
+    // records the reduction inside the step submission), then the
+    // 1/sqrt(norm) scale.
+    RelaxStats finish_renorm_from_staging() {
+        RelaxStats stats;
         vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
                                 VK_WHOLE_SIZE);
         const float* p = static_cast<const float*>(staging_.mapped);
