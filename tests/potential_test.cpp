@@ -43,6 +43,18 @@ TEST(AbsorbingMask, OneInInteriorTapersToZeroAtWalls) {
     EXPECT_NEAR(m[static_cast<std::size_t>(g.flat(1, 8, 8))], s * s, 1e-12);
 }
 
+TEST(BarrierPotential, SlabAlongXExactAndZeroElsewhere) {
+    const ses::Grid1D ax{-8.0, 8.0, 16};  // h = 1: coords -8 .. 7
+    const ses::Grid3D g{ax, ax, ax};
+    // Rectangular slab: V = 0.25 for x in [0, 3), 0 elsewhere; y/z-free.
+    const std::vector<double> v = ses::barrier_potential(g, 0.25, 0.0, 3.0);
+    ASSERT_EQ(v.size(), static_cast<std::size_t>(g.size()));
+    EXPECT_EQ(v[static_cast<std::size_t>(g.flat(8, 8, 8))], 0.25);    // x = 0
+    EXPECT_EQ(v[static_cast<std::size_t>(g.flat(10, 2, 14))], 0.25);  // x = 2, any y/z
+    EXPECT_EQ(v[static_cast<std::size_t>(g.flat(7, 8, 8))], 0.0);     // x = -1
+    EXPECT_EQ(v[static_cast<std::size_t>(g.flat(11, 8, 8))], 0.0);    // x = 3: half-open
+}
+
 TEST(HarmonicPotential, ExactValuesAndMinimum) {
     // omega = 2, x0 = 1:  V(x) = 2 (x-1)^2
     const std::vector<double> v = ses::harmonic_potential(kGrid, 2.0, 1.0);
