@@ -77,6 +77,14 @@ struct DeviceContext {
     VkDevice device = VK_NULL_HANDLE;
     std::uint32_t queue_family = 0;
     VkQueue queue = VK_NULL_HANDLE;
+    // The engine's queue: a COMPUTE-only family when the hardware has one
+    // (async compute -- physics overlaps the graphics queue's rendering),
+    // else aliases the main queue/family (serial, exactly the old behavior).
+    // ALL engine submissions go here so engine resources never cross queue
+    // families (EXCLUSIVE sharing stays legal); only the display volume is
+    // created CONCURRENT across the two families.
+    std::uint32_t compute_family = 0;
+    VkQueue compute_queue = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;
     bool validation_active = false;
     char device_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE] = {};
@@ -103,6 +111,8 @@ struct DeviceContext {
         device = dev;
         queue_family = family;
         queue = q;
+        compute_family = family;  // adopted device: single shared queue
+        compute_queue = q;
         owns_device_ = false;
         volkLoadInstance(instance);
         volkLoadDevice(device);
@@ -260,17 +270,34 @@ struct DeviceContext {
             return Boot::error;
         }
 
+        // Async-compute family: COMPUTE without GRAPHICS (NVIDIA exposes
+        // one) so engine batches can overlap the graphics queue's rendering.
+        // Absent one, the engine queue aliases the main queue (serial).
+        compute_family = queue_family;
+        for (std::uint32_t i = 0; i < qf_count; ++i) {
+            const VkQueueFlags flags = qf[i].queueFlags;
+            if ((flags & VK_QUEUE_COMPUTE_BIT) != 0 &&
+                (flags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+                compute_family = i;
+                break;
+            }
+        }
+
         const float prio = 1.0f;
-        VkDeviceQueueCreateInfo qci{};
-        qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qci.queueFamilyIndex = queue_family;
-        qci.queueCount = 1;
-        qci.pQueuePriorities = &prio;
+        VkDeviceQueueCreateInfo qcis[2] = {};
+        qcis[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qcis[0].queueFamilyIndex = queue_family;
+        qcis[0].queueCount = 1;
+        qcis[0].pQueuePriorities = &prio;
+        qcis[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qcis[1].queueFamilyIndex = compute_family;
+        qcis[1].queueCount = 1;
+        qcis[1].pQueuePriorities = &prio;
         const char* kSwapchainExt = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
         VkDeviceCreateInfo dci{};
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        dci.queueCreateInfoCount = 1;
-        dci.pQueueCreateInfos = &qci;
+        dci.queueCreateInfoCount = compute_family != queue_family ? 2u : 1u;
+        dci.pQueueCreateInfos = qcis;
         if (present_surface != VK_NULL_HANDLE) {
             dci.enabledExtensionCount = 1;
             dci.ppEnabledExtensionNames = &kSwapchainExt;
@@ -280,6 +307,11 @@ struct DeviceContext {
         }
         volkLoadDevice(device);
         vkGetDeviceQueue(device, queue_family, 0, &queue);
+        if (compute_family != queue_family) {
+            vkGetDeviceQueue(device, compute_family, 0, &compute_queue);
+        } else {
+            compute_queue = queue;
+        }
 
         // VMA rides volk's dynamically fetched entry points.
         VmaVulkanFunctions fns{};
@@ -352,7 +384,8 @@ struct DeviceContext {
 
     bool create_storage_image_3d(std::uint32_t w, std::uint32_t h,
                                  std::uint32_t d, VkFormat format,
-                                 Image* out) {
+                                 Image* out,
+                                 bool share_across_queues = false) {
         VkImageCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ici.imageType = VK_IMAGE_TYPE_3D;
@@ -364,6 +397,15 @@ struct DeviceContext {
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
         ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // Written by the engine's compute queue, sampled by the graphics
+        // queue: CONCURRENT skips ownership-transfer barriers (host fences
+        // already order the accesses).
+        const std::uint32_t families[2] = {queue_family, compute_family};
+        if (share_across_queues && compute_family != queue_family) {
+            ici.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            ici.queueFamilyIndexCount = 2;
+            ici.pQueueFamilyIndices = families;
+        }
         VmaAllocationCreateInfo alc{};
         alc.usage = VMA_MEMORY_USAGE_AUTO;
         if (vmaCreateImage(allocator, &ici, &alc, &out->img, &out->alloc,
@@ -411,6 +453,15 @@ struct DeviceContext {
             oneshot_pool = VK_NULL_HANDLE;
             oneshot_cb = VK_NULL_HANDLE;
         }
+        if (compute_oneshot_fence != VK_NULL_HANDLE) {
+            vkDestroyFence(device, compute_oneshot_fence, nullptr);
+            compute_oneshot_fence = VK_NULL_HANDLE;
+        }
+        if (compute_oneshot_pool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device, compute_oneshot_pool, nullptr);
+            compute_oneshot_pool = VK_NULL_HANDLE;
+            compute_oneshot_cb = VK_NULL_HANDLE;
+        }
         if (allocator != VK_NULL_HANDLE) {
             vmaDestroyAllocator(allocator);
             allocator = VK_NULL_HANDLE;
@@ -436,11 +487,16 @@ struct DeviceContext {
         }
     }
 
-    // The OneShot scratch set (vk_compute.hpp): one persistent transient
-    // pool + primary cb + fence, reset per submission.
+    // The OneShot scratch sets (vk_compute.hpp): one persistent transient
+    // pool + primary cb + fence per queue, reset per submission. The main
+    // set serves the renderer/presenter (graphics queue); the compute set
+    // serves the engine (compute queue -- pools are per-family).
     VkCommandPool oneshot_pool = VK_NULL_HANDLE;
     VkCommandBuffer oneshot_cb = VK_NULL_HANDLE;
     VkFence oneshot_fence = VK_NULL_HANDLE;
+    VkCommandPool compute_oneshot_pool = VK_NULL_HANDLE;
+    VkCommandBuffer compute_oneshot_cb = VK_NULL_HANDLE;
+    VkFence compute_oneshot_fence = VK_NULL_HANDLE;
 
 private:
     bool owns_device_ = true;

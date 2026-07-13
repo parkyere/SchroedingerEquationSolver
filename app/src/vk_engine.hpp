@@ -456,16 +456,28 @@ public:
     // the psi -> volume store into the SAME submission (no extra fences).
     void step(int nsteps, bool absorb = false, bool bridge = false) {
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
-        Recorder r{shot.cb(), true};
-        // Strang batch with interior FULL kicks: e^{-iVdt/2} (kin e^{-iVdt})^
-        // {n-1} kin e^{-iVdt/2} -- the operator product is IDENTICAL to
-        // per-step half-kick pairs, one elementwise pass fewer per step.
-        // With absorb the mask rides the trailing kick of every step (fused
-        // kernel; diagonal factors commute exactly, per-step damping rate
-        // unchanged). Fallback without the fused kernel: separate passes.
+        const bool bridged = record_step_batch(shot.cb(), nsteps, absorb,
+                                               bridge);
+        shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (bridged) {
+            flip_volume();  // fence observed: the write is the display now
+        }
+    }
+
+    // step()'s content into an arbitrary command buffer. Strang batch with
+    // interior FULL kicks: e^{-iVdt/2} (kin e^{-iVdt})^{n-1} kin e^{-iVdt/2}
+    // -- the operator product is IDENTICAL to per-step half-kick pairs, one
+    // elementwise pass fewer per step. With absorb the mask rides the
+    // trailing kick of every step (fused kernel; diagonal factors commute
+    // exactly, per-step damping rate unchanged); fallback without the fused
+    // kernel: separate passes. Returns whether the bridge tail recorded.
+    bool record_step_batch(VkCommandBuffer cb, int nsteps, bool absorb,
+                           bool bridge) {
+        Recorder r{cb, true};
         const bool fuse = absorb && pd_half_set_ != VK_NULL_HANDLE;
         if (nsteps > 0) {
             r.dispatch(half_mul_, halfv_set_, mul_groups_);
@@ -482,9 +494,56 @@ public:
                 }
             }
         }
-        record_bridge_tail(shot.cb(), bridge);
-        shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
+        return record_bridge_tail(cb, bridge);
+    }
+
+    // Submit a step batch WITHOUT waiting: it runs on the compute queue
+    // while the graphics queue renders the previous display volume
+    // (ping-pong: the batch writes the OTHER image). Any engine OneShot
+    // submitted meanwhile serializes AFTER the batch on the same queue, so
+    // readouts stay correct; wait_async() reclaims the cb and flips the
+    // display at a host-observed completion point. Falls back to the
+    // blocking step() if the dedicated cb cannot be created.
+    void step_async(int nsteps, bool absorb = false, bool bridge = false) {
+        wait_async();
+        if (!ensure_async()) {
+            step(nsteps, absorb, bridge);
+            return;
+        }
+        vkResetCommandPool(ctx_->device, async_pool_, 0);
+        VkCommandBufferBeginInfo cbbi{};
+        cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(async_cb_, &cbbi);
+        async_bridged_ = record_step_batch(async_cb_, nsteps, absorb, bridge);
+        vkEndCommandBuffer(async_cb_);
+        vkResetFences(ctx_->device, 1, &async_fence_);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &async_cb_;
+        if (vkQueueSubmit(ctx_->compute_queue, 1, &si, async_fence_) !=
+            VK_SUCCESS) {
+            std::fprintf(stderr, "ses_vk::Engine: async submit failed\n");
+            async_bridged_ = false;
+            return;
+        }
+        async_pending_ = true;
+    }
+
+    // Wait for an in-flight async batch (no-op when none). Must run before
+    // the async cb is re-recorded and before the display flip.
+    void wait_async() {
+        if (!async_pending_) {
+            return;
+        }
+        vkWaitForFences(ctx_->device, 1, &async_fence_, VK_TRUE,
+                        10ull * 1000 * 1000 * 1000);
+        async_pending_ = false;
+        if (async_bridged_) {
+            flip_volume();
+            async_bridged_ = false;
+        }
     }
 
     // Driven Strang steps: kick(t) . step . kick(t+dt), theta = amplitude
@@ -513,7 +572,7 @@ public:
         vmaFlushAllocation(ctx_->allocator, kick_ubo_.alloc, 0, VK_WHOLE_SIZE);
 
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         Recorder r{shot.cb(), true};
@@ -525,9 +584,12 @@ public:
                            static_cast<std::uint32_t>(2 * s + 1) * kick_stride_);
             record_absorb(r, absorb);
         }
-        record_bridge_tail(shot.cb(), bridge);
+        const bool bridged = record_bridge_tail(shot.cb(), bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        if (bridged) {
+            flip_volume();  // fence observed: the write is the display now
+        }
     }
 
     // Swap the scalar potential (e.g. the field-augmented one before a
@@ -602,7 +664,7 @@ public:
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, theta);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         Recorder r{shot.cb(), true};
@@ -623,7 +685,7 @@ public:
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, half_angle);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         Recorder r{shot.cb(), true};
@@ -633,9 +695,12 @@ public:
             record_rotation(r, b, c);
             record_absorb(r, absorb);
         }
-        record_bridge_tail(shot.cb(), bridge);
+        const bool bridged = record_bridge_tail(shot.cb(), bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        if (bridged) {
+            flip_volume();  // fence observed: the write is the display now
+        }
     }
 
     // Imaginary-time weight tables (packed vec2(w,0)) + dtau/dV for the
@@ -704,7 +769,7 @@ public:
         }
         for (int s = 0; s < nsteps; ++s) {
             OneShot shot;
-            if (!shot.begin(*ctx_)) {
+            if (!shot.begin_compute(*ctx_)) {
                 return stats;
             }
             Recorder r{shot.cb(), true};
@@ -776,7 +841,7 @@ public:
             set = inner_any_set_;
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return {};
         }
         inner_.bind(shot.cb(), set);
@@ -808,7 +873,7 @@ public:
         }
         for (int s = 0; s < nsteps; ++s) {
             OneShot shot;
-            if (!shot.begin(*ctx_)) {
+            if (!shot.begin_compute(*ctx_)) {
                 return stats;
             }
             Recorder r{shot.cb(), true};
@@ -853,7 +918,7 @@ public:
             return;
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         copy_.bind(shot.cb(), st->copy_set);
@@ -877,21 +942,24 @@ public:
     }
 
     // Record the real-time batch tail: the psi -> volume bridge into an
-    // ALREADY-recording command buffer.
-    void record_bridge_tail(VkCommandBuffer cb, bool bridge) {
+    // ALREADY-recording command buffer. Returns whether it recorded (the
+    // caller flips the ping-pong at its host-observed completion point).
+    bool record_bridge_tail(VkCommandBuffer cb, bool bridge) {
         // store_set_ (not ensure_volume): lazy creation submits its own
         // OneShot, which must never run while THIS cb is recording (the
         // shared OneShot pool would be reset under it). The first bridge
         // always goes through write_psi_to_volume, which creates the volume
         // outside any recording.
-        if (bridge && store_set_ != VK_NULL_HANDLE) {
+        if (bridge && store_set_[vol_write_] != VK_NULL_HANDLE) {
             barrier_compute_to_compute(cb);
-            transition_volume(cb, VK_IMAGE_LAYOUT_GENERAL);
-            bridge_store_.bind(cb, store_set_);
+            transition_volume(cb, vol_write_, VK_IMAGE_LAYOUT_GENERAL);
+            bridge_store_.bind(cb, store_set_[vol_write_]);
             vkCmdDispatch(cb, mul_groups_, 1, 1);
-            transition_volume(cb,
+            transition_volume(cb, vol_write_,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            return true;
         }
+        return false;
     }
 
     void apply_mask(int handle) {
@@ -900,7 +968,7 @@ public:
             return;
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         mul_.bind(shot.cb(), st->mul_set);
@@ -913,7 +981,7 @@ public:
     NormPeak norm_and_peak() {
         NormPeak out;
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return out;
         }
         norm_.bind(shot.cb(), norm_set_);
@@ -936,35 +1004,37 @@ public:
     }
 
     // ---- SSBO -> 3D volume texture bridge (the renderer feed) -----------
-    // The RG16F volume the renderer samples (re, im). Created lazily;
-    // the renderer consumes volume_view() directly (FrameInput::psi_volume).
+    // The RG16F display volume (re, im): the last COMPLETED bridge write.
+    // NULL until the first write (the renderer falls back).
     VkImage volume_image() {
-        return ensure_volume() ? volume_.img : VK_NULL_HANDLE;
+        return vol_display_ >= 0 ? volume_[vol_display_].img : VK_NULL_HANDLE;
     }
     VkImageView volume_view() {
-        return ensure_volume() ? volume_.view : VK_NULL_HANDLE;
+        return vol_display_ >= 0 ? volume_[vol_display_].view : VK_NULL_HANDLE;
     }
 
-    // Copy psi into the volume (imageStore, one texel per cell). The engine
-    // OWNS the layout round-trip: the store runs in GENERAL, then the image
-    // is handed to SHADER_READ_ONLY_OPTIMAL -- the layout the renderer's
-    // sampled-image descriptors declare for it. Nobody else may transition
-    // this image.
+    // Copy psi into the write volume (imageStore, one texel per cell). The
+    // engine OWNS the layout round-trip: the store runs in GENERAL, then the
+    // image is handed to SHADER_READ_ONLY_OPTIMAL -- the layout the
+    // renderer's sampled-image descriptors declare for it. Nobody else may
+    // transition these images.
     bool write_psi_to_volume() {
         if (!ensure_volume()) {
             return false;
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
         barrier_compute_to_compute(shot.cb());  // psi vs prior compute
-        transition_volume(shot.cb(), VK_IMAGE_LAYOUT_GENERAL);
-        bridge_store_.bind(shot.cb(), store_set_);
+        transition_volume(shot.cb(), vol_write_, VK_IMAGE_LAYOUT_GENERAL);
+        bridge_store_.bind(shot.cb(), store_set_[vol_write_]);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        transition_volume(shot.cb(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        transition_volume(shot.cb(), vol_write_,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        flip_volume();  // fence observed: the write is the display now
         return true;
     }
 
@@ -978,27 +1048,32 @@ public:
             if (!ctx_->create_device_buffer(field_bytes_, &scratch_bridge_)) {
                 return false;
             }
-            load_set_ = arena_.allocate(*ctx_, bridge_load_.set_layout());
-            if (load_set_ == VK_NULL_HANDLE) {
-                return false;
+            for (int i = 0; i < 2; ++i) {
+                load_set_[i] = arena_.allocate(*ctx_, bridge_load_.set_layout());
+                if (load_set_[i] == VK_NULL_HANDLE) {
+                    return false;
+                }
+                arena_.write_buffer(*ctx_, load_set_[i], 0,
+                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                    scratch_bridge_.buf);
+                arena_.write_image(*ctx_, load_set_[i], 1, volume_[i].view);
+                arena_.write_buffer(*ctx_, load_set_[i], 2,
+                                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                    bridge_ubo_.buf, sizeof(BridgeParams));
             }
-            arena_.write_buffer(*ctx_, load_set_, 0,
-                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                scratch_bridge_.buf);
-            arena_.write_image(*ctx_, load_set_, 1, volume_.view);
-            arena_.write_buffer(*ctx_, load_set_, 2,
-                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                bridge_ubo_.buf, sizeof(BridgeParams));
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
         barrier_compute_to_compute(shot.cb());  // image written by the store
-        transition_volume(shot.cb(), VK_IMAGE_LAYOUT_GENERAL);  // imageLoad
-        bridge_load_.bind(shot.cb(), load_set_);
+        transition_volume(shot.cb(), vol_display_,
+                          VK_IMAGE_LAYOUT_GENERAL);  // imageLoad
+        bridge_load_.bind(shot.cb(), load_set_[vol_display_]);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         record_buffer_readback(shot.cb(), scratch_bridge_, field_bytes_);
+        transition_volume(shot.cb(), vol_display_,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         if (!ok) {
@@ -1065,7 +1140,7 @@ public:
             return ses::Vec3d{};
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return ses::Vec3d{};
         }
         force_.bind(shot.cb(), force_set_);
@@ -1152,7 +1227,7 @@ public:
         arena_.write_buffer(*ctx_, pack_set_, 0, storage, tmp.buf);
         arena_.write_buffer(*ctx_, pack_set_, 6, storage, st.buf.buf);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             ctx_->destroy_buffer(&st.buf);
             ctx_->destroy_buffer(&tmp);
             return -1;
@@ -1200,7 +1275,7 @@ public:
         arena_.write_buffer(*ctx_, dipole_set_, 3, storage, from_buf);
 
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return {};
         }
         dipole_.bind(shot.cb(), dipole_set_);
@@ -1293,7 +1368,7 @@ public:
             return;
         }
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         project_.bind(shot.cb(), proj_set_);
@@ -1350,7 +1425,7 @@ public:
         std::memcpy(scale_ubo_.mapped, &sp, sizeof(sp));
         vmaFlushAllocation(ctx_->allocator, scale_ubo_.alloc, 0, VK_WHOLE_SIZE);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         scale_.bind(shot.cb(), scale_set_);
@@ -1362,7 +1437,7 @@ public:
     // Interleaved RG floats, 2 per cell.
     bool readback(std::vector<float>& out) {
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
         barrier_compute_to_transfer(shot.cb());
@@ -1386,7 +1461,17 @@ public:
             return;
         }
         if (ctx_->device != VK_NULL_HANDLE) {
+            wait_async();
             vkDeviceWaitIdle(ctx_->device);
+        }
+        if (async_fence_ != VK_NULL_HANDLE) {
+            vkDestroyFence(ctx_->device, async_fence_, nullptr);
+            async_fence_ = VK_NULL_HANDLE;
+        }
+        if (async_pool_ != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(ctx_->device, async_pool_, nullptr);
+            async_pool_ = VK_NULL_HANDLE;
+            async_cb_ = VK_NULL_HANDLE;
         }
         release_vkfft();
         for (State& st : states_) {
@@ -1422,7 +1507,8 @@ public:
         ctx_->destroy_buffer(&decode_scratch_[0]);
         ctx_->destroy_buffer(&scratch_bridge_);
         ctx_->destroy_buffer(&bridge_ubo_);
-        ctx_->destroy_image(&volume_);
+        ctx_->destroy_image(&volume_[1]);
+        ctx_->destroy_image(&volume_[0]);
         ctx_->destroy_buffer(&proj_ubo_);
         ctx_->destroy_buffer(&glm_buf_);
         ctx_->destroy_buffer(&proj_binoff_buf_);
@@ -1609,7 +1695,7 @@ private:
         std::memcpy(staging_.mapped, data, bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
         const VkBufferCopy up{0, 0, bytes};
@@ -1741,7 +1827,7 @@ private:
         arena_.write_buffer(*ctx_, synth_any_set_, 5, storage, radial_buf_.buf);
 
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
         synth_.bind(shot.cb(), synth_any_set_);
@@ -1770,7 +1856,7 @@ private:
                             sizeof(MulParams));
         arena_.write_buffer(*ctx_, norm_any_set_, 2, storage, partials_.buf);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return np;
         }
         norm_.bind(shot.cb(), norm_any_set_);
@@ -1802,7 +1888,7 @@ private:
                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, scale_ubo_.buf,
                             sizeof(ConjParams));
         OneShot s2;
-        if (!s2.begin(*ctx_)) {
+        if (!s2.begin_compute(*ctx_)) {
             return np;
         }
         scale_.bind(s2.cb(), scale_any_set_);
@@ -1819,60 +1905,103 @@ private:
     // SSBO; the texture units convert fp16 texels to fp32 on sample, so
     // half the raymarch/occupancy/shadow traffic costs no shader math.
     bool ensure_volume() {
-        if (store_set_ != VK_NULL_HANDLE) {
+        if (store_set_[0] != VK_NULL_HANDLE) {
             return true;
-        }
-        if (!ctx_->create_storage_image_3d(
-                static_cast<std::uint32_t>(n_), static_cast<std::uint32_t>(n_),
-                static_cast<std::uint32_t>(n_), VK_FORMAT_R16G16_SFLOAT,
-                &volume_)) {
-            return false;
         }
         const BridgeParams bp{grid_.x.n, grid_.y.n, grid_.z.n, 0};
         if (!write_ubo(&bridge_ubo_, &bp, sizeof(bp))) {
             return false;
         }
-        store_set_ = arena_.allocate(*ctx_, bridge_store_.set_layout());
-        if (store_set_ == VK_NULL_HANDLE) {
-            return false;
+        for (int i = 0; i < 2; ++i) {
+            if (!ctx_->create_storage_image_3d(
+                    static_cast<std::uint32_t>(n_),
+                    static_cast<std::uint32_t>(n_),
+                    static_cast<std::uint32_t>(n_), VK_FORMAT_R16G16_SFLOAT,
+                    &volume_[i], /*share_across_queues=*/true)) {
+                return false;
+            }
+            store_set_[i] = arena_.allocate(*ctx_, bridge_store_.set_layout());
+            if (store_set_[i] == VK_NULL_HANDLE) {
+                store_set_[0] = VK_NULL_HANDLE;
+                return false;
+            }
+            arena_.write_buffer(*ctx_, store_set_[i], 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
+            arena_.write_image(*ctx_, store_set_[i], 1, volume_[i].view);
+            arena_.write_buffer(*ctx_, store_set_[i], 2,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                bridge_ubo_.buf, sizeof(BridgeParams));
         }
-        arena_.write_buffer(*ctx_, store_set_, 0,
-                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
-        arena_.write_image(*ctx_, store_set_, 1, volume_.view);
-        arena_.write_buffer(*ctx_, store_set_, 2,
-                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bridge_ubo_.buf,
-                            sizeof(BridgeParams));
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return false;
         }
-        image_layout_barrier(shot.cb(), volume_.img, VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_SHADER_READ_BIT |
-                                 VK_ACCESS_SHADER_WRITE_BIT);
+        for (int i = 0; i < 2; ++i) {
+            image_layout_barrier(shot.cb(), volume_[i].img,
+                                 VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_GENERAL,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_ACCESS_SHADER_READ_BIT |
+                                     VK_ACCESS_SHADER_WRITE_BIT);
+        }
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
-        volume_layout_ = VK_IMAGE_LAYOUT_GENERAL;
+        volume_layout_[0] = VK_IMAGE_LAYOUT_GENERAL;
+        volume_layout_[1] = VK_IMAGE_LAYOUT_GENERAL;
         return true;
     }
 
-    // Transition the volume to `to` if not already there. Conservative
-    // compute+fragment stages/access both sides (the queue is a combined
-    // graphics+compute family on every supported path).
-    void transition_volume(VkCommandBuffer cb, VkImageLayout to) {
-        if (volume_layout_ == to) {
+    // Transition volume image `idx` if not already in `to`. COMPUTE stages
+    // only: the engine may run on a compute-only queue, and the graphics
+    // queue's fragment reads are ordered by the host fence that observes
+    // the write before the render is submitted (ping-pong guarantees an
+    // in-flight batch writes the OTHER image).
+    void transition_volume(VkCommandBuffer cb, int idx, VkImageLayout to) {
+        if (volume_layout_[idx] == to) {
             return;
         }
-        const VkPipelineStageFlags stages =
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        const VkPipelineStageFlags stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         const VkAccessFlags access =
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        image_layout_barrier(cb, volume_.img, volume_layout_, to, stages,
-                             access, stages, access);
-        volume_layout_ = to;
+        image_layout_barrier(cb, volume_[idx].img, volume_layout_[idx], to,
+                             stages, access, stages, access);
+        volume_layout_[idx] = to;
+    }
+
+    // Lazily create the async batch's pool/cb/fence (compute family).
+    bool ensure_async() {
+        if (async_cb_ != VK_NULL_HANDLE) {
+            return true;
+        }
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx_->compute_family;
+        if (vkCreateCommandPool(ctx_->device, &cpci, nullptr, &async_pool_) !=
+            VK_SUCCESS) {
+            return false;
+        }
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool = async_pool_;
+        cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(ctx_->device, &cbai, &async_cb_) !=
+            VK_SUCCESS) {
+            return false;
+        }
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        return vkCreateFence(ctx_->device, &fci, nullptr, &async_fence_) ==
+               VK_SUCCESS;
+    }
+
+    // Called at a HOST-OBSERVED completion point of a bridge write: the
+    // written image becomes the display image, the other becomes writable.
+    void flip_volume() {
+        vol_display_ = vol_write_;
+        vol_write_ = 1 - vol_write_;
     }
 
     // Lazily build the fp16 codec resources: two decode scratch buffers (a
@@ -1915,7 +2044,7 @@ private:
                             decode_scratch_[slot].buf);
         arena_.write_buffer(*ctx_, unpack_set_, 6, storage, st->buf.buf);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return VK_NULL_HANDLE;
         }
         barrier_compute_to_compute(shot.cb());
@@ -1978,7 +2107,7 @@ private:
         std::memcpy(axpy_ubo_.mapped, &ap, sizeof(ap));
         vmaFlushAllocation(ctx_->allocator, axpy_ubo_.alloc, 0, VK_WHOLE_SIZE);
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return;
         }
         axpy_.bind(shot.cb(), st->axpy_set);
@@ -1990,7 +2119,7 @@ private:
     // Norm reduction + readback -> host finish -> 1/sqrt(norm) scale.
     RelaxStats renormalize_and_estimate() {
         OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!shot.begin_compute(*ctx_)) {
             return {};
         }
         norm_.bind(shot.cb(), norm_set_);
@@ -2215,7 +2344,7 @@ private:
         VkCommandPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pool_info.queueFamilyIndex = ctx_->queue_family;
+        pool_info.queueFamilyIndex = ctx_->compute_family;
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         if (vkCreateCommandPool(ctx_->device, &pool_info, nullptr,
@@ -2234,7 +2363,7 @@ private:
         conf.size[2] = static_cast<std::uint64_t>(grid_.z.n);
         conf.physicalDevice = &ctx_->phys_dev;
         conf.device = &ctx_->device;
-        conf.queue = &ctx_->queue;
+        conf.queue = &ctx_->compute_queue;  // the engine's queue (see ctx)
         conf.commandPool = &vkfft_pool_;
         conf.fence = &vkfft_fence_;
         conf.buffer = &vkfft_psi_buf_;
@@ -2338,8 +2467,22 @@ private:
     Kernel pack_;
     Kernel unpack_;
     DescriptorArena arena_;
-    DeviceContext::Image volume_{};
-    VkImageLayout volume_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    // Dedicated async-batch objects (compute family): step_async records
+    // here so the shared OneShot cb is never in flight unwaited.
+    VkCommandPool async_pool_ = VK_NULL_HANDLE;
+    VkCommandBuffer async_cb_ = VK_NULL_HANDLE;
+    VkFence async_fence_ = VK_NULL_HANDLE;
+    bool async_pending_ = false;
+    bool async_bridged_ = false;
+
+    // Ping-pong display volumes: bridges write volume_[vol_write_]; the
+    // renderer samples volume_[vol_display_] (the last HOST-OBSERVED
+    // completed write, so an in-flight async batch never races the render).
+    DeviceContext::Image volume_[2]{};
+    VkImageLayout volume_layout_[2] = {VK_IMAGE_LAYOUT_UNDEFINED,
+                                       VK_IMAGE_LAYOUT_UNDEFINED};
+    int vol_write_ = 0;
+    int vol_display_ = -1;  // -1: nothing written yet (renderer falls back)
     Buffer decode_scratch_[2]{};
     std::vector<State> states_;
     VkDeviceSize staging_bytes_ = 0;
@@ -2407,8 +2550,8 @@ private:
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
     VkDescriptorSet dipole_set_ = VK_NULL_HANDLE;
     VkDescriptorSet proj_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet store_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet load_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet store_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDescriptorSet load_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDescriptorSet pack_set_ = VK_NULL_HANDLE;
     VkDescriptorSet unpack_set_ = VK_NULL_HANDLE;
     VkDescriptorSet inner_any_set_ = VK_NULL_HANDLE;

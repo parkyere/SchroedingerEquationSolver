@@ -90,6 +90,8 @@ public:
         if (!use_gpu_path()) {
             return;
         }
+        // Reclaim last frame's async batch FIRST (display flip + cb reuse).
+        engine_.wait_async();
         if (cpu_is_truth_) {
             double pk = 0.0;
             for (const ses::Complex<double>& z : sim_.psi().data()) {
@@ -314,7 +316,10 @@ protected:
                 engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
             }
         }
-        engine_.step(pending_gpu_steps_, absorber_on_, true);
+        // ASYNC: overlaps this frame's render (previous display volume);
+        // next frame's run_frame waits and flips. after_step_batch hooks
+        // that read psi submit on the same queue and serialize behind it.
+        engine_.step_async(pending_gpu_steps_, absorber_on_, true);
         gpu_time_ += pending_gpu_steps_ * sim_.dt();
         after_step_batch();
     }

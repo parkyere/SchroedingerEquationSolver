@@ -1218,6 +1218,60 @@ bool check_engine_step(ses_vk::DeviceContext& ctx) {
     return all_pass;
 }
 
+// step_async: identical recorded content submitted WITHOUT waiting on the
+// compute queue (the app overlaps it with rendering). Two chained batches
+// with the display bridge exercise the internal wait + the volume ping-pong;
+// the result must match the CPU oracle like the blocking step, and the
+// display view must be live after the flip.
+bool check_engine_step_async(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-4.0, 4.0, 8};
+    const ses::Grid3D g{axis, axis, axis};
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const double dt = 0.02;
+    const ses::SplitOperator3D cpu_prop{g, v, dt};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.0, 0.0},
+                                                 ses::Vec3d{1.2, 1.2, 1.2},
+                                                 ses::Vec3d{0.0, 0.5, 0.0});
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, engine_blobs_8(), v, dt, psi0.data())) {
+        std::printf("engine step_async (raw Vulkan): engine init FAIL\n");
+        return false;
+    }
+    if (!engine.write_psi_to_volume()) {  // creates the ping-pong volumes
+        std::printf("engine step_async (raw Vulkan): volume FAIL\n");
+        return false;
+    }
+    ses::Field3D cpu = psi0;
+    cpu_prop.step(cpu, 20);
+    engine.step_async(10, false, true);
+    engine.step_async(10, false, true);  // waits + flips internally
+    engine.wait_async();
+    std::vector<float> gpu_out;
+    if (!engine.readback(gpu_out)) {
+        std::printf("engine step_async (raw Vulkan): readback FAIL\n");
+        return false;
+    }
+    double max_err = 0.0;
+    double max_mag = 0.0;
+    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+        max_err =
+            std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
+        max_err = std::max(max_err,
+                           std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
+        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
+    }
+    const double tol = 1e-4 + 1e-5 * max_mag;
+    const bool view_ok = engine.volume_view() != VK_NULL_HANDLE;
+    const bool pass = max_err < tol && view_ok;
+    std::printf(
+        "engine step_async 2x10 + ping-pong (raw Vulkan): max |gpu - cpu| = "
+        "%.3e (tol %.3e), display view %s  [%s]\n",
+        max_err, tol, view_ok ? "live" : "NULL", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 // Real absorber, per-step: step(5, absorb) vs CPU {Strang step, elementwise
 // mask multiply} x5 -- the damp interleaves with every step, so absorption
 // cannot depend on batch length. fp32 step tolerance.
@@ -2133,6 +2187,7 @@ int main() {
     failures += check_engine_dipole_between(ctx) ? 0 : 1;
     failures += check_engine_fp16_consumers(ctx) ? 0 : 1;
     failures += check_engine_bridge(ctx) ? 0 : 1;
+    failures += check_engine_step_async(ctx) ? 0 : 1;
 #ifdef SES_HAVE_VKFFT
     failures += check_native_vkfft_perf(ctx) ? 0 : 1;
 #endif

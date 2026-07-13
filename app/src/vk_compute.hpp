@@ -281,59 +281,34 @@ public:
     OneShot(const OneShot&) = delete;
     OneShot& operator=(const OneShot&) = delete;
 
+    // Renderer/presenter side: the main (graphics) queue's scratch set.
     bool begin(DeviceContext& ctx) {
-        if (ctx.oneshot_pool == VK_NULL_HANDLE) {
-            VkCommandPoolCreateInfo cpci{};
-            cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-            cpci.queueFamilyIndex = ctx.queue_family;
-            if (vkCreateCommandPool(ctx.device, &cpci, nullptr,
-                                    &ctx.oneshot_pool) != VK_SUCCESS) {
-                std::fprintf(stderr, "vk: command pool create failed\n");
-                return false;
-            }
-            VkCommandBufferAllocateInfo cbai{};
-            cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            cbai.commandPool = ctx.oneshot_pool;
-            cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            cbai.commandBufferCount = 1;
-            if (vkAllocateCommandBuffers(ctx.device, &cbai,
-                                         &ctx.oneshot_cb) != VK_SUCCESS) {
-                std::fprintf(stderr, "vk: command buffer alloc failed\n");
-                return false;
-            }
-            VkFenceCreateInfo fci{};
-            fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            if (vkCreateFence(ctx.device, &fci, nullptr, &ctx.oneshot_fence) !=
-                VK_SUCCESS) {
-                std::fprintf(stderr, "vk: fence create failed\n");
-                return false;
-            }
-        } else {
-            vkResetCommandPool(ctx.device, ctx.oneshot_pool, 0);
-        }
-        cb_ = ctx.oneshot_cb;
-        VkCommandBufferBeginInfo cbbi{};
-        cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb_, &cbbi);
-        return true;
+        return begin_on(ctx, ctx.oneshot_pool, ctx.oneshot_cb,
+                        ctx.oneshot_fence, ctx.queue_family, ctx.queue);
+    }
+
+    // Engine side: the compute queue's scratch set (a compute-only family
+    // when the hardware has one; falls back to the main queue).
+    bool begin_compute(DeviceContext& ctx) {
+        return begin_on(ctx, ctx.compute_oneshot_pool, ctx.compute_oneshot_cb,
+                        ctx.compute_oneshot_fence, ctx.compute_family,
+                        ctx.compute_queue);
     }
 
     VkCommandBuffer cb() const { return cb_; }
 
     bool submit_and_wait(DeviceContext& ctx) {
         vkEndCommandBuffer(cb_);
-        vkResetFences(ctx.device, 1, &ctx.oneshot_fence);
+        vkResetFences(ctx.device, 1, &fence_);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb_;
-        if (vkQueueSubmit(ctx.queue, 1, &si, ctx.oneshot_fence) != VK_SUCCESS) {
+        if (vkQueueSubmit(queue_, 1, &si, fence_) != VK_SUCCESS) {
             std::fprintf(stderr, "vk: queue submit failed\n");
             return false;
         }
-        if (vkWaitForFences(ctx.device, 1, &ctx.oneshot_fence, VK_TRUE,
+        if (vkWaitForFences(ctx.device, 1, &fence_, VK_TRUE,
                             10ull * 1000 * 1000 * 1000) != VK_SUCCESS) {
             std::fprintf(stderr, "vk: fence wait failed/timed out\n");
             return false;
@@ -345,7 +320,52 @@ public:
     void destroy(DeviceContext&) { cb_ = VK_NULL_HANDLE; }
 
 private:
+    bool begin_on(DeviceContext& ctx, VkCommandPool& pool,
+                  VkCommandBuffer& cb, VkFence& fence, std::uint32_t family,
+                  VkQueue queue) {
+        if (pool == VK_NULL_HANDLE) {
+            VkCommandPoolCreateInfo cpci{};
+            cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            cpci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            cpci.queueFamilyIndex = family;
+            if (vkCreateCommandPool(ctx.device, &cpci, nullptr, &pool) !=
+                VK_SUCCESS) {
+                std::fprintf(stderr, "vk: command pool create failed\n");
+                return false;
+            }
+            VkCommandBufferAllocateInfo cbai{};
+            cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            cbai.commandPool = pool;
+            cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cbai.commandBufferCount = 1;
+            if (vkAllocateCommandBuffers(ctx.device, &cbai, &cb) !=
+                VK_SUCCESS) {
+                std::fprintf(stderr, "vk: command buffer alloc failed\n");
+                return false;
+            }
+            VkFenceCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            if (vkCreateFence(ctx.device, &fci, nullptr, &fence) !=
+                VK_SUCCESS) {
+                std::fprintf(stderr, "vk: fence create failed\n");
+                return false;
+            }
+        } else {
+            vkResetCommandPool(ctx.device, pool, 0);
+        }
+        cb_ = cb;
+        fence_ = fence;
+        queue_ = queue;
+        VkCommandBufferBeginInfo cbbi{};
+        cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cb_, &cbbi);
+        return true;
+    }
+
     VkCommandBuffer cb_ = VK_NULL_HANDLE;
+    VkFence fence_ = VK_NULL_HANDLE;
+    VkQueue queue_ = VK_NULL_HANDLE;
 };
 
 // The hazard edges. Global memory barriers (not per-buffer) -- correct and

@@ -195,6 +195,12 @@ public:
     // Runs once per paint, BEFORE the widget frame (engine offscreen frames
     // are illegal mid-frame).
     void run_frame() override {
+        // Reclaim last frame's async batch FIRST: flips the display volume
+        // at a host-observed completion point and frees the batch cb. All
+        // readouts below then see the post-step psi.
+        if (gpu_ok_) {
+            engine_.wait_async();
+        }
         // The atlas build advances regardless of view mode: a Tab to Surface
         // during startup must not wedge solving() forever.
         if (gpu_ok_ && !atlas_done_) {
@@ -1099,8 +1105,10 @@ private:
             // The static E-field (if any) is folded into the half-potential,
             // so a plain step polarizes / field-ionizes correctly. The
             // absorbing mask damps after every step; the display bridge
-            // records into the same submission.
-            engine_.step(pending_gpu_steps_, absorber_on_, true);
+            // records into the same submission. ASYNC: the batch overlaps
+            // this frame's render (which samples the PREVIOUS display
+            // volume); next frame's run_frame waits and flips.
+            engine_.step_async(pending_gpu_steps_, absorber_on_, true);
         }
         // Time is credited where steps EXECUTE, so a stalled or
         // occluded paint cannot desync the clock from the state.
