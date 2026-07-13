@@ -2,26 +2,27 @@
     "version": "2.0.0",
     "tasks": [
         {
-            // Build ALL targets of the active preset via the CMake Tools
-            // extension -- it supplies the kit environment itself (on Windows
-            // a plain shell `cmake --build` fails without vcvars; the
-            // extension task does not). Ctrl+Shift+B.
-            "label": "cmake-build",
-            "type": "cmake",
-            "command": "build",
-            "group": { "kind": "build", "isDefault": true },
-            "problemMatcher": [],
-            "detail": "CMake Tools: build the active preset (all targets)"
+            // Zero-state F5 build: pinned to the linux-clang22 preset so a
+            // fresh clone builds WITHOUT touching the CMake Tools preset
+            // picker (its "active preset" is per-machine UI state, not a
+            // repo file). Configure runs only when the build tree is absent.
+            // Linux-only by design -- Windows uses Visual Studio directly.
+            "label": "cmake-build-app",
+            "type": "shell",
+            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22; cmake --build --preset linux-clang22 --target sesolver_app",
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": ["$gcc"],
+            "detail": "configure-if-needed + build sesolver_app (linux-clang22)"
         },
         {
-            // The F5 preLaunchTask: just the app target, for a fast edit ->
-            // F5 loop (vkcheck/tests build via cmake-build or ctest).
-            "label": "cmake-build-app",
-            "type": "cmake",
-            "command": "build",
-            "targets": ["sesolver_app"],
-            "problemMatcher": [],
-            "detail": "CMake Tools: build sesolver_app for the active preset"
+            // Ctrl+Shift+B: everything (tests + vkcheck + app), same pin.
+            "label": "cmake-build-all",
+            "type": "shell",
+            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22; cmake --build --preset linux-clang22",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": ["$gcc"],
+            "detail": "configure-if-needed + build everything (linux-clang22)"
         }
     ]
 }

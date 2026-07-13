@@ -2,22 +2,24 @@
     "version": "0.2.0",
     "configurations": [
         {
-            // F5 (VS Code on Linux): build sesolver_app for the active
-            // preset, then debug under gdb. The program path derives from the
-            // active configure preset, so no launch-target prompt appears.
+            // F5 (VS Code on Linux): configure-if-needed + build via the
+            // PINNED linux-clang22 preset (tasks.json), then debug under gdb.
+            // No CMake Tools state is involved anywhere -- a fresh clone F5s
+            // immediately (after the one-time vcpkg bootstrap). Note this is
+            // the Release preset: optimized code under the debugger (the
+            // Debug preset's 3D physics crawl).
             //
             // Windows uses Visual Studio directly (CMakePresets.json): set
-            // the startup item to the sesolver_app.exe CMake target -- VS's
-            // native debugger needs no config here. If VS surfaces THIS
-            // entry in its startup dropdown, ignore it (gdb cannot debug
-            // MSVC binaries).
+            // the startup item to the sesolver_app.exe CMake target. If VS
+            // surfaces THIS entry in its startup dropdown, ignore it (gdb
+            // cannot debug MSVC binaries).
             "name": "sesolver_app (Linux/gdb)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/build/${command:cmake.activeConfigurePresetName}/app/sesolver_app",
+            "program": "${workspaceFolder}/out/build/linux-clang22/app/sesolver_app",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/out/build/${command:cmake.activeConfigurePresetName}/app",
+            "cwd": "${workspaceFolder}/out/build/linux-clang22/app",
             "environment": [],
             "MIMode": "gdb",
             "miDebuggerPath": "gdb",
