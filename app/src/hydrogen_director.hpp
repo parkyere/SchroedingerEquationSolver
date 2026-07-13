@@ -45,11 +45,6 @@ enum class LaserPol { Off, Z, X };
 enum class PartialBasis { None, NShell, LTotal, MZ };
 
 constexpr int kStepsPerTick = 1;
-// Backlog cap: a stalled paint cannot spiral (time is credited at execution,
-// dropped ticks drop cleanly). The cap does NOT set the sim rate (measured:
-// 8 vs 32 gave the same au/s) -- only the per-paint block length, i.e. the
-// UI freeze. 4 halves the freeze of the old 8 at zero throughput cost.
-constexpr int kMaxPendingGpuSteps = 4;
 constexpr int kRelaxStepsPerTick = 1;
 constexpr double kRelaxDtau = 0.05;
 constexpr double kIsoFraction = 0.25;
@@ -289,20 +284,18 @@ public:
     // ---- the timer tick: accumulate work / CPU fallback stepping ----
     void tick() override {
         if (use_gpu_path()) {
-            // Steps execute in run_frame (once per paint); cap the backlog.
-            // The laser demo steps hotter so a flop fits in wall seconds.
-            // time_scale_ multiplies the SUPPLY and the cap together (same
-            // dt, more steps per rendered frame): visualized time runs Nx
-            // while the GPU keeps up, then saturates into a lower fps -- a
-            // bounded backlog, never a UI freeze.
+            // Steps execute in run_frame (once per paint). ONE tick's supply
+            // per rendered frame: a slow frame never bundles catch-up ticks
+            // (dropped ticks drop cleanly; time is credited at execution).
+            // Default = 1 step : 1 render; the laser demo and time_scale_
+            // scale the batch exactly as dialed.
             const int per_tick =
                 ((stepping_ == Stepping::RealTime && laser_pol_ != LaserPol::Off)
                      ? kLaserStepsPerTick
                      : kStepsPerTick) *
                 time_scale_;
             pending_gpu_steps_ =
-                std::min(pending_gpu_steps_ + per_tick,
-                         std::max(kMaxPendingGpuSteps, 2 * time_scale_));
+                std::min(pending_gpu_steps_ + per_tick, per_tick);
             if (++ticks_ % 10 == 0) {
                 gpu_title_due_ = true;
             }

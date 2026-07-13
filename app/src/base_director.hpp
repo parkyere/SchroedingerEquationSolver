@@ -35,7 +35,6 @@ enum class BaseViewMode { Cloud, Surface };
 enum class BaseStepping { RealTime, Relaxing };
 
 constexpr int kBaseStepsPerTick = 1;
-constexpr int kBaseMaxPendingSteps = 4;  // backlog cap, same rationale as hydrogen
 constexpr int kBaseRelaxStepsPerTick = 1;
 constexpr double kBaseRelaxDtau = 0.05;
 constexpr double kBaseIsoFraction = 0.25;
@@ -125,11 +124,12 @@ public:
 
     void tick() override {
         if (use_gpu_path()) {
-            // time_scale_ multiplies the supply AND the cap (same dt, more
-            // steps per rendered frame -- see scenario.hpp).
+            // ONE tick's supply per rendered frame (1 step : 1 render at
+            // default; time_scale_ scales the batch as dialed) -- a slow
+            // frame never bundles catch-up ticks, they drop cleanly.
+            const int per_tick = steps_per_tick() * time_scale_;
             pending_gpu_steps_ =
-                std::min(pending_gpu_steps_ + steps_per_tick() * time_scale_,
-                         std::max(kBaseMaxPendingSteps, 2 * time_scale_));
+                std::min(pending_gpu_steps_ + per_tick, per_tick);
             if (++ticks_ % 10 == 0) {
                 gpu_title_due_ = true;
             }
