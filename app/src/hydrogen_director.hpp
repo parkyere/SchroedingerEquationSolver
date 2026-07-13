@@ -18,6 +18,7 @@
 #include <core/imaginary_time.hpp>
 #include <core/magnetic.hpp>
 #include <core/marching_cubes.hpp>
+#include <core/measurement.hpp>
 #include <core/observables.hpp>
 #include <core/potential.hpp>
 #include <core/projection.hpp>
@@ -868,10 +869,6 @@ private:
                 prob[static_cast<std::size_t>(-sp.m + 5)] +=
                     ses::norm_sq(a.minus);
             }
-        }
-        double bound = 0.0;
-        for (double p : prob) {
-            bound += p;
         }
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         const double u = uniform(rng_);
