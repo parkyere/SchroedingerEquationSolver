@@ -18,7 +18,7 @@ namespace ses {
 // <grad V> = integral |psi|^2 grad V dr, grad V by central differences on the
 // periodic grid (exact for a harmonic well's linear force).
 inline Vec3d mean_potential_gradient(const Field3D& psi, const std::vector<double>& v,
-                                     const Grid3D& g) {
+                                     const Grid3D& g) noexcept {
     const int nx = g.x.n;
     const int ny = g.y.n;
     const int nz = g.z.n;
@@ -56,7 +56,7 @@ inline Vec3d mean_potential_gradient(const Field3D& psi, const std::vector<doubl
 }
 
 // Larmor radiated power P = (2/3) alpha^3 |d_ddot|^2 (atomic units).
-inline double larmor_power(const Vec3d& dipole_accel) {
+inline constexpr double larmor_power(const Vec3d& dipole_accel) noexcept {
     const double a3 = kFineStructureConstant * kFineStructureConstant *
                       kFineStructureConstant;
     return (2.0 / 3.0) * a3 * dot(dipole_accel, dipole_accel);

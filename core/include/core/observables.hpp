@@ -17,7 +17,7 @@
 namespace ses {
 
 // <x> = sum x_i |psi_i|^2 / sum |psi_i|^2   (grid weight h cancels)
-inline double mean_position(const Field1D& f) {
+inline double mean_position(const Field1D& f) noexcept {
     double num = 0.0;
     double den = 0.0;
     for (int i = 0; i < f.size(); ++i) {
@@ -29,7 +29,7 @@ inline double mean_position(const Field1D& f) {
 }
 
 // sigma_x = sqrt(<x^2> - <x>^2)
-inline double sigma_x(const Field1D& f) {
+inline double sigma_x(const Field1D& f) noexcept {
     double num = 0.0;
     double den = 0.0;
     for (int i = 0; i < f.size(); ++i) {
@@ -85,7 +85,7 @@ inline double mean_energy(const Field1D& f, const std::vector<double>& potential
 
 // ---- 3D observables (per-axis, scale-invariant) ----
 
-inline Vec3d mean_position(const Field3D& f) {
+inline Vec3d mean_position(const Field3D& f) noexcept {
     const Grid3D& g = f.grid();
     Vec3d num{};
     double den = 0.0;
@@ -103,7 +103,7 @@ inline Vec3d mean_position(const Field3D& f) {
     return Vec3d{num.x / den, num.y / den, num.z / den};
 }
 
-inline Vec3d sigma_position(const Field3D& f) {
+inline Vec3d sigma_position(const Field3D& f) noexcept {
     const Grid3D& g = f.grid();
     Vec3d num{};
     double den = 0.0;

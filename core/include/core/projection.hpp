@@ -29,8 +29,8 @@ struct ProjectorState {
 };
 
 // Flat index of a real harmonic (l, m): l in [0, l_max], m in [-l, l].
-inline int lm_index(int l, int m) { return l * l + (l + m); }
-inline int lm_count(int l_max) { return (l_max + 1) * (l_max + 1); }
+inline constexpr int lm_index(int l, int m) noexcept { return l * l + (l + m); }
+inline constexpr int lm_count(int l_max) noexcept { return (l_max + 1) * (l_max + 1); }
 
 struct RadialAngularProjection {
     std::vector<Complex<double>> amp;               // <n|psi>, unit-normalized
@@ -54,7 +54,7 @@ struct RadialBinIndex {
 // 0 if r < h (origin segment), else i0 = int(r/h - 1). Free function so the
 // GLSL kernel and the CPU sort provably share it.
 inline int radial_bin_key(const Grid3D& g, const RadialGrid& rgrid, int i, int j,
-                          int k) {
+                          int k) noexcept {
     const float hf = static_cast<float>(rgrid.h());
     const float rmaxf = static_cast<float>(rgrid.rmax);
     const float x = static_cast<float>(g.x.xmin) +

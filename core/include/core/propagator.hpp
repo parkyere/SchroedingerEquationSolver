@@ -41,7 +41,7 @@ public:
         }
     }
 
-    double dt() const { return dt_; }
+    double dt() const noexcept { return dt_; }
 
     void step(Field1D& psi, int nsteps = 1) const {
         assert(psi.data().size() == half_v_.size());
@@ -56,7 +56,7 @@ public:
 
 private:
     static void apply_phase(const std::vector<Complex<double>>& phase,
-                            std::vector<Complex<double>>& a) {
+                            std::vector<Complex<double>>& a) noexcept {
         for (std::size_t i = 0; i < a.size(); ++i) {
             a[i] = a[i] * phase[i];
         }
@@ -99,12 +99,12 @@ public:
         }
     }
 
-    double dt() const { return dt_; }
+    double dt() const noexcept { return dt_; }
 
     // Read access to the phase tables so the GPU engine consumes the TESTED
     // tables instead of re-deriving them.
-    const std::vector<Complex<double>>& half_potential_phase() const { return half_v_; }
-    const std::vector<Complex<double>>& kinetic_phase() const { return kinetic_; }
+    const std::vector<Complex<double>>& half_potential_phase() const noexcept { return half_v_; }
+    const std::vector<Complex<double>>& kinetic_phase() const noexcept { return kinetic_; }
 
     void step(Field3D& psi, int nsteps = 1) const {
         assert(psi.data().size() == half_v_.size());
@@ -120,7 +120,7 @@ public:
 private:
     // Elementwise (disjoint) multiply: threaded result is bitwise identical.
     static void apply_phase(const std::vector<Complex<double>>& phase,
-                            std::vector<Complex<double>>& a) {
+                            std::vector<Complex<double>>& a) noexcept {
         const std::int64_t n = static_cast<std::int64_t>(a.size());
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)

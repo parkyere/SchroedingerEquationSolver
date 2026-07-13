@@ -26,7 +26,7 @@ namespace mc_detail {
 
 // Central-difference gradient of the field at a grid point, one-sided at the
 // domain boundary (indices clamped).
-inline Vec3d gradient(const std::vector<double>& f, const Grid3D& g, int i, int j, int k) {
+inline Vec3d gradient(const std::vector<double>& f, const Grid3D& g, int i, int j, int k) noexcept {
     auto at = [&](int ii, int jj, int kk) {
         ii = ii < 0 ? 0 : (ii >= g.x.n ? g.x.n - 1 : ii);
         jj = jj < 0 ? 0 : (jj >= g.y.n ? g.y.n - 1 : jj);

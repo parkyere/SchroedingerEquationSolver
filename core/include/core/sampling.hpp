@@ -22,7 +22,7 @@ namespace sampling_detail {
 
 // Cell index and fractional offset along one axis; the cell is clamped to
 // [0, n-2] so the last grid point (t = 1 in the last cell) stays valid.
-inline std::pair<int, double> cell_and_t(double u, const Grid1D& axis) {
+inline std::pair<int, double> cell_and_t(double u, const Grid1D& axis) noexcept {
     const double s = (u - axis.xmin) / axis.spacing();
     int i = static_cast<int>(std::floor(s));
     i = std::clamp(i, 0, axis.n - 2);
@@ -31,7 +31,7 @@ inline std::pair<int, double> cell_and_t(double u, const Grid1D& axis) {
 
 }  // namespace sampling_detail
 
-inline Complex<double> sample_trilinear(const Field3D& f, Vec3d p) {
+inline Complex<double> sample_trilinear(const Field3D& f, Vec3d p) noexcept {
     const Grid3D& g = f.grid();
     const auto [i, tx] = sampling_detail::cell_and_t(p.x, g.x);
     const auto [j, ty] = sampling_detail::cell_and_t(p.y, g.y);

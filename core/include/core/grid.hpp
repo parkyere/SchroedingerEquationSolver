@@ -13,9 +13,9 @@ struct Grid1D {
     double xmax{};
     int n{};
 
-    constexpr int size() const { return n; }
-    constexpr double spacing() const { return (xmax - xmin) / n; }
-    constexpr double coord(int i) const { return xmin + i * spacing(); }
+    constexpr int size() const noexcept { return n; }
+    constexpr double spacing() const noexcept { return (xmax - xmin) / n; }
+    constexpr double coord(int i) const noexcept { return xmin + i * spacing(); }
 };
 
 // 3D periodic grid: three independent Grid1D axes.
@@ -27,9 +27,9 @@ struct Grid3D {
     Grid1D y{};
     Grid1D z{};
 
-    constexpr int size() const { return x.n * y.n * z.n; }
-    constexpr int flat(int i, int j, int k) const { return i + x.n * (j + y.n * k); }
-    constexpr double cell_volume() const { return x.spacing() * y.spacing() * z.spacing(); }
+    constexpr int size() const noexcept { return x.n * y.n * z.n; }
+    constexpr int flat(int i, int j, int k) const noexcept { return i + x.n * (j + y.n * k); }
+    constexpr double cell_volume() const noexcept { return x.spacing() * y.spacing() * z.spacing(); }
 };
 
 }  // namespace ses

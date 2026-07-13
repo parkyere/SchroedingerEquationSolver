@@ -23,7 +23,7 @@ using Complex = std::complex<T>;
 // QUALIFIED from outside namespace ses: ADL associates std::complex with
 // std, not ses.
 template <typename T>
-constexpr T norm_sq(const Complex<T>& z) {
+constexpr T norm_sq(const Complex<T>& z) noexcept {
     return std::norm(z);
 }
 

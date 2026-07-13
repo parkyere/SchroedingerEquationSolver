@@ -24,7 +24,7 @@ struct RayHit {
 
 // Slab-method ray/AABB intersection. Returns the RAW parameter interval:
 // t_near < 0 means the ray starts inside; callers clamp with max(t_near, 0).
-inline RayHit ray_box(Vec3d origin, Vec3d dir, Vec3d box_min, Vec3d box_max) {
+inline constexpr RayHit ray_box(Vec3d origin, Vec3d dir, Vec3d box_min, Vec3d box_max) noexcept {
     double t_near = -std::numeric_limits<double>::infinity();
     double t_far = std::numeric_limits<double>::infinity();
 
@@ -56,7 +56,7 @@ inline RayHit ray_box(Vec3d origin, Vec3d dir, Vec3d box_min, Vec3d box_max) {
 
 // Ray/sphere intersection (dir must be unit length). Raw [t_near, t_far]:
 // t_near < 0 when the ray starts inside; tangent rays report t_near == t_far.
-inline RayHit ray_sphere(Vec3d origin, Vec3d dir, Vec3d center, double radius) {
+inline RayHit ray_sphere(Vec3d origin, Vec3d dir, Vec3d center, double radius) noexcept {
     const Vec3d oc = origin - center;
     const double b = dot(oc, dir);
     const double c = dot(oc, oc) - radius * radius;
@@ -69,7 +69,7 @@ inline RayHit ray_sphere(Vec3d origin, Vec3d dir, Vec3d center, double radius) {
 }
 
 // Beer-Lambert emission-absorption opacity of one ray-march step.
-inline double sample_alpha(double density01, double absorbance, double step) {
+inline double sample_alpha(double density01, double absorbance, double step) noexcept {
     return 1.0 - std::exp(-absorbance * density01 * step);
 }
 
@@ -88,7 +88,7 @@ struct VolumeSample {
 // Premultiplied front-to-back accumulation:
 //     C += (1 - A) a c,   A += (1 - A) a.
 // Early exit once A saturates is a pure optimization (weights vanish).
-inline Rgba composite_front_to_back(const std::vector<VolumeSample>& samples) {
+inline Rgba composite_front_to_back(const std::vector<VolumeSample>& samples) noexcept {
     Rgba out{};
     for (const VolumeSample& s : samples) {
         const double w = (1.0 - out.a) * s.alpha;

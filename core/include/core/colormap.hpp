@@ -21,7 +21,7 @@ struct Rgb {
 
 // theta in [-pi, pi] (any real accepted; periodic). Full-saturation,
 // full-value HSV hue wheel.
-inline Rgb phase_color(double theta) {
+inline Rgb phase_color(double theta) noexcept {
     // Map theta to hue in [0, 6).
     double h = (theta + std::numbers::pi) / (2.0 * std::numbers::pi) * 6.0;
     h = h - 6.0 * std::floor(h / 6.0);
@@ -37,7 +37,7 @@ inline Rgb phase_color(double theta) {
 }
 
 // t in [0, 1], clamped. Dark navy -> white, each channel monotone.
-inline Rgb magnitude_color(double t) {
+inline Rgb magnitude_color(double t) noexcept {
     t = std::clamp(t, 0.0, 1.0);
     return {std::pow(t, 1.6), std::pow(t, 0.9), 0.25 + 0.75 * t};
 }

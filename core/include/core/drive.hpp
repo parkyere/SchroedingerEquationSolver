@@ -25,7 +25,7 @@ struct DipoleDrive {
 };
 
 // psi *= exp(-i * theta * (axis . r)) with theta = amplitude cos(omega t) dt/2.
-inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, double dt) {
+inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, double dt) noexcept {
     const double theta = d.amplitude * std::cos(d.omega * t) * 0.5 * dt;
     const Grid3D& g = psi.grid();
     for (int k = 0; k < g.z.n; ++k) {
@@ -43,7 +43,7 @@ inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, 
 
 namespace drive_detail {
 
-inline void multiply_table(Field3D& psi, const std::vector<Complex<double>>& table) {
+inline void multiply_table(Field3D& psi, const std::vector<Complex<double>>& table) noexcept {
     std::vector<Complex<double>>& a = psi.data();
     for (std::size_t i = 0; i < a.size(); ++i) {
         a[i] = a[i] * table[i];

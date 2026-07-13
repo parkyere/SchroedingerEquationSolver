@@ -21,7 +21,7 @@ namespace ses {
 
 namespace rotation_detail {
 
-inline const Grid1D& axis_grid(const Grid3D& g, int a) {
+inline constexpr const Grid1D& axis_grid(const Grid3D& g, int a) noexcept {
     return a == 0 ? g.x : (a == 1 ? g.y : g.z);
 }
 
@@ -74,7 +74,7 @@ inline void axis_shear(Field3D& f, int freq_axis, int coord_axis, double coeff) 
 
 // The two in-plane axes (b, c) for a rotation about `axis`, right-handed
 // (b x c = axis): z->(x,y), x->(y,z), y->(z,x).
-inline void plane_axes(int axis, int& b, int& c) {
+inline constexpr void plane_axes(int axis, int& b, int& c) noexcept {
     b = (axis + 1) % 3;
     c = (axis + 2) % 3;
 }

@@ -51,7 +51,7 @@ public:
 
 private:
     static void apply_weight(const std::vector<double>& weight,
-                             std::vector<Complex<double>>& a) {
+                             std::vector<Complex<double>>& a) noexcept {
         for (std::size_t i = 0; i < a.size(); ++i) {
             a[i] = weight[i] * a[i];
         }
@@ -93,8 +93,8 @@ public:
 
     // Read access to the weight tables so the GPU relax path consumes the
     // TESTED tables instead of re-deriving them.
-    const std::vector<double>& half_potential_weight() const { return half_v_; }
-    const std::vector<double>& kinetic_weight() const { return kinetic_; }
+    const std::vector<double>& half_potential_weight() const noexcept { return half_v_; }
+    const std::vector<double>& kinetic_weight() const noexcept { return kinetic_; }
 
     void relax(Field3D& psi, int nsteps) const {
         assert(psi.data().size() == half_v_.size());
@@ -135,7 +135,7 @@ public:
 private:
     // Elementwise (disjoint) scale: threaded result is bitwise identical.
     static void apply_weight(const std::vector<double>& weight,
-                             std::vector<Complex<double>>& a) {
+                             std::vector<Complex<double>>& a) noexcept {
         const std::int64_t n = static_cast<std::int64_t>(a.size());
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)

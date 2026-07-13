@@ -67,12 +67,12 @@ public:
         return center;
     }
 
-    double time() const { return steps_ * dt_; }
-    double dt() const { return dt_; }
-    const Grid3D& grid() const { return grid_; }
-    const Field3D& psi() const { return psi_; }
-    const std::vector<double>& potential() const { return potential_; }
-    const SplitOperator3D& propagator() const { return propagator_; }
+    constexpr double time() const noexcept { return steps_ * dt_; }
+    constexpr double dt() const noexcept { return dt_; }
+    const Grid3D& grid() const noexcept { return grid_; }
+    const Field3D& psi() const noexcept { return psi_; }
+    const std::vector<double>& potential() const noexcept { return potential_; }
+    const SplitOperator3D& propagator() const noexcept { return propagator_; }
 
     // Replace the state (e.g. hand a GPU-evolved field back to this CPU
     // session). Grid sizes must match.

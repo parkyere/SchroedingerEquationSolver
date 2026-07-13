@@ -19,8 +19,8 @@ struct RadialGrid {
     double rmax{};
     int n{};  // interior points; r_i = (i+1) h, h = rmax / (n+1)
 
-    double h() const { return rmax / (n + 1); }
-    double r(int i) const { return (i + 1) * h(); }
+    constexpr double h() const noexcept { return rmax / (n + 1); }
+    constexpr double r(int i) const noexcept { return (i + 1) * h(); }
 };
 
 // Symmetric tridiagonal radial Hamiltonian for angular momentum l.
@@ -47,7 +47,7 @@ inline RadialHamiltonian radial_hamiltonian(const RadialGrid& g,
 
 // Sturm count: the number of eigenvalues strictly below e, via the sign
 // count of the LDL^T pivots q_i = (d_i - e) - off^2 / q_{i-1}.
-inline int sturm_count_below(const RadialHamiltonian& ham, double e) {
+inline int sturm_count_below(const RadialHamiltonian& ham, double e) noexcept {
     const double off2 = ham.off * ham.off;
     int count = 0;
     double q = 1.0;
@@ -98,7 +98,7 @@ inline void shifted_thomas_solve(const RadialHamiltonian& ham, double sigma,
     }
 }
 
-inline void normalize_u(std::vector<double>& u, double h) {
+inline void normalize_u(std::vector<double>& u, double h) noexcept {
     double s = 0.0;
     for (const double x : u) {
         s += x * x;
@@ -155,7 +155,7 @@ inline RadialState radial_eigenstate(const RadialGrid& g, const RadialHamiltonia
 
 // Rint = integral u1(r) r u2(r) dr (midpoint rule on the uniform grid).
 inline double radial_dipole_integral(const RadialGrid& g, const std::vector<double>& u1,
-                                     const std::vector<double>& u2) {
+                                     const std::vector<double>& u2) noexcept {
     double s = 0.0;
     for (int i = 0; i < g.n; ++i) {
         s += u1[static_cast<std::size_t>(i)] * g.r(i) * u2[static_cast<std::size_t>(i)];
@@ -166,7 +166,7 @@ inline double radial_dipole_integral(const RadialGrid& g, const std::vector<doub
 // Level-averaged E1 rate (summed over final m/polarizations, averaged over
 // initial m): A = einstein_a(omega, max(l,l')/(2 l_upper + 1) * Rint^2).
 inline double einstein_a_level(double omega, int l_upper, int l_lower,
-                               double radial_integral) {
+                               double radial_integral) noexcept {
     const double lmax = static_cast<double>(std::max(l_upper, l_lower));
     const double factor = lmax / (2.0 * l_upper + 1.0);
     return einstein_a(omega, factor * radial_integral * radial_integral);

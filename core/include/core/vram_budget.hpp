@@ -20,11 +20,11 @@ inline constexpr std::int64_t kVramUnknown = -1;
 // textures/framebuffers/driver overhead; out_fits is set false when even fp16
 // overflows (caller warns). An unmeasurable budget never silently degrades
 // fidelity: it keeps fp32.
-inline GpuPrecision choose_state_precision(std::int64_t free_vram_bytes,
-                                           int num_states,
-                                           std::int64_t bytes_per_state_fp32,
-                                           std::int64_t headroom_bytes,
-                                           bool* out_fits = nullptr) {
+inline constexpr GpuPrecision choose_state_precision(std::int64_t free_vram_bytes,
+                                                     int num_states,
+                                                     std::int64_t bytes_per_state_fp32,
+                                                     std::int64_t headroom_bytes,
+                                                     bool* out_fits = nullptr) noexcept {
     const auto set_fits = [&](bool v) {
         if (out_fits != nullptr) {
             *out_fits = v;

@@ -26,10 +26,10 @@ public:
         : dt_(dt), half_angle_(0.5 * bfield * (0.5 * dt)), axis_(axis),
           veff_(build_veff(g, v, bfield, axis)), core_(g, veff_, dt) {}
 
-    double dt() const { return dt_; }
+    constexpr double dt() const noexcept { return dt_; }
 
     // V + (B^2/8) rho_perp^2 (the diamagnetic-augmented potential the core uses).
-    const std::vector<double>& effective_potential() const { return veff_; }
+    const std::vector<double>& effective_potential() const noexcept { return veff_; }
 
     // One magnetic step: R(a) . core-step . R(a), a = (B/2)(dt/2). Chained
     // half-rotations between successive core steps merge into the full

@@ -23,7 +23,7 @@ namespace ses {
 // index n (project psi onto phi_n), or -1 for the 1 - sum(P) deficit
 // (continuum / untracked outcome: the caller projects the manifold OUT,
 // psi <- (1 - P)|psi>, so bound populations do not survive the verdict).
-inline int sample_energy_eigenstate(const std::vector<double>& populations, double u) {
+inline int sample_energy_eigenstate(const std::vector<double>& populations, double u) noexcept {
     double cum = 0.0;
     for (std::size_t n = 0; n < populations.size(); ++n) {
         cum += populations[n];
@@ -35,7 +35,7 @@ inline int sample_energy_eigenstate(const std::vector<double>& populations, doub
 }
 
 // First flat index whose cumulative probability exceeds u * total.
-inline int sample_collapse_index(const Field3D& psi, double u) {
+inline int sample_collapse_index(const Field3D& psi, double u) noexcept {
     double total = 0.0;
     for (const Complex<double>& z : psi.data()) {
         total += norm_sq(z);
@@ -112,7 +112,7 @@ struct SignedM {
     Complex<double> minus;
 };
 inline SignedM signed_m_amplitudes(Complex<double> c_cos,
-                                   Complex<double> c_sin) {
+                                   Complex<double> c_sin) noexcept {
     const double inv = 1.0 / std::sqrt(2.0);
     const Complex<double> i{0.0, 1.0};
     return SignedM{inv * (c_cos - i * c_sin), inv * (c_cos + i * c_sin)};
@@ -125,7 +125,7 @@ struct RealPair {
     Complex<double> c_cos;
     Complex<double> c_sin;
 };
-inline RealPair pair_from_signed_m(Complex<double> a, int sign) {
+inline RealPair pair_from_signed_m(Complex<double> a, int sign) noexcept {
     const double inv = 1.0 / std::sqrt(2.0);
     const Complex<double> i{0.0, 1.0};
     return RealPair{inv * a, static_cast<double>(sign) * inv * (i * a)};
@@ -154,7 +154,7 @@ inline int sample_povm_index(const Field3D& psi, double sigma_m, double u) {
 // psi <- psi * exp(-|r - center|^2 / (4 sigma_m^2)), renormalized. Same
 // amplitude convention as gaussian_wavepacket, so Gaussian x Gaussian
 // posteriors are analytic.
-inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) {
+inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) noexcept {
     const Grid3D& g = psi.grid();
     const double inv4s2 = 1.0 / (4.0 * sigma_m * sigma_m);
     for (int k = 0; k < g.z.n; ++k) {

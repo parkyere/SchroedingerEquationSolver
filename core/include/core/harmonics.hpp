@@ -29,7 +29,7 @@ namespace ses {
 //        +1 -> x(21z^4-14z^2r^2+r^4), +2 -> (x^2-y^2)z(3z^2-r^2),
 //        +3 -> x(x^2-3y^2)(9z^2-r^2), +4 -> (x^4-6x^2y^2+y^4)z,
 //        +5 -> x(x^4-10x^2y^2+5y^4)
-inline double real_spherical_harmonic(int l, int m, double x, double y, double z) {
+inline double real_spherical_harmonic(int l, int m, double x, double y, double z) noexcept {
     constexpr double kPi = 3.14159265358979323846;
     const double r2 = x * x + y * y + z * z;
     if (l == 0) {
@@ -132,7 +132,7 @@ inline double real_spherical_harmonic(int l, int m, double x, double y, double z
 // fill_orbital writes the UN-normalized field; synthesize_orbital normalizes.
 // CONTRACT: core/projection.hpp's deposit shape mirrors this interpolation.
 inline void fill_orbital(Field3D& psi, const Grid3D& g, const RadialGrid& rg,
-                         const std::vector<double>& u, int l, int m) {
+                         const std::vector<double>& u, int l, int m) noexcept {
     const double h = rg.h();
     // Disjoint z-slabs: bitwise-deterministic parallelism (project rule).
 #pragma omp parallel for

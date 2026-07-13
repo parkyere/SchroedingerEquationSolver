@@ -62,12 +62,12 @@ inline DipoleMatrixElement dipole_matrix_element(const Field3D& f, const Field3D
     return DipoleMatrixElement{dv * dx, dv * dy, dv * dz};
 }
 
-inline double dipole_strength_sq(const DipoleMatrixElement& d) {
+inline constexpr double dipole_strength_sq(const DipoleMatrixElement& d) noexcept {
     return std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
 }
 
 // Einstein A coefficient (atomic units): the spontaneous decay rate.
-inline double einstein_a(double omega, double dipole_sq) {
+inline constexpr double einstein_a(double omega, double dipole_sq) noexcept {
     const double a3 = kFineStructureConstant * kFineStructureConstant *
                       kFineStructureConstant;
     return (4.0 / 3.0) * a3 * omega * omega * omega * dipole_sq;
@@ -123,7 +123,7 @@ struct ChannelPick {
 // occupy zero measure and can never be picked; the final fallthrough guards
 // u2 rounding at the top of the last stratum.
 inline ChannelPick pick_decay_channel(const std::vector<double>& rates, double dt,
-                                      double u1, double u2) {
+                                      double u1, double u2) noexcept {
     double total = 0.0;
     for (const double r : rates) {
         total += r;
