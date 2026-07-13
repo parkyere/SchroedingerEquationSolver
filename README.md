@@ -57,6 +57,9 @@ engine is testable without a GUI, and the shell stays thin and replaceable
   vulkan-1 import library, which is forbidden in the volk world).
 - Network access on first configure (vcpkg fetches sources; without the vcpkg
   toolchain, GoogleTest falls back to CMake `FetchContent`).
+- **Windows: clone to a reasonably short path** (e.g. `C:\src\...`). vcpkg's
+  buildtrees nest deep enough to blow the 260-char `MAX_PATH` limit from a
+  deeply nested clone ("Filename too long" during `vcpkg install`).
 
 ## Build & test
 
