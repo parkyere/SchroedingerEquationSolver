@@ -194,6 +194,12 @@ public:
         last_tick_ = SDL_GetTicks();
         while (!exit_requested_) {
             pump_events();
+            if (!headless_) {
+                // Acquire EARLY: the FIFO/vsync wait lands here, so the sim
+                // batch and the scene render below run during time that used
+                // to be dead inside present().
+                presenter_.acquire();
+            }
             const std::uint64_t now = SDL_GetTicks();
             // Fixed-cadence ticks (the Qt shell's 16 ms QTimer), coalescing
             // after stalls instead of spiraling.

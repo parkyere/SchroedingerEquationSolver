@@ -101,12 +101,15 @@ public:
     // SDL resize events land here; the swapchain rebuilds on the next frame.
     void request_resize() { resize_requested_ = true; }
 
-    // Acquire -> [clear pass: fullscreen blit of scene_view (if any) + the
-    // UI callback] -> submit -> present. One frame in flight, fence-waited
-    // (the scene itself was already rendered synchronously before this).
-    // Returns false when the frame was skipped (minimized / mid-rebuild).
-    bool present(VkImageView scene_view,
-                 const std::function<void(VkCommandBuffer)>& record_ui) {
+    // Acquire the next swapchain image. Called EARLY (loop top, before the
+    // frame's compute): the FIFO/vsync backpressure wait then overlaps the
+    // sim batch and the scene render instead of trailing them as dead time.
+    // Idempotent until present() consumes the image; returns false when
+    // minimized / mid-rebuild (present() will then skip the frame).
+    bool acquire() {
+        if (acquired_) {
+            return true;
+        }
         if (swapchain_ == VK_NULL_HANDLE || resize_requested_) {
             resize_requested_ = false;
             if (!recreate_swapchain()) {
@@ -116,10 +119,9 @@ public:
         if (extent_.width == 0 || extent_.height == 0) {
             return false;  // minimized
         }
-
-        std::uint32_t idx = 0;
         VkResult r = vkAcquireNextImageKHR(ctx_->device, swapchain_, UINT64_MAX,
-                                           acquire_sem_, VK_NULL_HANDLE, &idx);
+                                           acquire_sem_, VK_NULL_HANDLE,
+                                           &acquired_idx_);
         if (r == VK_ERROR_OUT_OF_DATE_KHR) {
             resize_requested_ = true;
             return false;
@@ -127,6 +129,22 @@ public:
         if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
             return false;
         }
+        acquired_ = true;
+        return true;
+    }
+
+    // [clear pass: fullscreen blit of scene_view (if any) + the UI callback]
+    // -> submit -> present, on the image acquire() got (acquiring here if the
+    // shell did not). One frame in flight, fence-waited (the scene itself was
+    // already rendered synchronously before this). Returns false when the
+    // frame was skipped (minimized / mid-rebuild).
+    bool present(VkImageView scene_view,
+                 const std::function<void(VkCommandBuffer)>& record_ui) {
+        if (!acquire()) {
+            return false;
+        }
+        const std::uint32_t idx = acquired_idx_;
+        acquired_ = false;  // consumed by this frame's submission
 
         if (scene_view != last_view_) {
             update_descriptor(scene_view);
@@ -189,7 +207,7 @@ public:
         pi.swapchainCount = 1;
         pi.pSwapchains = &swapchain_;
         pi.pImageIndices = &idx;
-        r = vkQueuePresentKHR(ctx_->queue, &pi);
+        const VkResult r = vkQueuePresentKHR(ctx_->queue, &pi);
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
             resize_requested_ = true;
         }
@@ -571,6 +589,8 @@ private:
     VkFence fence_ = VK_NULL_HANDLE;
     VkCommandPool pool_ = VK_NULL_HANDLE;
     VkCommandBuffer cb_ = VK_NULL_HANDLE;
+    std::uint32_t acquired_idx_ = 0;  // valid while acquired_
+    bool acquired_ = false;
     bool resize_requested_ = false;
 };
 

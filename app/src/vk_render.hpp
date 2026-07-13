@@ -314,12 +314,20 @@ public:
         vkCmdEndRenderPass(cb);
 
         // Per-frame post parameters, then the post chain in the same cb.
+        // Interactive (non-accumulating) frames SKIP the accumulation pass --
+        // it degenerates to a full-res copy -- and feed the bloom + composite
+        // from the scene color directly; accum_ goes stale, so the FIRST
+        // accumulating frame runs the pass in reset mode to re-seed it
+        // (accum_frames_ was already incremented above: ==1 on that frame).
+        const bool use_accum = in.accumulate && !force_accum_reset_;
+        if (!use_accum) {
+            accum_frames_ = 0;  // a skipped/reset frame restarts the window
+        }
         struct alignas(16) AccumParams {
             std::int32_t accumulate;
             std::int32_t p0, p1, p2;
         };
-        const AccumParams ap{
-            (in.accumulate && !force_accum_reset_) ? 1 : 0, 0, 0, 0};
+        const AccumParams ap{(use_accum && accum_frames_ > 1) ? 1 : 0, 0, 0, 0};
         force_accum_reset_ = false;
         std::memcpy(accum_ubo_.mapped, &ap, sizeof(ap));
         vmaFlushAllocation(ctx_->allocator, accum_ubo_.alloc, 0,
@@ -334,7 +342,7 @@ public:
         std::memcpy(compose_ubo_.mapped, &cp, sizeof(cp));
         vmaFlushAllocation(ctx_->allocator, compose_ubo_.alloc, 0,
                            VK_WHOLE_SIZE);
-        record_post(cb);
+        record_post(cb, use_accum);
 
         const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
@@ -808,12 +816,18 @@ private:
                 up_set_[i] = arena_.allocate(*ctx_, up_k_.set_layout());
             }
             compose_set_ = arena_.allocate(*ctx_, compose_k_.set_layout());
+            // Interactive-frame variants: bloom + composite read the scene
+            // color directly (the accumulation pass is skipped then).
+            down0_color_set_ = arena_.allocate(*ctx_, down_k_.set_layout());
+            compose_color_set_ = arena_.allocate(*ctx_, compose_k_.set_layout());
             if (accum_set_ == VK_NULL_HANDLE ||
                 down_set_[0] == VK_NULL_HANDLE ||
                 down_set_[1] == VK_NULL_HANDLE ||
                 down_set_[2] == VK_NULL_HANDLE ||
                 up_set_[0] == VK_NULL_HANDLE || up_set_[1] == VK_NULL_HANDLE ||
-                compose_set_ == VK_NULL_HANDLE) {
+                compose_set_ == VK_NULL_HANDLE ||
+                down0_color_set_ == VK_NULL_HANDLE ||
+                compose_color_set_ == VK_NULL_HANDLE) {
                 return false;
             }
         }
@@ -844,6 +858,19 @@ private:
                              VK_IMAGE_LAYOUT_GENERAL);
         arena_.write_image(*ctx_, compose_set_, 2, present_.view);
         arena_.write_buffer(*ctx_, compose_set_, 3, ubo, compose_ubo_.buf, 16);
+        // The interactive variants read the scene color where the accum-fed
+        // sets read accum_ (same params UBOs).
+        arena_.write_sampled(*ctx_, down0_color_set_, 0, color_.view, samp_3d_,
+                             VK_IMAGE_LAYOUT_GENERAL);
+        arena_.write_image(*ctx_, down0_color_set_, 1, bloom_[0].view);
+        arena_.write_buffer(*ctx_, down0_color_set_, 2, ubo, down_ubo_[0].buf,
+                            16);
+        arena_.write_image(*ctx_, compose_color_set_, 0, color_.view);
+        arena_.write_sampled(*ctx_, compose_color_set_, 1, bloom_[0].view,
+                             samp_3d_, VK_IMAGE_LAYOUT_GENERAL);
+        arena_.write_image(*ctx_, compose_color_set_, 2, present_.view);
+        arena_.write_buffer(*ctx_, compose_color_set_, 3, ubo,
+                            compose_ubo_.buf, 16);
 
         // Constant down-pass params (bright threshold on the first).
         struct alignas(16) DownParams {
@@ -1230,21 +1257,25 @@ private:
         return true;
     }
 
-    // Record the post chain into the frame's command buffer: accumulation,
-    // the dual-filter bloom pyramid, and the tonemapped composite into the
-    // present image (handed to SHADER_READ_ONLY for the shell).
-    void record_post(VkCommandBuffer cb) {
+    // Record the post chain into the frame's command buffer: accumulation
+    // (only while accumulating -- interactive frames feed the bloom and the
+    // composite from the scene color directly), the dual-filter bloom
+    // pyramid, and the tonemapped composite into the present image (handed
+    // to SHADER_READ_ONLY for the shell).
+    void record_post(VkCommandBuffer cb, bool use_accum) {
         auto dispatch_2d = [cb](const Kernel& k, VkDescriptorSet set,
                                 std::uint32_t w, std::uint32_t h) {
             k.bind(cb, set);
             vkCmdDispatch(cb, (w + 15) / 16, (h + 15) / 16, 1);
         };
-        // Scene (GENERAL after the pass) -> accumulation buffer.
-        dispatch_2d(accum_k_, accum_set_, width_, height_);
-        barrier_compute_to_compute(cb);
+        if (use_accum) {
+            // Scene (GENERAL after the pass) -> accumulation buffer.
+            dispatch_2d(accum_k_, accum_set_, width_, height_);
+            barrier_compute_to_compute(cb);
+        }
         // Bright pass + down pyramid.
-        dispatch_2d(down_k_, down_set_[0], bloom_size_[0].width,
-                    bloom_size_[0].height);
+        dispatch_2d(down_k_, use_accum ? down_set_[0] : down0_color_set_,
+                    bloom_size_[0].width, bloom_size_[0].height);
         barrier_compute_to_compute(cb);
         dispatch_2d(down_k_, down_set_[1], bloom_size_[1].width,
                     bloom_size_[1].height);
@@ -1267,7 +1298,8 @@ private:
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_ACCESS_SHADER_WRITE_BIT);
         }
-        dispatch_2d(compose_k_, compose_set_, width_, height_);
+        dispatch_2d(compose_k_, use_accum ? compose_set_ : compose_color_set_,
+                    width_, height_);
         image_layout_barrier(cb, present_.img, VK_IMAGE_LAYOUT_GENERAL,
                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1738,6 +1770,9 @@ private:
                                     VK_NULL_HANDLE};
     VkDescriptorSet up_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDescriptorSet compose_set_ = VK_NULL_HANDLE;
+    // Interactive-frame variants: read the scene color instead of accum_.
+    VkDescriptorSet down0_color_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet compose_color_set_ = VK_NULL_HANDLE;
     Buffer accum_ubo_{};
     Buffer down_ubo_[3]{};
     Buffer compose_ubo_{};
