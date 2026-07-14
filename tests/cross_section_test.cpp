@@ -1,8 +1,10 @@
 // RED: the pure logic behind the cross-section display feature -- the clip
 // plane's ray-interval math, the slice quad geometry, and the slice colour
 // mapping. These are the SINGLE SOURCE OF TRUTH the GLSL (volume.frag,
-// slice.vert, slice.frag) mirrors; the GPU path is pinned to them by the
-// vkcheck slice oracle. Only the final composited image stays visual-only.
+// slice.vert, slice.frag) mirrors textually. Verification posture matches
+// volume.frag / core/volume.hpp / volume_test.cpp: the CPU logic is pinned
+// here; the fragment shader's transcription is verified by the dump-frame
+// composite, NOT by a per-fragment GPU oracle (there is none).
 
 #include <core/colormap.hpp>
 #include <core/complex.hpp>
