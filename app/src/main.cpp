@@ -166,10 +166,6 @@ public:
             ImGui_ImplVulkan_Shutdown();
             ImGui_ImplSDL3_Shutdown();
             ImGui::DestroyContext();
-            if (imgui_pool_ != VK_NULL_HANDLE) {
-                vkDestroyDescriptorPool(vk_ctx_.device, imgui_pool_, nullptr);
-                imgui_pool_ = VK_NULL_HANDLE;
-            }
             presenter_.release();
         }
         vk_renderer_.destroy();
@@ -378,19 +374,6 @@ private:
         ImGui::StyleColorsDark();
         ImGui_ImplSDL3_InitForVulkan(window_);
 
-        const VkDescriptorPoolSize size{
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
-        VkDescriptorPoolCreateInfo pi{};
-        pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        pi.maxSets = 16;
-        pi.poolSizeCount = 1;
-        pi.pPoolSizes = &size;
-        if (vkCreateDescriptorPool(vk_ctx_.device, &pi, nullptr,
-                                   &imgui_pool_) != VK_SUCCESS) {
-            fatal_shell_error("render resources",
-                              "ImGui descriptor pool create failed");
-        }
         ImGui_ImplVulkan_InitInfo info{};
         info.ApiVersion = VK_API_VERSION_1_4;
         info.Instance = vk_ctx_.instance;
@@ -398,7 +381,11 @@ private:
         info.Device = vk_ctx_.device;
         info.QueueFamily = vk_ctx_.queue_family;
         info.Queue = vk_ctx_.queue;
-        info.DescriptorPool = imgui_pool_;
+        // ImGui 1.92's Vulkan backend allocates SAMPLED_IMAGE + SAMPLER
+        // descriptors (not COMBINED_IMAGE_SAMPLER); DescriptorPoolSize > 0 with
+        // DescriptorPool left null lets the backend own a correctly typed pool
+        // (and destroy it in ImGui_ImplVulkan_Shutdown).
+        info.DescriptorPoolSize = 16;
         info.PipelineInfoMain.RenderPass = presenter_.render_pass();
         info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         info.MinImageCount = presenter_.min_image_count();
@@ -598,7 +585,6 @@ private:
 
     SDL_Window* window_ = nullptr;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-    VkDescriptorPool imgui_pool_ = VK_NULL_HANDLE;
 
     std::vector<std::string> args_;
     ses_shell::Scheduler sched_;
