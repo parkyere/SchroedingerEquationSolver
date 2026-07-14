@@ -1356,22 +1356,28 @@ public:
         // Make the vertex/indirect writes visible to the render submission
         // (same queue, later submit: execution order is queue order, memory
         // needs this availability edge).
-        VkBufferMemoryBarrier bmb[2]{};
+        // sync2 lets each buffer carry its OWN dst stage instead of a shared
+        // OR'd mask (attribute-input for the vbuf, draw-indirect for the args).
+        VkBufferMemoryBarrier2 bmb[2]{};
         for (int i = 0; i < 2; ++i) {
-            bmb[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            bmb[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            bmb[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            bmb[i].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            bmb[i].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             bmb[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             bmb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             bmb[i].size = VK_WHOLE_SIZE;
         }
-        bmb[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        bmb[0].dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT;
+        bmb[0].dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
         bmb[0].buffer = mc_vbuf_.buf;
-        bmb[1].dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        bmb[1].dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        bmb[1].dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
         bmb[1].buffer = mc_indirect_.buf;
-        vkCmdPipelineBarrier(shot.cb(), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
-                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                             0, 0, nullptr, 2, bmb, 0, nullptr);
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.bufferMemoryBarrierCount = 2;
+        dep.pBufferMemoryBarriers = bmb;
+        vkCmdPipelineBarrier2(shot.cb(), &dep);
         record_buffer_readback(shot.cb(), mc_indirect_,
                                6 * sizeof(std::uint32_t));
         const bool ok = shot.submit_and_wait(*ctx_);

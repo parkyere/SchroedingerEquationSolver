@@ -615,33 +615,25 @@ inline bool dump_scene_bmp(ses_vk::DeviceContext& ctx, VkImage img,
             ctx.destroy_buffer(&host);
             return false;
         }
-        VkImageMemoryBarrier to_src{};
-        to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        to_src.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        to_src.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        to_src.image = img;
-        to_src.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(shot.cb(), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &to_src);
+        // Reuse the sync2 image_layout_barrier helper instead of hand-rolling
+        // the two transitions (the round-trip: sample-optimal -> transfer-src,
+        // copy, back).
+        ses_vk::image_layout_barrier(
+            shot.cb(), img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {w, h, 1};
         vkCmdCopyImageToBuffer(shot.cb(), img,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, host.buf,
                                1, &region);
-        VkImageMemoryBarrier back = to_src;
-        back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        back.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        back.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(shot.cb(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &back);
+        ses_vk::image_layout_barrier(
+            shot.cb(), img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         shot.submit_and_wait(ctx);
     }
 
