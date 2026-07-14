@@ -368,58 +368,71 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
 };
 
-// The hazard edges. Global memory barriers (not per-buffer) -- correct and
-// simple; granularity can be revisited if profiling ever demands it.
-inline void memory_barrier(VkCommandBuffer cb, VkPipelineStageFlags src_stage,
-                           VkAccessFlags src_access,
-                           VkPipelineStageFlags dst_stage,
-                           VkAccessFlags dst_access) {
-    VkMemoryBarrier mb{};
-    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+// The hazard edges. Global memory barriers (not per-buffer) via
+// synchronization2 (core Vulkan 1.3, enabled in create_device): one
+// VkMemoryBarrier2 in a VkDependencyInfo, 64-bit stage/access masks in a
+// single struct. Perf-identical to the sync1 form on this single-compute-stage
+// chain; the win is one modern sync vocabulary. Callers passing 1.x stage/
+// access bit constants still compile -- those bits are value-equal to their
+// _2 aliases for the masks used here.
+inline void memory_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 src_stage,
+                           VkAccessFlags2 src_access,
+                           VkPipelineStageFlags2 dst_stage,
+                           VkAccessFlags2 dst_access) {
+    VkMemoryBarrier2 mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    mb.srcStageMask = src_stage;
     mb.srcAccessMask = src_access;
+    mb.dstStageMask = dst_stage;
     mb.dstAccessMask = dst_access;
-    vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 1, &mb, 0, nullptr, 0,
-                         nullptr);
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.memoryBarrierCount = 1;
+    dep.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cb, &dep);
 }
 
 inline void barrier_transfer_to_compute(VkCommandBuffer cb) {
-    memory_barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   VK_ACCESS_TRANSFER_WRITE_BIT,
-                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    memory_barrier(cb, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                   VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
 }
 
 // Read-after-write between dispatches sharing a buffer -- required between
 // every aliasing dispatch of the step body.
 inline void barrier_compute_to_compute(VkCommandBuffer cb) {
-    memory_barrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_SHADER_WRITE_BIT,
-                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    memory_barrier(cb, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_2_SHADER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
 }
 
 inline void barrier_compute_to_transfer(VkCommandBuffer cb) {
-    memory_barrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   VK_ACCESS_TRANSFER_READ_BIT);
+    memory_barrier(cb, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                   VK_ACCESS_2_SHADER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                   VK_ACCESS_2_TRANSFER_READ_BIT);
 }
 
 inline void barrier_transfer_to_host(VkCommandBuffer cb) {
-    memory_barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                   VK_ACCESS_HOST_READ_BIT);
+    memory_barrier(cb, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                   VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                   VK_ACCESS_2_HOST_READ_BIT);
 }
 
-// Image layout transition (one mip, one layer, color aspect).
+// Image layout transition (one mip, one layer, color aspect), synchronization2.
 inline void image_layout_barrier(VkCommandBuffer cb, VkImage img,
                                  VkImageLayout from, VkImageLayout to,
-                                 VkPipelineStageFlags src_stage,
-                                 VkAccessFlags src_access,
-                                 VkPipelineStageFlags dst_stage,
-                                 VkAccessFlags dst_access) {
-    VkImageMemoryBarrier ib{};
-    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                                 VkPipelineStageFlags2 src_stage,
+                                 VkAccessFlags2 src_access,
+                                 VkPipelineStageFlags2 dst_stage,
+                                 VkAccessFlags2 dst_access) {
+    VkImageMemoryBarrier2 ib{};
+    ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    ib.srcStageMask = src_stage;
     ib.srcAccessMask = src_access;
+    ib.dstStageMask = dst_stage;
     ib.dstAccessMask = dst_access;
     ib.oldLayout = from;
     ib.newLayout = to;
@@ -427,8 +440,11 @@ inline void image_layout_barrier(VkCommandBuffer cb, VkImage img,
     ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     ib.image = img;
     ib.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr,
-                         1, &ib);
+    VkDependencyInfo dep{};
+    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep.imageMemoryBarrierCount = 1;
+    dep.pImageMemoryBarriers = &ib;
+    vkCmdPipelineBarrier2(cb, &dep);
 }
 
 }  // namespace ses_vk
