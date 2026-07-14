@@ -66,6 +66,7 @@ constexpr int kLaserStepsPerTick = 6;  // the pump demo runs hotter than 1x
 
 constexpr int kAtlasMontageFrames = 3;  // frames each synthesized orbital shows
 constexpr int kAtlasPairsPerFrame = 4;  // dipole pairs evaluated per paint
+constexpr int kFlashTicks = 25;  // photon-flash duration AND the fade divisor
 
 // Potential: bare -Z/r with only the nucleus cell regularized (analytic cell
 // average), so synthesized orbitals stay eigenstates of the propagated
@@ -678,7 +679,8 @@ public:
         if (flash_ticks_ <= 0) {
             return 0.0f;
         }
-        const float v = static_cast<float>(flash_ticks_) / 25.0f;
+        const float v =
+            static_cast<float>(flash_ticks_) / static_cast<float>(kFlashTicks);
         --flash_ticks_;
         return v;
     }
@@ -1175,7 +1177,7 @@ private:
                         atom_.channels()[static_cast<std::size_t>(pick.channel)];
                     atom_.collapse_onto(engine_, ch.to);
                     reset_ionized_tally();
-                    flash_ticks_ = 25;
+                    flash_ticks_ = kFlashTicks;
                     ++photon_count_;
                     last_jump_ = strf("%s->%s", kStateSpec[ch.from].name,
                                       kStateSpec[ch.to].name);
@@ -1310,9 +1312,6 @@ private:
             bfield_axis_ == uploaded_axis_) {
             return;
         }
-        uploaded_e0_ = efield_e0_;
-        uploaded_b_ = bfield_b_;
-        uploaded_axis_ = bfield_axis_;
         std::vector<double> v = sim_.potential();
         if (efield_e0_ > 0.0) {
             const ses::Grid3D& g = sim_.grid();
@@ -1331,11 +1330,20 @@ private:
                                                   bfield_b_, bfield_axis_};
             v = mprop.effective_potential();
         }
-        engine_.set_potential(v);
-        // Ehrenfest mean force must differentiate the SAME V psi evolves
-        // under: a stationary state of the FULL Hamiltonian reads
-        // <grad V> = 0 (no fake Larmor power with fields on).
-        engine_.set_potential_gradient(v);
+        // The half-potential psi evolves under AND the Ehrenfest gradient must
+        // stay in sync (a stationary full-Hamiltonian state reads <grad V> = 0
+        // -- no fake Larmor power with fields on). On upload failure fall back
+        // to CPU like init_compute rather than evolving under a stale/desynced
+        // pair, and commit the memo only on success so a retry is not blocked.
+        if (!engine_.set_potential(v) || !engine_.set_potential_gradient(v)) {
+            std::fprintf(stderr, "engine: field-table upload failed -- "
+                                 "falling back to CPU stepping\n");
+            gpu_ok_ = false;
+            return;
+        }
+        uploaded_e0_ = efield_e0_;
+        uploaded_b_ = bfield_b_;
+        uploaded_axis_ = bfield_axis_;
     }
 
     // Free the OWNED transient deflation buffers (synthesized at relax-start).
