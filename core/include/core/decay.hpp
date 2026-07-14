@@ -95,6 +95,42 @@ inline JumpResult quantum_jump(Field3D& psi, const Field3D& excited, const Field
     return JumpResult{false, p};
 }
 
+// MCWF NO-JUMP evolution over an interval dt, conditioned on no photon: each
+// amplitude decays by its survival factor exp(-gamma_n dt/2), then the state
+// renormalizes (non-Hermitian H_eff + renorm). Identity on a pure eigenstate;
+// a superposition's faster-decaying components drain away relative to the
+// stable ones (the visible "breathe-out" between jumps). This is the single
+// source of truth the app's GPU apply_mcwf_damping mirrors in the {|n>} basis.
+inline std::vector<Complex<double>> nojump_damped_amplitudes(
+    const std::vector<Complex<double>>& c, const std::vector<double>& gamma,
+    double dt) {
+    std::vector<Complex<double>> out(c.size());
+    double n2 = 0.0;
+    for (std::size_t i = 0; i < c.size(); ++i) {
+        const double f = std::exp(-0.5 * gamma[i] * dt);
+        out[i] = f * c[i];
+        n2 += norm_sq(out[i]);
+    }
+    if (n2 > 0.0) {
+        const double inv = 1.0 / std::sqrt(n2);
+        for (Complex<double>& z : out) {
+            z = inv * z;
+        }
+    }
+    return out;
+}
+
+// Running bound-survival multiplier for one real-time interval. The state
+// norm fell from `baseline` to `post_norm` because of (a) absorbed flux at
+// the walls (= ionization) AND (b) any KNOWN non-absorber loss such as the
+// MCWF H_eff damping above. Only (a) is ionization, so add the known loss
+// back before ratioing. bound_survival *= this; 1 - bound_survival is the
+// cumulative ionized fraction. Returns 1 (nothing escaped) if baseline<=0.
+inline double bound_survival_ratio(double post_norm, double known_loss,
+                                   double baseline) {
+    return baseline > 0.0 ? (post_norm + known_loss) / baseline : 1.0;
+}
+
 // ---- multi-channel jumps ----------------------------------------------------
 //
 // Channels compete as independent Poisson processes: channel m fires at rate

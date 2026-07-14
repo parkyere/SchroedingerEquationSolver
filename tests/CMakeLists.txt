@@ -42,6 +42,7 @@ add_executable(sesolver_tests
     imaginary_time_test.cpp
     magnetic_test.cpp
     marching_cubes_test.cpp
+    mcwf_test.cpp
     measurement_test.cpp
     multichannel_decay_test.cpp
     potential_test.cpp
@@ -49,6 +50,7 @@ add_executable(sesolver_tests
     propagator_tables_test.cpp
     propagator_test.cpp
     radial_test.cpp
+    regularized_coulomb_test.cpp
     relaxation_in_simulation_test.cpp
     rotation_test.cpp
     sampling_test.cpp

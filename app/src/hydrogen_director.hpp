@@ -1030,9 +1030,12 @@ private:
 
     // MCWF no-jump damping: psi += (e^{-gamma_n dt/2} - 1) c_n |n> for each
     // occupied excited state, then renormalize -- the non-Hermitian H_eff
-    // conditioned on "no photon detected". A pure eigenstate is unchanged
-    // (the renorm cancels its damping); a superposition visibly breathes its
-    // excited fraction out between jumps. Cost control: only states with
+    // conditioned on "no photon detected". This realizes ses::
+    // nojump_damped_amplitudes (core/decay.hpp, unit-tested) in the {|n>}
+    // basis on the grid state (the renorm here spans the full field, not just
+    // the tracked amplitudes). A pure eigenstate is unchanged (the renorm
+    // cancels its damping); a superposition visibly breathes its excited
+    // fraction out between jumps. Cost control: only states with
     // pop >= 1e-3, the strongest kMcwfMaxStates per tick (one transient
     // synthesis + axpy each) -- exact once the cloud concentrates onto a
     // few states, approximate-but-convergent for the 91-state seed.
@@ -1119,7 +1122,8 @@ private:
             // Ionization tally: back out the analytically known H_eff loss
             // so this renorm only launders the damping, not absorbed flux.
             if (absorber_on_ && norm_baseline_ > 0.0) {
-                bound_survival_ *= (np.sum + damp_loss) / norm_baseline_;
+                bound_survival_ *= ses::bound_survival_ratio(
+                    np.sum, damp_loss, norm_baseline_);
             }
             if (np.sum > 0.0) {
                 engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
@@ -1143,7 +1147,8 @@ private:
             // would otherwise silently pump the lost norm back into the
             // cloud. Signed ratio: fp32 drift cancels as a zero-mean walk.
             if (absorber_on_ && np.sum > 0.0 && norm_baseline_ > 0.0) {
-                bound_survival_ *= np.sum / norm_baseline_;
+                bound_survival_ *=
+                    ses::bound_survival_ratio(np.sum, 0.0, norm_baseline_);
             }
             // fp32 drift renormalization: the split-operator is unitary in
             // exact arithmetic; pinning norm = 1 removes numerical decay.

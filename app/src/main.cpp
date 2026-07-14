@@ -361,6 +361,10 @@ public:
     int bfield_axis() const { return hydrogen_ ? hydrogen_->bfield_axis() : 2; }
     // Cross-section controls are only meaningful over the volume cloud.
     bool cloud_view() const { return director_ && director_->cloud(); }
+    // Cumulative absorbed (ionized) fraction since the last collapse/prep.
+    double ionized_fraction() const {
+        return hydrogen_ ? hydrogen_->ionized_fraction() : 0.0;
+    }
     // Selftest hook: turn on both cross-section planes (z-normal, through
     // the nucleus) -- Re-map slice so lobe signs read clearly.
     void enable_cross_section_demo() {
