@@ -15,11 +15,12 @@
 //   - even fp16 overflows     -> Fp16, but out_fits=false (caller warns);
 //   - unmeasurable budget     -> Fp32 (never silently degrade fidelity).
 
-#include <core/vram_budget.hpp>
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
+
+import ses.vram_budget;
 
 namespace {
 
