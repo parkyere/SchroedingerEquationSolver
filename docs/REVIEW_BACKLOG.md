@@ -11,18 +11,26 @@ for any testable logic.
 
 ## Open items
 
-- **[bug, 5090/Linux] Windowed-app atlas build deadlocks the GPU (10 s fence
-  timeout → device lost).** On the RTX 5090 / Linux the app hangs on the first
-  atlas synth op (`run_atlas_chunk` → `synthesize_state`); `submit_and_wait`'s
-  10 s `vkWaitForFences` times out and the device is gone. `sesolver_vkcheck`
-  passes 100% on that SAME 5090 (synth / norm / async ping-pong all PASS), so the
-  shaders are fine in isolation -- it is an app-orchestration or Blackwell-Linux-
-  driver interaction, NOT reproducible on Windows/RTX 4060. Robustness is now
-  handled (`DeviceContext::device_lost` → skip further submits + director CPU
-  fallback, no crash/spam; the earlier readback-return guard removed the OOB
-  segfault). The ROOT hang is OPEN. Next: confirm regression vs pre-existing (run
-  a pre-Slang-migration commit on the 5090); if pre-existing, add a per-op label
-  to `OneShot`/the atlas path so the timeout names the exact hanging dispatch.
+- **[bug, 5090/Linux] Windowed-app GPU hang (10 s fence timeout → device lost).**
+  On the RTX 5090 / Linux (driver 580.139.03, which DOES support Vulkan 1.4) the
+  app hangs during the startup atlas-build frame; `submit_and_wait`'s 10 s
+  `vkWaitForFences` times out and the device is gone. NOT reproducible on
+  Windows/RTX 4060. **Synth is exonerated:** `sesolver_vkcheck` runs the EXACT
+  `synthesize_state` op (compute, same `OneShot` on `ctx.queue`, vkcheck_main.cpp
+  ~2075/2159/2400) and passes 100% on that same 5090 -- the synth kernel + submit
+  are fine. So the hang is in the one thing vkcheck can't reach: the RENDER path
+  (dynamic rendering, offscreen scene pass, present blit, demote-to-helper), which
+  had **never** run validation layers -- vkcheck is compute-only and the app
+  hardcoded `create(false)`. FIXED: the app now honors `SES_VK_VALIDATION=1`
+  (windowed + headless, prints `[validation ON]`). Robustness already handled
+  (`DeviceContext::device_lost` → CPU fallback, no crash/spam). ROOT hang OPEN.
+  Next, on the 5090: (1) run `SES_VK_VALIDATION=1 ./sesolver_app` -- a
+  barrier/sync2/dynamic-rendering VUID here (the `0c45c36` marching-cubes-barrier
+  class, invisible on the tolerant 4060/Windows driver) is the lead; (2) report
+  the FIRST `vk: ... VK_TIMEOUT in <method> (file:line)` line -- it names the exact
+  hanging submit (atlas synth vs render vs present); (3) if it points at the
+  raymarch, rebake volume.frag/slice.frag with `discard` disabled to isolate
+  OpDemoteToHelperInvocation.
 
 - **[verify] GPU marching-cubes oracle on 5090/Linux.** The cyclic-hue colour
   metric + valid sort key (a discontinuous-wheel abs-RGB compare false-failed on

@@ -191,6 +191,11 @@ target_link_libraries(sesolver_app
 )
 target_compile_features(sesolver_app PRIVATE cxx_std_20)
 ses_enable_vkfft(sesolver_app)
+# _CRT_SECURE_NO_WARNINGS keeps MSVC quiet about std::getenv (the
+# SES_VK_VALIDATION toggle read once at boot; race-free).
+if(MSVC)
+    target_compile_definitions(sesolver_app PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
 # ---------------------------------------------------------------------------
 # sesolver_vkcheck: THE GPU verification harness. NO windowing anywhere in

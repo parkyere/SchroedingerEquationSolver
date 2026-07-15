@@ -87,6 +87,12 @@ public:
 
     // ---- boot -------------------------------------------------------------
     void init() {
+        // SES_VK_VALIDATION=1 turns on VK_LAYER_KHRONOS_validation for the
+        // WINDOWED render path too -- sesolver_vkcheck is compute-only, so this
+        // is the only way to validate dynamic rendering / present / sync2
+        // barriers (the marching-cubes-class of bug lives here, not in compute).
+        const char* venv = std::getenv("SES_VK_VALIDATION");
+        const bool want_validation = (venv != nullptr && venv[0] == '1');
         if (headless_) {
             // Pure GPGPU: the exact device path sesolver_vkcheck exercises.
             // No SDL video, no window, no surface. The renderer initializes
@@ -94,12 +100,13 @@ public:
             if (!SDL_Init(SDL_INIT_EVENTS)) {  // SDL_GetTicks + event drain
                 fatal_shell_error("SDL init", SDL_GetError());
             }
-            if (vk_ctx_.create(false) != ses_vk::Boot::ok) {
+            if (vk_ctx_.create(want_validation) != ses_vk::Boot::ok) {
                 fatal_shell_error("Vulkan device",
                                   "no Vulkan runtime on this machine");
             }
-            std::fprintf(stderr, "vk: device %s (headless)\n",
-                         vk_ctx_.device_name);
+            std::fprintf(stderr, "vk: device %s (headless)%s\n",
+                         vk_ctx_.device_name,
+                         vk_ctx_.validation_active ? " [validation ON]" : "");
             if (needs_render_ &&
                 !vk_renderer_.initialize(vk_ctx_, director_->grid(),
                                          ses_shell::app_render_blobs())) {
@@ -129,7 +136,7 @@ public:
             fatal_shell_error("Vulkan surface extensions", SDL_GetError());
         }
         const std::vector<const char*> exts{sdl_exts, sdl_exts + n_ext};
-        if (vk_ctx_.create_instance(false, exts) != ses_vk::Boot::ok) {
+        if (vk_ctx_.create_instance(want_validation, exts) != ses_vk::Boot::ok) {
             fatal_shell_error("Vulkan instance",
                               "no Vulkan runtime on this machine");
         }
@@ -141,7 +148,8 @@ public:
             fatal_shell_error("Vulkan device",
                               "no compute+present queue family");
         }
-        std::fprintf(stderr, "vk: device %s\n", vk_ctx_.device_name);
+        std::fprintf(stderr, "vk: device %s%s\n", vk_ctx_.device_name,
+                     vk_ctx_.validation_active ? " [validation ON]" : "");
 
         if (!vk_renderer_.initialize(vk_ctx_, director_->grid(),
                                      ses_shell::app_render_blobs())) {

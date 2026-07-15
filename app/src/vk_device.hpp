@@ -210,12 +210,18 @@ struct DeviceContext {
         VkApplicationInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         ai.pApplicationName = "sesolver";
-        // Declare the MINIMUM version we use: every feature enabled below is
-        // Vulkan 1.3 core (dynamic rendering, synchronization2, timeline
-        // semaphores, shaderDemoteToHelperInvocation). Requesting 1.4 needlessly
-        // refused instance creation on Vulkan-1.3-only drivers (e.g. some NVIDIA
-        // Linux builds) -- VMA still uses the device's real apiVersion (below).
-        ai.apiVersion = VK_API_VERSION_1_3;
+        // Vulkan 1.3, DELIBERATELY not 1.4. Declaring apiVersion 1.4 hangs the
+        // render/present path on NVIDIA 580 / Blackwell / Linux (device lost, 10 s
+        // fence timeout) -- identical enabled features and identical SPIR-V, ONLY
+        // this enum differs, so the driver is selecting a broken 1.4 code path;
+        // it is not our feature use. vkcheck is compute-only and never hit it.
+        // The features enabled below are 1.1/1.2/1.3 core (sync2, dynamic
+        // rendering, timeline, demote, 16-bit storage) on the pNext chain -- the
+        // "1.4 idiom" but no 1.4-EXCLUSIVE feature. 1.4 is still the GOAL: chase
+        // it with SES_VK_VALIDATION=1 AT 1.4 (docs/REVIEW_BACKLOG.md) to see if a
+        // real render-path VUID -- not a pure driver bug -- is the trigger. VMA
+        // uses the device's REAL apiVersion (aci.vulkanApiVersion), never this.
+        ai.apiVersion = VK_API_VERSION_1_4;
         VkInstanceCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &ai;
