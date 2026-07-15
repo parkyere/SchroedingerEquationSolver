@@ -11,26 +11,36 @@ for any testable logic.
 
 ## Open items
 
-- **[bug, 5090/Linux] Windowed-app GPU hang (10 s fence timeout → device lost).**
-  On the RTX 5090 / Linux (driver 580.139.03, which DOES support Vulkan 1.4) the
-  app hangs during the startup atlas-build frame; `submit_and_wait`'s 10 s
-  `vkWaitForFences` times out and the device is gone. NOT reproducible on
-  Windows/RTX 4060. **Synth is exonerated:** `sesolver_vkcheck` runs the EXACT
-  `synthesize_state` op (compute, same `OneShot` on `ctx.queue`, vkcheck_main.cpp
-  ~2075/2159/2400) and passes 100% on that same 5090 -- the synth kernel + submit
-  are fine. So the hang is in the one thing vkcheck can't reach: the RENDER path
-  (dynamic rendering, offscreen scene pass, present blit, demote-to-helper), which
-  had **never** run validation layers -- vkcheck is compute-only and the app
-  hardcoded `create(false)`. FIXED: the app now honors `SES_VK_VALIDATION=1`
-  (windowed + headless, prints `[validation ON]`). Robustness already handled
-  (`DeviceContext::device_lost` → CPU fallback, no crash/spam). ROOT hang OPEN.
-  Next, on the 5090: (1) run `SES_VK_VALIDATION=1 ./sesolver_app` -- a
-  barrier/sync2/dynamic-rendering VUID here (the `0c45c36` marching-cubes-barrier
-  class, invisible on the tolerant 4060/Windows driver) is the lead; (2) report
-  the FIRST `vk: ... VK_TIMEOUT in <method> (file:line)` line -- it names the exact
-  hanging submit (atlas synth vs render vs present); (3) if it points at the
-  raymarch, rebake volume.frag/slice.frag with `discard` disabled to isolate
-  OpDemoteToHelperInvocation.
+- **[driver bug, 5090/Linux] Vulkan 1.4 hangs the GPU; running at 1.3 as the
+  workaround.** At `apiVersion = VK_API_VERSION_1_4` the app device-losts on NVIDIA
+  580.139.03 / Blackwell / Linux; at 1.3 it works (confirmed by 1-line A/B). Root-
+  caused (3 independent audits): the `source_location` diagnostic pins the FIRST
+  fault to the COMPUTE-side `normalize_buffer` (norm reduction, vk_engine.hpp:2659)
+  during the startup atlas build -- **NOT the render path** (the earlier "render/
+  present" hypothesis is REFUTED). ONLY the instance apiVersion enum differs
+  (identical enabled features + SPIR-V, no 1.4-exclusive feature; VMA/ImGui pinned
+  to the device's REAL version); the spec lets a driver steer behavior on that
+  integer, so 1.4 selects a broken NVIDIA driver path (GSP CTX_SWITCH_TIMEOUT / Xid
+  109 class). No app-side hazard can produce the hang. **1.3 loses NOTHING** -- no
+  1.4-exclusive feature is used, so this is a non-blocking workaround, not a
+  regression. To pursue 1.4 later: (1) UPDATE the 580 driver -- the branch has a
+  cluster of Blackwell Vulkan device-lost fixes across point releases
+  (580.65.06 / .82.07 / .105.08+) -- and retest; (2) rebuild `sesolver_vkcheck` at
+  1.4 (one-line flip, shared Boot path) -- HANG ⇒ minimal compute-only repro to file
+  with NVIDIA; PASS ⇒ trigger needs the presenting device + graphics/async-compute
+  concurrency, mitigate in-app (skip present during atlas build, or run the startup
+  reduction on the graphics queue). Adjunct: run the app at 1.4 with
+  `SES_VK_VALIDATION=1` -- validator silent on the normalize submit ⇒ driver-bug
+  confirmed. 1.4 lives isolated in commit `649826b` for easy A/B.
+
+- **[correctness] Missing compute→compute barrier between atlas synth and norm.**
+  `synthesize_state` records the synth dispatch (vk_engine.hpp:2628), then in a
+  SEPARATE fenced submit `normalize_buffer` reads the same buffer (2657) with no
+  device-side RAW `barrier_compute_to_compute`; likewise the norm-read → scale-write
+  WAR (2689). Visibility rides on the host fence, whereas the codebase's OWN idiom
+  carries such an edge in-band (`barrier_transfer_to_compute`, vk_engine.hpp:2476).
+  Benign at 1.3 (a WRONG-DATA risk, not the hang), but a real spec gap -- fix it to
+  match the idiom; it also doubles as a driver-exoneration test at 1.4.
 
 - **[verify] GPU marching-cubes oracle on 5090/Linux.** The cyclic-hue colour
   metric + valid sort key (a discontinuous-wheel abs-RGB compare false-failed on
