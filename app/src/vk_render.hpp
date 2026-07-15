@@ -16,7 +16,6 @@
 #include "vk_compute.hpp"
 
 #include <core/camera.hpp>
-#include <core/colormap.hpp>
 #include <core/grid.hpp>
 #include <core/marching_cubes.hpp>
 #include <core/sphere.hpp>
@@ -30,6 +29,8 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+
+import ses.colormap;
 
 namespace ses_vk {
 

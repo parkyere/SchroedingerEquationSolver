@@ -4,7 +4,6 @@
 // line-by-line; correctness is pinned HERE (tests/volume_test.cpp) because
 // shaders cannot be unit-tested.
 
-#include <core/colormap.hpp>
 #include <core/vec.hpp>
 
 #include <algorithm>
@@ -13,6 +12,8 @@
 #include <limits>
 #include <numbers>
 #include <vector>
+
+import ses.colormap;
 
 namespace ses {
 

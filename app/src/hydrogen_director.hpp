@@ -11,7 +11,6 @@
 #include "scenario.hpp"
 #include "vk_engine.hpp"
 
-#include <core/colormap.hpp>
 #include <core/decay.hpp>
 #include <core/emission.hpp>
 #include <core/field.hpp>
@@ -38,6 +37,8 @@
 #include <vector>
 
 import ses.vram_budget;
+
+import ses.colormap;
 
 namespace ses_shell {
 

@@ -7,13 +7,14 @@
 
 #include "vk_device.hpp"
 
-#include <core/colormap.hpp>
 #include <core/grid.hpp>
 #include <core/marching_cubes.hpp>
 
 #include <cstdint>
 #include <string>
 #include <vector>
+
+import ses.colormap;
 
 namespace ses_shell {
 

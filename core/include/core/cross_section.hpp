@@ -7,13 +7,14 @@
 // visual-only (dump-frame), exactly as core/volume.hpp backs the volume
 // raymarch.
 
-#include <core/colormap.hpp>
 #include <core/complex.hpp>
 #include <core/grid.hpp>
 #include <core/vec.hpp>
 
 #include <algorithm>
 #include <cmath>
+
+import ses.colormap;
 
 namespace ses {
 

@@ -8,7 +8,6 @@
 #include "scenario.hpp"
 #include "vk_blobs.hpp"
 
-#include <core/colormap.hpp>
 #include <core/field.hpp>
 #include <core/grid.hpp>
 #include <core/imaginary_time.hpp>
@@ -27,6 +26,8 @@
 #include <random>
 #include <string>
 #include <vector>
+
+import ses.colormap;
 
 namespace ses_shell {
 

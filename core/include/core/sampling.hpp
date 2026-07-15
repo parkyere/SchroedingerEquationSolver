@@ -4,7 +4,6 @@
 // colors. Interpolating the COMPLEX value and then taking atan2 keeps
 // constant-phase regions exactly constant (amplitude cancels in the ratio).
 
-#include <core/colormap.hpp>
 #include <core/complex.hpp>
 #include <core/field.hpp>
 #include <core/grid.hpp>
@@ -15,6 +14,8 @@
 #include <cmath>
 #include <utility>
 #include <vector>
+
+import ses.colormap;
 
 namespace ses {
 
