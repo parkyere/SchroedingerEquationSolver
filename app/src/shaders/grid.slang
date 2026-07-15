@@ -1,9 +1,7 @@
 // grid.slang -- flat-index <-> (i,j,k) helpers for the periodic FFT grid, and
-// the cell -> world map. Two unflatten variants preserve each caller's exact
-// arithmetic (so the baked ops and the oracles are unchanged):
-//   unflatten_pow2   -- nx,ny powers of two: mask + shift (no runtime div/mod;
-//                       ~20+ cyc saved per cell on Pascal).
-//   unflatten_moddiv -- general % / (the kernels that were written that way).
+// the cell -> world map. Two unflatten variants:
+//   unflatten_pow2   -- nx,ny powers of two: mask + shift (no runtime div/mod).
+//   unflatten_moddiv -- general % and /.
 // Import with `import grid;`.
 module grid;
 

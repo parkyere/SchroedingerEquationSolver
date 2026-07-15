@@ -3,9 +3,8 @@
 // The discoverable-controls panel, in Dear ImGui: a clickable mirror of the
 // hotkeys. Buttons mirror the hotkeys (which stay live: the shell only
 // routes keys here when ImGui wants capture); the two field sliders drive the
-// proper Hamiltonian terms; the director's title_text() readout is rendered
-// as a wrapped status block (it long outgrew a window title). Templated on
-// the shell type so main() stays a shell (same pattern as selftest_arcs.hpp).
+// proper Hamiltonian terms; the director's status_text() readout renders as a
+// wrapped status block. Templated on the shell type so main() stays a shell.
 
 #include "scenario.hpp"  // HydrogenApi (the hydrogen panel's control seam)
 

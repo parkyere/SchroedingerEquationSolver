@@ -1,7 +1,6 @@
-// ylm.slang -- real spherical harmonics Y_lm (l = 0..5), the single source of
-// truth shared by synth / mcwf_axpy / project_deposit (was copy-pasted three
-// times). Pure scalar float math; inlines to the exact ops the kernels wrote,
-// so the oracles are unchanged. Import with `import ylm;`.
+// ylm.slang -- real spherical harmonics Y_lm (l = 0..5), shared by
+// synth / mcwf_axpy / project_deposit. Pure scalar float math.
+// Import with `import ylm;`.
 module ylm;
 
 public static const float PI = 3.14159265358979323846;

@@ -4,13 +4,11 @@
 // components (l = 0..5), then folds each component with a WaveActiveSum + a
 // fixed-order combine of the per-wave partials, written to g_lm[c*nr+bin].
 // No atomics; the wave fold is order-agnostic within a wave but the per-wave
-// partials sum in a fixed order -> deterministic (P3): the projection oracle
+// partials sum in a fixed order -> deterministic: the projection oracle
 // compares within tolerance, not bit-exact.
 //
-// GLSL used gl_NumSubgroups/gl_SubgroupID for the per-subgroup slotting; Slang
-// derives the same from WaveGetLaneCount() + SV_GroupIndex, giving each wave's
-// elected lane a UNIQUE contiguous slot (0..numSg-1). Requires wave arithmetic
-// (asserted by vkcheck check_device_features).
+// Each wave's elected lane banks into a UNIQUE contiguous slot (0..numSg-1)
+// from WaveGetLaneCount() + SV_GroupIndex. Requires wave arithmetic support.
 import complex;
 import ylm;
 import grid;
@@ -32,9 +30,8 @@ struct Params {
 [[vk::binding(1, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
 // Transposed, re/im-split accumulators: [c*128 + tid] puts consecutive
-// threads in consecutive 4 B banks. Same 36 KB total, unchanged reduction
-// order. Per-wave partials for the cross-wave combine: 128 threads / the
-// smallest supported wave (4) => at most 32 waves.
+// threads in consecutive 4 B banks. Per-wave partials for the cross-wave
+// combine: 128 threads / smallest supported wave (4) => at most 32 waves.
 groupshared float acc_re[36 * 128];
 groupshared float acc_im[36 * 128];
 groupshared float sg_re[36 * 32];

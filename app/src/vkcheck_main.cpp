@@ -1,8 +1,7 @@
 // sesolver_vkcheck: framework-free Vulkan verification harness.
 //
 // volk loads the loader, VMA allocates, and the kernels are the production
-// Vulkan-GLSL sources compiled offline by
-// glslangValidator to plain SPIR-V and embedded as C arrays
+// shader sources compiled offline to SPIR-V and embedded as C arrays
 // (tools/cmake/bin2h.cmake). Every check runs a GPU kernel or an
 // ses_vk::Engine path against a CPU double-precision oracle (core/ code or
 // an inline double reference) with a tolerance sized to the fp32 (or fp16)
@@ -600,10 +599,10 @@ bool check_dipole_kick(ses_vk::DeviceContext& ctx) {
 // <grad V> = sum |psi|^2 grad V: vec4 field-input reduction (grad V at
 // binding 4), vs a CPU double reference (rel 1e-4).
 bool check_mean_force(ses_vk::DeviceContext& ctx) {
-    // A synthetic PERIODIC 3D grid: the kernel now takes the central
-    // differences of the scalar potential in-shader, so the check feeds V
-    // (not a precomputed gradient) and the CPU reference applies the same
-    // periodic differences in double.
+    // A synthetic PERIODIC 3D grid: the kernel takes central differences of
+    // the scalar potential in-shader, so the check feeds V (not a precomputed
+    // gradient) and the CPU reference applies the same periodic differences in
+    // double.
     const std::uint32_t nx = 40, ny = 25, nz = 20;
     const std::size_t n = std::size_t(nx) * ny * nz;
     const double i2h[3] = {1.0 / (2.0 * 0.5), 1.0 / (2.0 * 0.4),
@@ -2325,12 +2324,11 @@ bool check_engine_reinit(ses_vk::DeviceContext& ctx) {
     // Subject: run the lazy sequence, tear down, re-init, RE-run it. This
     // EXERCISES the lazy re-creation paths (a reset bug that makes cycle 2 fail
     // to re-create, or crash, surfaces here) and, under SES_VK_VALIDATION=1,
-    // the layer flags a bind of a freed cycle-1 descriptor. HONEST LIMIT: with
-    // no validation layer the freed-set bind is UB that VMA masks by reusing
+    // the layer flags a bind of a freed cycle-1 descriptor. LIMIT: with no
+    // validation layer the freed-set bind is UB that VMA masks by reusing
     // cycle-1's memory for cycle-2's buffers, so the output can COINCIDE --
-    // output comparison alone cannot guarantee the reset is complete (verified:
-    // dropping pd_full_set_ from reset_lazy_state still matched here). Re-adding
-    // vulkan-validationlayers to the vcpkg manifest is what makes this strict.
+    // output comparison alone cannot guarantee the reset is complete; the
+    // validation layer is what makes this strict.
     ses_vk::Engine sub;
     if (!sub.initialize(ctx, g, engine_blobs_8(), v, dt, psi0.data()) ||
         !run(sub, 3)) {
@@ -2511,15 +2509,13 @@ bool check_engine_bridge(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
-// Item 0a: the forward-safe feature negotiation in create_device must ENABLE
-// (not merely advertise) the bits the app builds on -- timeline semaphores,
-// synchronization2, dynamic rendering, host query reset, 16-bit storage, and
-// shaderDemoteToHelperInvocation (SPIR-V 1.6 lowers `discard` to it). On the
-// Pascal floor (P5000 = 1.4.312) every one is supported, so every one must
-// read back enabled. RED before create_device gained the probe-and-enable
-// chain (every bit false); GREEN once it enables the supported subset. A
-// device that genuinely lacks one would fail here loudly rather than fault
-// later when a fast path (or a render shader) uses it.
+// The feature negotiation in create_device must ENABLE (not merely advertise)
+// the bits the app builds on -- timeline semaphores, synchronization2, dynamic
+// rendering, host query reset, 16-bit storage, and
+// shaderDemoteToHelperInvocation (SPIR-V 1.6 lowers `discard` to it). All are
+// supported on the Pascal floor, so all must read back enabled; a device that
+// genuinely lacks one fails here loudly rather than faulting later when a fast
+// path (or a render shader) uses it.
 bool check_device_features(const ses_vk::DeviceContext& ctx) {
     const bool pass = ctx.feat_timeline_semaphore && ctx.feat_synchronization2 &&
                       ctx.feat_dynamic_rendering && ctx.feat_host_query_reset &&
@@ -2535,12 +2531,10 @@ bool check_device_features(const ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
-// Item 0b: GPU timestamp instrumentation. profile_step() must return a valid
-// per-stage breakdown of one 256^3 propagation step with strictly-ordered
-// stamps (both FFTs > 0, kick/kin >= 0, total > 0). RED with the stub; GREEN
-// once the query pool + timestamp writes land. Prints the EMPIRICAL
-// decomposition of the bandwidth-bound step (min-of-5, per the bench policy):
-// the FFT pair should dominate, turning the "~75%" model into data.
+// GPU timestamp instrumentation. profile_step() must return a valid per-stage
+// breakdown of one 256^3 propagation step with strictly-ordered stamps (both
+// FFTs > 0, kick/kin >= 0, total > 0). Prints the empirical decomposition of
+// the bandwidth-bound step (min-of-5, per the bench policy).
 bool check_timestamp_profile(ses_vk::DeviceContext& ctx) {
     const ses::Grid1D axis{-8.0, 8.0, 256};
     const ses::Grid3D g{axis, axis, axis};
@@ -2574,8 +2568,8 @@ bool check_timestamp_profile(ses_vk::DeviceContext& ctx) {
         best.total_ms > 0.0 ? 100.0 * fft / best.total_ms : 0.0,
         step_pass ? "PASS" : "FAIL");
 
-    // P0: relax breakdown -- the imaginary step body vs the per-step norm+peak
-    // reduction (the P3/P4 target). Reuses this 256^3 engine with relax tables.
+    // Relax breakdown -- the imaginary step body vs the per-step norm+peak
+    // reduction. Reuses this 256^3 engine with relax tables.
     const double dtau = 0.02;
     const ses::ImaginaryTimePropagator3D relaxer{g, v, dtau};
     bool relax_pass = false;

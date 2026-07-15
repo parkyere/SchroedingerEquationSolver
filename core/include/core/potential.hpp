@@ -132,8 +132,7 @@ inline std::vector<double> absorbing_mask(const Grid3D& g, double width) {
         return s * s;  // smooth cos^2 ramp
     };
     // Per-axis ramp tables (3n sin calls instead of 3n^3); the cell value is
-    // the same x*y*z product of identically computed factors -- bitwise
-    // identical to the former per-cell evaluation.
+    // the x*y*z product of the per-axis factors.
     std::vector<double> mx(static_cast<std::size_t>(g.x.n));
     std::vector<double> my(static_cast<std::size_t>(g.y.n));
     std::vector<double> mz(static_cast<std::size_t>(g.z.n));

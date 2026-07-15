@@ -20,7 +20,7 @@ framework-free Vulkan renderer.
 | GPU compute + rendering | **Framework-free Vulkan** (`ses_vk`: volk + VMA + VkFFT); shaders authored in **Slang**, offline-baked to SPIR-V by `slangc` (fetched as a build-time tool, no runtime/vcpkg dependency) |
 | Physics core | CPU double-precision truth in `core/`, no GPU/GUI dependencies |
 | Time propagator | **Split-operator (Fourier)** — hand-written FFT on the CPU core; VkFFT on the GPU, with hand-rolled line-FFT kernels kept as a verified alternative |
-| Reinvention boundary | **Purist** — hand-roll math, FFT, physics, render logic (incl. the swapchain); reuse only SDL3 (window/input), Dear ImGui (UI), GoogleTest, the Slang shader toolchain, and vendored Vulkan infrastructure (volk / VMA / VkFFT / glslang — glslang now only as VkFFT's runtime compiler) |
+| Reinvention boundary | **Purist** — hand-roll math, FFT, physics, render logic (incl. the swapchain); reuse only SDL3 (window/input), Dear ImGui (UI), GoogleTest, the Slang shader toolchain, and vendored Vulkan infrastructure (volk / VMA / VkFFT / glslang, glslang being VkFFT's runtime compiler) |
 | Units | Atomic units (ℏ = mₑ = e = 1) |
 | Testing | **Strict TDD** + Humble Object; a windowless GPU oracle binary (`sesolver_vkcheck`) verifies every kernel |
 
@@ -41,8 +41,7 @@ The hard seams: **`core` depends on nothing**; `ses_vk` depends on `core` +
 Vulkan infrastructure only (proven by `sesolver_vkcheck`, which links no
 windowing at all); the SDL3 shell depends on both, and only raw Khronos handles
 cross the shell ↔ `ses_vk` boundary. The physics is trivially testable, the GPU
-engine is testable without a GUI, and the shell stays thin and replaceable
-(this seam already survived one full swap: Qt → SDL3).
+engine is testable without a GUI, and the shell stays thin and replaceable.
 
 ## Prerequisites
 
@@ -87,7 +86,7 @@ ctest --test-dir build --output-on-failure
 
 Dev-time Vulkan validation layers are **installed by default** — every preset
 sets `VCPKG_MANIFEST_FEATURES=validation` (in `*-base`), so the first configure
-also builds+installs the `vulkan-validationlayers` (a ~14 min one-time cost, then
+also builds+installs the `vulkan-validationlayers` (a one-time cost, then
 binary-cached). The `vulkan-validationlayers` port forces its own dynamic linkage,
 so the layer DLL + manifest land in `<build>/vcpkg_installed/<triplet>/bin` even
 on the otherwise-static triplet — installing the layer is inert; it does nothing

@@ -1,6 +1,5 @@
 // Strang half-kick without a phase table: psi[i] *= exp(i * coef * V[i]),
 // coef = -dt/2, phase computed in-shader from the scalar potential (R32).
-// Replaces a 134 MB complex table read with a 67 MB scalar read + sincos.
 import complex;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> psi;

@@ -80,9 +80,9 @@ struct EngineKernels {
     std::size_t norm_size = 0;
     const unsigned char* scale = nullptr;  // scale.comp
     std::size_t scale_size = 0;
-    const unsigned char* norm_finalize = nullptr;  // norm_finalize.comp (P4;
-    std::size_t norm_finalize_size = 0;             // optional -> 2-submit relax)
-    const unsigned char* scale_buf = nullptr;       // scale_buf.comp (P4)
+    const unsigned char* norm_finalize = nullptr;  // norm_finalize.comp
+    std::size_t norm_finalize_size = 0;             // (optional -> 2-submit relax)
+    const unsigned char* scale_buf = nullptr;       // scale_buf.comp
     std::size_t scale_buf_size = 0;
     const unsigned char* kick = nullptr;   // dipole_kick.comp
     std::size_t kick_size = 0;
@@ -297,7 +297,7 @@ public:
                                           sizeof(float),
                                       &kz2_buf_) ||
             !ctx.create_device_buffer(2 * kGroups * sizeof(float), &partials_) ||
-            !ctx.create_device_buffer(4 * sizeof(float), &renorm_) ||  // P4 inv
+            !ctx.create_device_buffer(4 * sizeof(float), &renorm_) ||  // inv
             !ctx.create_host_buffer(field_bytes_,
                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -328,9 +328,9 @@ public:
             }
             mcwf_kernel_ok_ = true;
         }
-        // Optional P4 fused relax renorm: both blobs present => the GPU
-        // finishes the norm (partials -> inv) and rescales in the same submit,
-        // so relax_step() needs no host round-trip. Absent => 2-submit path.
+        // Optional fused relax renorm: both blobs present => the GPU finishes
+        // the norm (partials -> inv) and rescales in the same submit, so
+        // relax_step() needs no host round-trip. Absent => 2-submit path.
         if (blobs.norm_finalize != nullptr && blobs.scale_buf != nullptr) {
             if (!finalize_.create(ctx, blobs.norm_finalize,
                                   blobs.norm_finalize_size,
@@ -409,7 +409,7 @@ public:
         // axis) used by the shear path.
         const ConjParams conjA{static_cast<std::uint32_t>(cells_),
                                1.0f / static_cast<float>(n_), 0.0f, 0.0f};
-        // P4 finalize params: reuse ConjParams as {ngroups, cell_volume} so the
+        // finalize params: reuse ConjParams as {ngroups, cell_volume} so the
         // GPU can turn sum(partials)*dV into inv = 1/sqrt(norm_sq).
         const ConjParams renormp{kGroups,
                                  static_cast<float>(grid.cell_volume()), 0.0f,
@@ -516,7 +516,7 @@ public:
                                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                 partials_.buf);
         }
-        if (fused_relax_ok_) {  // P4: partials -> inv -> psi *= inv, one submit
+        if (fused_relax_ok_) {  // partials -> inv -> psi *= inv, one submit
             const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             finalize_set_ = arena_.allocate(*ctx_, finalize_.set_layout());
@@ -686,12 +686,11 @@ public:
         }
     }
 
-    // Item 0b: per-stage GPU timing of ONE representative propagation step on
-    // the VkFFT hot path -- kick, forward FFT, kinetic multiply, inverse FFT --
-    // via a timestamp query pool, so the bandwidth-dominant term is measured
-    // DATA, not a model. Only meaningful when vkfft_active(); returns
+    // Per-stage GPU timing of ONE representative propagation step on the VkFFT
+    // hot path -- kick, forward FFT, kinetic multiply, inverse FFT -- via a
+    // timestamp query pool. Only meaningful when vkfft_active(); returns
     // {valid=false} otherwise. Records its OWN one-shot command buffer, so the
-    // normal step path is never touched and stays byte-identical.
+    // normal step path is untouched.
     struct StepProfile {
         double kick_ms = 0.0;
         double fwd_fft_ms = 0.0;
@@ -763,11 +762,10 @@ public:
         return p;
     }
 
-    // P0: per-stage GPU timing of ONE imaginary-time relax iteration -- the
-    // Strang step body vs the norm+peak reduction that follows it every step.
-    // Separates the reduction (the P3/P4 target) from the FFT-bound body so
-    // those levers have a measured baseline, not a model. Needs relax tables;
-    // records its own one-shot buffer, so relax_step() stays byte-identical.
+    // Per-stage GPU timing of ONE imaginary-time relax iteration -- the Strang
+    // step body vs the norm+peak reduction that follows it every step. Needs
+    // relax tables; records its own one-shot buffer, so relax_step() is
+    // untouched.
     struct RelaxProfile {
         double step_body_ms = 0.0;
         double norm_reduce_ms = 0.0;
@@ -978,7 +976,7 @@ public:
     }
 
     // Imaginary-time weight tables (packed vec2(w,0)) + dtau/dV for the
-    // renormalization. Re-entrant: the tables are TRANSIENT (268 MB) --
+    // renormalization. Re-entrant: the tables are TRANSIENT --
     // directors upload them on entering relaxation and release_relax_tables
     // on leaving; the descriptor sets are allocated once and re-pointed.
     bool set_relax_tables(const std::vector<double>& half_w,
@@ -1052,9 +1050,9 @@ public:
             norm_.bind(shot.cb(), norm_set_);
             vkCmdDispatch(shot.cb(), kGroups, 1, 1);
             if (fused_relax_ok_) {
-                // P4: the GPU finishes the renorm (partials -> inv) and
-                // rescales in this same submit; the host reads the partials
-                // afterward only for the double-precision energy/peak stat.
+                // The GPU finishes the renorm (partials -> inv) and rescales in
+                // this same submit; the host reads the partials afterward only
+                // for the double-precision energy/peak stat.
                 barrier_compute_to_compute(shot.cb());
                 finalize_.bind(shot.cb(), finalize_set_);
                 vkCmdDispatch(shot.cb(), 1, 1, 1);
@@ -1097,7 +1095,7 @@ public:
     // sets are RETAINED and the index recycled via free_full_states_ so a
     // synth/release churn doesn't leak them. Contract: the handle is dead
     // after this -- a reused slot may alias a later state (use-after-release
-    // is a caller bug, as before).
+    // is a caller bug).
     void release_state(int handle) {
         State* st = state_at(handle);
         if (st == nullptr) {
@@ -1203,12 +1201,11 @@ public:
     };
 
     // psi += sum_s (cre + i cim)_s * (normalized eigenstate s), evaluated
-    // fused in ONE dispatch -- the per-state synth -> normalize -> axpy
-    // chain moved 3 full psi round-trips per state. Same math; fp32
-    // rounding differs only by in-register order. inv_norm comes from the
-    // caller's cache (the grid norm of a fixed radial table is a constant).
-    // False = kernel absent / slot overflow / setup failure: caller falls
-    // back to the per-state chain.
+    // fused in ONE dispatch. Same math as the per-state synth/normalize/axpy
+    // chain; fp32 rounding differs only by in-register order. inv_norm comes
+    // from the caller's cache (the grid norm of a fixed radial table is a
+    // constant). False = kernel absent / slot overflow / setup failure: caller
+    // falls back to the per-state chain.
     bool mcwf_axpy(const std::vector<McwfTerm>& terms, double h_radial,
                    double rmax, int n_radial) {
         if (!mcwf_kernel_ok_ || terms.empty() ||
@@ -1782,9 +1779,8 @@ public:
 
     // ---- semiclassical radiation (Ehrenfest mean force) -----------------
     // Upload the scalar potential (R32) for mean_force: the kernel takes the
-    // periodic central differences IN-SHADER, so no 16 B/cell gradient field
-    // is stored (it was 4x this buffer's footprint; the samples are the same
-    // formula, just computed at read time from cache-hot neighbor taps).
+    // periodic central differences IN-SHADER, so no gradient field is stored
+    // (computed at read time from cache-hot neighbor taps).
     bool set_potential_gradient(const std::vector<double>& v) {
         if (force_v_buf_.buf == VK_NULL_HANDLE) {
             struct alignas(16) ForceParams {
@@ -2077,9 +2073,8 @@ public:
         vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
                                 VK_WHOLE_SIZE);
         const float* raw = static_cast<const float*>(staging_.mapped);
-        // Shape once, reuse thereafter: every element is overwritten below,
-        // and re-assigning heap-allocated ncomp vectors per projection was
-        // the one recurring allocator churn on the title cadence.
+        // Shape once, reuse thereafter (every element is overwritten below);
+        // avoids re-allocating the ncomp vectors per projection.
         if (glm_host_.size() != static_cast<std::size_t>(proj_ncomp_)) {
             glm_host_.assign(static_cast<std::size_t>(proj_ncomp_),
                              std::vector<ses::Complex<double>>(
@@ -3022,7 +3017,7 @@ private:
         return stats;
     }
 
-    // P4 fused-path stat finish: the GPU already computed inv and rescaled
+    // Fused-path stat finish: the GPU already computed inv and rescaled
     // psi, so this only distills the double-precision energy/peak diagnostic
     // from the (pre-scale) partials in staging -- no host scale submit.
     RelaxStats finish_renorm_stats_only() {
@@ -3320,9 +3315,9 @@ private:
         }
     }
 
-    // Item 0b: lazy timestamp query pool for profile_step() (4 stages -> 5
-    // stamps). Created only on first profile, so the normal step path never
-    // touches it. Fails closed when the compute queue lacks HW timestamps.
+    // Lazy timestamp query pool for profile_step() (4 stages -> 5 stamps).
+    // Created only on first profile, so the normal step path never touches it.
+    // Fails closed when the compute queue lacks HW timestamps.
     static constexpr std::uint32_t kProfileStamps = 5;
     bool ensure_profile_pool() {
         if (profile_pool_ != VK_NULL_HANDLE) {
@@ -3365,8 +3360,8 @@ private:
     Kernel fft_;
     Kernel norm_;
     Kernel scale_;
-    Kernel finalize_;   // P4: GPU norm finish (partials -> inv), fused relax
-    Kernel scale_buf_;  // P4: psi *= renorm[0], factor read from the SSBO
+    Kernel finalize_;   // GPU norm finish (partials -> inv), fused relax
+    Kernel scale_buf_;  // psi *= renorm[0], factor read from the SSBO
     Kernel kick_;
     Kernel shear_;
     Kernel inner_;
@@ -3433,8 +3428,8 @@ private:
     Buffer conjN_ubo_{};
     Buffer fft_ubo_[3]{};
     Buffer scale_ubo_{};
-    Buffer renorm_{};      // P4: SSBO holding the GPU-computed inv (1 float)
-    Buffer renorm_ubo_{};  // P4: finalize params {ngroups, cell_volume}
+    Buffer renorm_{};      // SSBO holding the GPU-computed inv (1 float)
+    Buffer renorm_ubo_{};  // finalize params {ngroups, cell_volume}
     Buffer conjA_ubo_{};
     Buffer shear_ubo_[2]{};
     Buffer kick_ubo_{};
@@ -3462,7 +3457,7 @@ private:
     VkDescriptorSet pd_full_set_ = VK_NULL_HANDLE;  // fused V+mask, coef -dt
     VkDescriptorSet pd_half_set_ = VK_NULL_HANDLE;  // fused V+mask, coef -dt/2
     bool pd_kernel_ok_ = false;
-    bool fused_relax_ok_ = false;  // P4: finalize_ + scale_buf_ wired
+    bool fused_relax_ok_ = false;  // finalize_ + scale_buf_ wired
     bool flow_vel_ok_ = false;     // flow_velocity kernel wired
     Buffer mcwf_radial_{};  // kMcwfSlots x n_radial floats (slotted tables)
     VkDeviceSize mcwf_radial_bytes_ = 0;
@@ -3511,8 +3506,8 @@ private:
                                    VK_NULL_HANDLE};
     VkDescriptorSet norm_set_ = VK_NULL_HANDLE;
     VkDescriptorSet scale_set_ = VK_NULL_HANDLE;
-    VkDescriptorSet finalize_set_ = VK_NULL_HANDLE;    // P4
-    VkDescriptorSet scale_buf_set_ = VK_NULL_HANDLE;   // P4
+    VkDescriptorSet finalize_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet scale_buf_set_ = VK_NULL_HANDLE;
     VkDescriptorSet conjA_set_ = VK_NULL_HANDLE;
     VkDescriptorSet shear_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDescriptorSet kick_set_ = VK_NULL_HANDLE;

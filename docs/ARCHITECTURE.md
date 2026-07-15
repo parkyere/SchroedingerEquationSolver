@@ -50,8 +50,7 @@ research-grade mean-field (DFT) project. We stay single-electron on purpose.
   `DeviceContext::create` path vkcheck exercises), the swapchain + one
   fullscreen-triangle pass sampling the renderer's image (`vk_present.hpp`),
   and the Dear ImGui control panel riding that pass. Only raw Khronos handles
-  cross the shell <-> `ses_vk` seam — the seam already survived one full swap
-  (Qt/QRhi → SDL3) without touching a director or engine line. The shell holds
+  cross the shell <-> `ses_vk` seam. The shell holds
   **no domain logic**; anything worth testing is pushed down into `core` as
   pure data/geometry first (e.g. marching-cubes vertex generation,
   transfer-function math, camera matrices).
@@ -87,15 +86,13 @@ Reused (pure plumbing, not the learning target):
   immediate-mode control panel
 - **GoogleTest** — test harness
 - **Vendored Vulkan infrastructure** — volk (loader), VMA (allocation),
-  VkFFT (the production GPU FFT), glslang (offline GLSL → SPIR-V bake)
+  VkFFT (the production GPU FFT), glslang (VkFFT's runtime shader compiler)
 
-VkFFT is the one deliberate exception to "hand-roll the FFT": the CPU FFT
-remains hand-written and IS the truth oracle, the hand-rolled GPU line-FFT
-kernels remain verified as the learning artifact, and VkFFT is production
-plumbing chosen for speed.
+VkFFT is the one deliberate exception to "hand-roll the FFT": the hand-written
+CPU FFT stays the truth oracle and the hand-rolled GPU line-FFT kernels stay
+verified; VkFFT is production plumbing chosen for speed.
 
-Explicitly *not* reused: GLM (we hand-roll math), Qt (retired — it was the
-original shell, replaced by SDL3 + the hand-rolled swapchain), FFTW (the CPU
+Explicitly *not* reused: GLM (we hand-roll math), Qt, FFTW (the CPU
 FFT is hand-rolled), Eigen/BLAS/LAPACK.
 
 ## Numerical decisions

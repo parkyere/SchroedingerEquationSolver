@@ -1,4 +1,4 @@
-// P4: single-workgroup finish of the relax renormalization. Fixed-order
+// Single-workgroup finish of the relax renormalization. Fixed-order
 // tree-sum of the per-workgroup |psi|^2 partials -> norm_sq -> inv =
 // 1/sqrt(norm_sq), written for the fused scale in the SAME submit so the
 // relax step needs no host round-trip between the reduction and the rescale.

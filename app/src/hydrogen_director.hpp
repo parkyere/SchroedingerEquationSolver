@@ -49,8 +49,8 @@ constexpr double kRelaxDtau = 0.05;
 constexpr double kIsoFraction = 0.25;
 constexpr double kMeasureSigma = 1.25;  // Bohr; sigma keeps the measurement
                                         // back-action 3/(8 sigma^2) = 0.24 Ha
-                                        // under the 0.5 Ha binding (the old
-                                        // 0.625 ionized on nearly every click)
+                                        // under the 0.5 Ha binding (a tighter
+                                        // packet ionizes on nearly every click)
 // Display decay rate: tau_display ~ 8 au (~3 s wall); true lifetimes are
 // ~1e8 au. The title reports the true lifetime and the acceleration factor.
 constexpr double kDecayGammaDisplay = 0.125;
@@ -1499,9 +1499,9 @@ private:
         volume_dirty_ = false;
     }
 
-    // Transient relax tables: uploaded on demand (a table build + 268 MB
-    // upload per relax entry), freed on completion -- they were the largest
-    // always-resident allocation after the phase tables.
+    // Transient relax tables: built + uploaded on demand (per relax entry),
+    // freed on completion -- kept transient to avoid a large resident
+    // allocation.
     bool ensure_relax_tables() {
         if (engine_.relax_tables_ready()) {
             return true;

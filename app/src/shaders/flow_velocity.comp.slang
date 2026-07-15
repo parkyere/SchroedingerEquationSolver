@@ -4,7 +4,7 @@
 // display volume broke that cancellation -> spurious pulsating radial flow).
 // Written to a LOW-RES rgba16f volume the streaklines trilinear-sample; v is
 // smooth so coarse resolution is fine, and it keeps the memory cost small.
-// The current formula matches core/flow.hpp::probability_current.
+// Matches core/flow.hpp::probability_current.
 import complex;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Complex, Std430DataLayout> psi;  // fp32

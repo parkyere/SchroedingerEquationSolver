@@ -2,9 +2,10 @@
 
 // Cross-section display logic: the clip-plane ray-interval clamp, the slice
 // quad geometry, and the slice colour mapping. This is the SINGLE SOURCE OF
-// TRUTH the GLSL mirrors -- volume.frag (clip), slice.vert (quad), slice.frag
-// (sample + colour). Only the final composited image stays visual-only
-// (dump-frame), exactly as core/volume.hpp backs the volume raymarch.
+// TRUTH the shaders mirror -- volume.frag (clip), slice.vert (quad),
+// slice.frag (sample + colour). Only the final composited image stays
+// visual-only (dump-frame), exactly as core/volume.hpp backs the volume
+// raymarch.
 
 #include <core/colormap.hpp>
 #include <core/complex.hpp>

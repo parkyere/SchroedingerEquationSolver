@@ -23,12 +23,9 @@ namespace ses {
 
 // Twiddle table w[j] = e^{-2 pi i j / n}, j = 0 .. n/2-1, computed directly
 // so every factor sits within ~1 ulp of the unit circle. (The recurrence
-// w *= wlen drifts off the circle and systematically damps the norm --
-// caught by SplitOperator.ConservesNorm over 200 steps.) thread_local cache
-// keyed on n: the 3D transform calls fft() once per line, and per-line
-// heap allocation + sincos recompute dominated the small-line cost; each
-// OpenMP thread owns its table, so reads are lock-free and the values are
-// bitwise identical to the former per-call computation.
+// w *= wlen drifts off the circle and damps the norm -- caught by
+// SplitOperator.ConservesNorm.) thread_local cache keyed on n: each thread
+// owns its table, so reads are lock-free.
 inline const Complex<double>* fft_twiddles(std::size_t n) {
     thread_local std::vector<Complex<double>> w;
     thread_local std::size_t wn = 0;
@@ -49,9 +46,8 @@ inline const Complex<double>* fft_twiddles(std::size_t n) {
 // length.
 inline void fft(Complex<double>* a, std::size_t n) {
     // Runtime guard, not just assert: under NDEBUG a mis-sized axis would
-    // otherwise silently produce garbage or spin (the bit-reversal loop
-    // assumes a power of two). Grids are power-of-two by construction today;
-    // this catches a future non-conforming grid at the call, not downstream.
+    // silently produce garbage or spin (the bit-reversal loop assumes a
+    // power of two).
     if ((n & (n - 1)) != 0) {
         throw std::invalid_argument("ses::fft: size must be a power of two");
     }
@@ -71,7 +67,7 @@ inline void fft(Complex<double>* a, std::size_t n) {
         }
     }
 
-    const Complex<double>* w = fft_twiddles(n);  // see the cache note above
+    const Complex<double>* w = fft_twiddles(n);
 
     // Butterfly passes: len = 2, 4, ..., n. Stage len uses w_len^j = w[j * n/len].
     for (std::size_t len = 2; len <= n; len <<= 1) {

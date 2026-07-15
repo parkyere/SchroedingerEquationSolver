@@ -91,9 +91,8 @@ public:
             return false;
         }
         // The module is consumed by pipeline creation and never referenced
-        // again (as the graphics pipelines already free theirs): drop it now
-        // instead of holding ~29 dead modules for the session. destroy() still
-        // guards it for the partial-construction (early-return) path.
+        // again: drop it now. destroy() still guards it for the
+        // partial-construction (early-return) path.
         vkDestroyShaderModule(ctx.device, module_, nullptr);
         module_ = VK_NULL_HANDLE;
         return true;
@@ -140,9 +139,8 @@ private:
 };
 
 // A GROWABLE descriptor arena: allocation from the newest pool, and when it
-// runs dry another pool of the same shape is chained (the resident-state
-// atlas alone needs hundreds of sets). Sets are freed wholesale with the
-// pools.
+// runs dry another pool of the same shape is chained. Sets are freed
+// wholesale with the pools.
 class DescriptorArena {
 public:
     DescriptorArena() = default;
@@ -338,7 +336,7 @@ public:
         return true;
     }
 
-    // The pool/cb/fence live in the context now; nothing per-shot to free.
+    // Pool/cb/fence live in the context; nothing per-shot to free.
     void destroy(DeviceContext&) { cb_ = VK_NULL_HANDLE; }
 
 private:
@@ -393,10 +391,8 @@ private:
 // The hazard edges. Global memory barriers (not per-buffer) via
 // synchronization2 (core Vulkan 1.3, enabled in create_device): one
 // VkMemoryBarrier2 in a VkDependencyInfo, 64-bit stage/access masks in a
-// single struct. Perf-identical to the sync1 form on this single-compute-stage
-// chain; the win is one modern sync vocabulary. Callers passing 1.x stage/
-// access bit constants still compile -- those bits are value-equal to their
-// _2 aliases for the masks used here.
+// single struct. Callers passing 1.x stage/access bit constants still compile
+// -- those bits are value-equal to their _2 aliases for the masks used here.
 inline void memory_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 src_stage,
                            VkAccessFlags2 src_access,
                            VkPipelineStageFlags2 dst_stage,

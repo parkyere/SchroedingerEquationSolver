@@ -1,9 +1,8 @@
 // Fused MCWF no-jump update: psi[i] += sum_s (cre + i cim)_s * R_s(i) where
 // R_s = (u_s(|r|)/|r|) * Y_{l_s m_s} * inv_norm_s -- the normalized
-// eigenstate evaluated in-register. Replaces the per-state synth ->
-// normalize -> axpy chain (3 full psi round-trips per state) with ONE pass;
-// inv_norm comes from the caller's cached grid norm (a constant for a fixed
-// radial table). Radial interpolation matches synth.comp exactly.
+// eigenstate evaluated in-register in one pass. inv_norm comes from the
+// caller's cached grid norm (a constant for a fixed radial table). Radial
+// interpolation matches synth.comp exactly.
 // psi (binding 0, rw), UBO (binding 1), slotted radial tables (binding 5).
 import complex;
 import ylm;

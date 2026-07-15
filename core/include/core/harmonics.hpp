@@ -16,10 +16,8 @@
 namespace ses {
 
 // Y_lm normalization constants, hoisted out of real_spherical_harmonic:
-// MSVC /fp:precise does NOT constant-fold sqrt(literal) (disasm-verified),
-// so the former in-switch sqrt calls cost one libm call per grid point in
-// fill_orbital. Same expressions evaluated once at startup; IEEE sqrt is
-// correctly rounded, so the values are bitwise identical to per-call results.
+// MSVC /fp:precise does not constant-fold sqrt(literal), so evaluating them
+// inline would cost one libm call per grid point in fill_orbital.
 namespace ynorm {
 inline constexpr double kPi = 3.14159265358979323846;
 inline const double sqrt_pi = std::sqrt(kPi);                    // l = 0

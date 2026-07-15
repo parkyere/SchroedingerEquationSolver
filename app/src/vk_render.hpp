@@ -66,7 +66,7 @@ struct RenderKernels {
     std::size_t occ_dilate_size = 0;
     const unsigned char* shadow = nullptr;  // key-light transmittance
     std::size_t shadow_size = 0;
-    const unsigned char* flow_vert = nullptr;  // particle sprites
+    const unsigned char* flow_vert = nullptr;  // streakline vertices
     std::size_t flow_vert_size = 0;
     const unsigned char* flow_frag = nullptr;
     std::size_t flow_frag_size = 0;
@@ -414,8 +414,7 @@ public:
         }
 
         vkCmdEndRendering(cb);
-        // The render pass used to move color to GENERAL for the post-chain
-        // compute imageLoads on its final subpass dependency; do it explicitly.
+        // Move color to GENERAL for the post-chain compute imageLoads.
         ses_vk::image_layout_barrier(
             cb, color_.img, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_GENERAL,
@@ -1184,8 +1183,8 @@ private:
         return true;
     }
 
-    // Probability-flow particle system: the SSBO, its advection kernel, and
-    // the additive point-sprite pipeline drawn inside the scene pass.
+    // Probability-flow streaklines: the trail SSBO, its advection kernel, and
+    // the LINE_STRIP pipeline drawn inside the scene pass.
     bool create_flow(const RenderKernels& blobs) {
         const auto sbuf = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         const auto cis = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -1536,11 +1535,10 @@ private:
         return true;
     }
 
-    // The TESTED cyclic phase colormap as a repeating 1D texture (RGBA32F).
+    // The cyclic phase colormap as a repeating 1D RGBA8 texture.
     bool create_phase_lut() {
-        // RGBA8: it is a colormap -- 1/255 steps are invisible, and 32-bit
-        // texels filter at FULL rate where the 128-bit RGBA32F ones were
-        // quarter-rate on the raymarch's hottest per-step tap.
+        // RGBA8 not a float format: a colormap's 1/255 steps are invisible, and
+        // 8-bit texels filter at full rate on the raymarch's hottest per-step tap.
         const std::vector<ses::Rgb> lut = ses::phase_lut(kPhaseLutSize);
         std::vector<std::uint8_t> texels(4 * lut.size());
         auto quantize = [](double c) {
@@ -1643,7 +1641,7 @@ private:
                      psi_staging.size() * sizeof(float), {nx, ny, nz}, first);
     }
 
-    // Point the psi bindings (raymarch, particle advection, sprite color)
+    // Point the psi bindings (raymarch, particle advection, streakline color)
     // at the live volume (engine bridge or fallback).
     void point_volume_binding(VkImageView engine_view) {
         VkImageView view = engine_view;

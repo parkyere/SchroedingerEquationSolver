@@ -200,14 +200,11 @@ void register_verification_arcs(ShellT* shell) {
     }
 
     // Cascade arc: excite 3d_z2 and require >= 2 photons -- 3d cannot reach
-    // 1s directly (dl = 2), so two photons prove 3d -> 2p -> 1s fired. 3d's
-    // display lifetime is ~80 au (10x the 2p, as in real hydrogen). The sim
-    // time budgeted = wall window x time_scale, but throughput is GPU- and
-    // policy-dependent (a wall-only window silently lost its margin when the
-    // step throughput dropped), so this EARLY-EXITS the moment 2 photons land
-    // (the count only grows) and the 120 s window is just the worst-case FAIL
-    // bound -- paid on a genuine miss, not every run. time_scale is maxed (16,
-    // the clamp ceiling) for the widest lifetime margin on the slowest GPU.
+    // 1s directly (dl = 2), so two photons prove 3d -> 2p -> 1s fired.
+    // EARLY-EXITS the moment 2 photons land (the count only grows); the 120 s
+    // window is just the worst-case FAIL bound, since step throughput is GPU-
+    // and policy-dependent. time_scale is maxed (16, the clamp ceiling) for
+    // the widest lifetime margin on the slowest GPU.
     if (shell->has_arg("--selftest-cascade")) {
         run_when_manifold_ready(shell, [shell] {
             const long long baseline = shell->hy()->photon_count();
@@ -304,8 +301,8 @@ void register_verification_arcs(ShellT* shell) {
                 shell->hy()->toggle_laser();  // -> X
                 const long long baseline = shell->hy()->photon_count();
                 // Two X-pol photons need ~170 au of sim time (~2 half-flops
-                // + accelerated lifetimes); at ~1.5 au/s a 60 s window was
-                // arithmetically unsatisfiable -- 180 s has real margin.
+                // + accelerated lifetimes); 180 s gives real margin at the
+                // slowest throughput.
                 shell->sched().after(180000, [shell, baseline] {
                     const long long fresh = shell->hy()->photon_count() - baseline;
                     std::fprintf(stderr,

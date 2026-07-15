@@ -1,6 +1,6 @@
 #pragma once
 
-// Volume-rendering math. The GLSL ray marcher mirrors these formulas
+// Volume-rendering math. The shader ray marcher mirrors these formulas
 // line-by-line; correctness is pinned HERE (tests/volume_test.cpp) because
 // shaders cannot be unit-tested.
 

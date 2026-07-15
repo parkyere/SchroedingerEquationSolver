@@ -106,10 +106,9 @@ struct DeviceContext {
     // or a 10 s hang). The device is then unusable: further submits are skipped
     // (no spam, no repeated 10 s stalls) and the director drops to the CPU path.
     bool device_lost = false;
-    // Item 0a: forward-safe feature negotiation results. create_device probes
-    // phys_dev and enables ONLY the supported subset; downstream fast paths
-    // gate on these (never assume Pascal limits -- newer NVIDIA must run this
-    // unchanged). adopt() leaves them false (the owner enabled its features).
+    // Feature negotiation results: create_device probes phys_dev and enables
+    // ONLY the supported subset; downstream fast paths gate on these. adopt()
+    // leaves them false (the owner enabled its own features).
     bool feat_timeline_semaphore = false;
     bool feat_synchronization2 = false;
     bool feat_dynamic_rendering = false;
@@ -210,18 +209,11 @@ struct DeviceContext {
         VkApplicationInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         ai.pApplicationName = "sesolver";
-        // Vulkan 1.3, DELIBERATELY not 1.4. At apiVersion 1.4 the GPU hangs on
-        // NVIDIA 580 / Blackwell / Linux: the source_location diagnostic pins the
-        // FIRST fault to the COMPUTE-side normalize_buffer (norm reduction) during
-        // the startup atlas build -- NOT the render path. ONLY this enum differs
-        // (identical features + SPIR-V; no 1.4-EXCLUSIVE feature; VMA/ImGui use the
-        // device's REAL version), and the spec lets a driver steer behavior on the
-        // apiVersion integer, so 1.4 selects a broken NVIDIA driver path (GSP
-        // CTX_SWITCH_TIMEOUT class -> device lost). Driver bug, not our misuse
-        // (3 independent audits, zero app-side hazard). 1.3 loses NOTHING -- no
-        // 1.4-exclusive feature is used. To pursue 1.4: update the 580 driver +
-        // retest, then file a repro (docs/REVIEW_BACKLOG.md). VMA uses the device's
-        // REAL apiVersion (aci.vulkanApiVersion), never this instance value.
+        // Vulkan 1.3, NOT 1.4: at apiVersion 1.4 the GPU hangs (device lost)
+        // on some NVIDIA drivers -- the spec lets a driver steer behavior on
+        // the apiVersion integer, and 1.4 selects a broken path. No
+        // 1.4-exclusive feature is used, so 1.3 loses nothing. VMA/ImGui use
+        // the device's REAL apiVersion (aci.vulkanApiVersion), never this.
         ai.apiVersion = VK_API_VERSION_1_3;
         VkInstanceCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -346,11 +338,9 @@ struct DeviceContext {
             dci.ppEnabledExtensionNames = &kSwapchainExt;
         }
 
-        // Forward-safe feature negotiation (Item 0a). PROBE what phys_dev
-        // actually supports, then ENABLE only that subset -- Pascal is the
-        // floor but newer NVIDIA must run this unchanged, so never assume, ask.
-        // pEnabledFeatures stays null; features ride the pNext chain of core
-        // VkPhysicalDeviceVulkan1{1,2,3}Features (the Vulkan 1.4 idiom).
+        // Feature negotiation: PROBE what phys_dev supports, then ENABLE only
+        // that subset. pEnabledFeatures stays null; features ride the pNext
+        // chain of core VkPhysicalDeviceVulkan1{1,2,3}Features.
         VkPhysicalDeviceVulkan13Features probe13{};
         probe13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         VkPhysicalDeviceVulkan12Features probe12{};

@@ -21,7 +21,7 @@ namespace ses_shell {
 // and never down-casts to a concrete type; a scene that supports these
 // controls returns a non-null pointer from the matching accessor, so the
 // panel and the selftest arcs reach the specialized surface through a stable
-// interface instead of ~28 Shell forwarders (REVIEW_BACKLOG architecture).
+// interface.
 struct HydrogenApi {
     virtual ~HydrogenApi() = default;
     virtual void set_relaxing() = 0;
@@ -117,8 +117,8 @@ public:
     virtual VkBuffer surface_vbuf() const { return VK_NULL_HANDLE; }
     virtual VkBuffer surface_indirect() const { return VK_NULL_HANDLE; }
     // GPU-surface vertex capacity: generous for any tracked isosurface
-    // (~108 MB, transient while Surface is active); overflow clamps to a
-    // clean prefix (the engine warns once).
+    // (transient while Surface is active); overflow clamps to a clean prefix
+    // (the engine warns once).
     static constexpr int kMcMaxTris = 1000000;
     virtual float next_flash_intensity() = 0;
     virtual bool take_volume_written() = 0;

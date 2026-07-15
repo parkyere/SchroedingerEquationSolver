@@ -1,7 +1,6 @@
 // Occupancy build (empty-space skipping): one WORKGROUP per coarse cell,
-// one thread per fine texel of its block, shared-memory max reduction. (The
-// old one-thread-per-cell version serialized 512 fetches per thread; max is
-// exactly associative in fp, so the parallel order changes nothing.)
+// one thread per fine texel of its block, shared-memory max reduction. Max is
+// exactly associative in fp, so the parallel reduction order changes nothing.
 // Rebuilt only when the displayed volume changes. The raymarcher skips
 // blocks whose (dilated) max is negligible -- most of the +-80 Bohr box.
 [[vk::binding(0, 0)]] [[vk::image_format("r32f")]] RWTexture3D<float4> occ;

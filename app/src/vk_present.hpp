@@ -511,8 +511,8 @@ private:
                 return false;
             }
         }
-        // Present waits ride a PER-IMAGE semaphore (the validated pattern; a
-        // single reused one races the presentation engine).
+        // Present waits ride a PER-IMAGE semaphore: a single reused one races
+        // the presentation engine.
         if (render_done_.size() != n) {
             for (VkSemaphore s : render_done_) {
                 vkDestroySemaphore(ctx_->device, s, nullptr);
@@ -596,9 +596,7 @@ inline bool dump_scene_bmp(ses_vk::DeviceContext& ctx, VkImage img,
             ctx.destroy_buffer(&host);
             return false;
         }
-        // Reuse the sync2 image_layout_barrier helper instead of hand-rolling
-        // the two transitions (the round-trip: sample-optimal -> transfer-src,
-        // copy, back).
+        // Round-trip: sample-optimal -> transfer-src, copy, back.
         ses_vk::image_layout_barrier(
             shot.cb(), img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

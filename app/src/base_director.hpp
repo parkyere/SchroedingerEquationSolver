@@ -3,8 +3,7 @@
 // Shared machinery for potential-swap scenarios (harmonic trap, tunneling):
 // the CPU truth session, the ses_vk engine, and the generic frame/tick/
 // relax/measure flow with virtual hooks for the scenario-specific parts.
-// HydrogenDirector predates this base and keeps its bespoke flow; unifying
-// it onto BaseDirector is a recorded follow-up refactor.
+// HydrogenDirector keeps its own bespoke flow and does not derive from this.
 
 #include "scenario.hpp"
 #include "vk_blobs.hpp"

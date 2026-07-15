@@ -3,8 +3,8 @@
 // Marching cubes: extract the isosurface of a real scalar field sampled on a
 // Grid3D. The surface encloses the region where field > isovalue (the inside
 // of a density cloud); normals are unit length and point OUTWARD, i.e. down
-// the gradient. Output is a triangle soup (3 vertices + 3 normals per
-// triangle); vertex welding/indexing is a later optimization.
+// the gradient. Output is an unindexed triangle soup (3 vertices + 3 normals
+// per triangle).
 
 #include <core/grid.hpp>
 #include <core/marching_cubes_tables.hpp>

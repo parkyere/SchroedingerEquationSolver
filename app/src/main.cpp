@@ -273,10 +273,9 @@ public:
                 ses_shell::draw_generic_panel(
                     *this, ui_, {{"Relax to ground (2)", '2'}});
             }
-            // The panel's controls now mutate the director directly (via the
-            // capability seam) without the old per-forwarder refresh, so keep
-            // the status block current here -- otherwise a control changed
-            // while PAUSED (no tick, no title-dirty) would read stale forever.
+            // Panel controls mutate the director directly, so keep the status
+            // block current here -- otherwise a control changed while PAUSED
+            // (no tick, no title-dirty) would read stale forever.
             refresh_status();
             ImGui::Render();
             ImDrawData* dd = ImGui::GetDrawData();
@@ -295,8 +294,8 @@ public:
 
     // ---- control entry points every scene shares --------------------------
     // Scenario-specific controls/probes live behind director_->hydrogen() /
-    // director_->tunnel() (scenario.hpp) -- the panel and the selftest arcs
-    // reach them there, so the shell no longer forwards ~28 down-cast calls.
+    // director_->tunnel() (scenario.hpp); the panel and the selftest arcs
+    // reach them there.
     void toggle_pause() { paused_ = !paused_; }
     void set_real_time() {
         director_->set_real_time();
@@ -342,8 +341,8 @@ public:
     }
 
     // ---- selftest / verification hooks --------------------------------------
-    // The scenario itself + its capability seams (single accessors, not the
-    // old per-method forwarders): the arcs call e.g. hy()->channel_a().
+    // The scenario itself + its capability seams (single accessors): the arcs
+    // call e.g. hy()->channel_a().
     ses_shell::ScenarioDirector& director() { return *director_; }
     ses_shell::HydrogenApi* hy() { return director_->hydrogen(); }
     ses_shell::TunnelApi* tn() { return director_->tunnel(); }
@@ -395,7 +394,7 @@ private:
         // DescriptorPool left null lets the backend own a correctly typed pool
         // (and destroy it in ImGui_ImplVulkan_Shutdown).
         info.DescriptorPoolSize = 16;
-        // Dynamic rendering (the present pass dropped its VkRenderPass): the UI
+        // Dynamic rendering (the present pass uses no VkRenderPass): the UI
         // pipeline declares the swapchain colour FORMAT. ImGui 1.92 deep-copies
         // the format array during Init, so a local is safe.
         info.UseDynamicRendering = true;
