@@ -7,7 +7,7 @@
 #include <complex>
 #include <core/fft.hpp>
 #include <core/field.hpp>
-#include <core/spectral.hpp>
+import ses.spectral;
 import ses.vec;
 
 #include <algorithm>

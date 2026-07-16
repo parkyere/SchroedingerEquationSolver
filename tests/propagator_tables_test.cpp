@@ -9,7 +9,7 @@ import ses.grid;
 #include <core/potential.hpp>
 #include <core/propagator.hpp>
 #include <core/simulation.hpp>
-#include <core/spectral.hpp>
+import ses.spectral;
 import ses.vec;
 
 #include <gtest/gtest.h>

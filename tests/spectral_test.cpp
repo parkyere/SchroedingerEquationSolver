@@ -7,13 +7,13 @@
 // (the NumPy fftfreq layout). Getting this wrong is THE classic split-operator
 // bug: the kinetic phase then scrambles high-frequency components.
 
-import ses.grid;
-#include <core/spectral.hpp>
-
 #include <gtest/gtest.h>
 
 #include <numbers>
 #include <vector>
+
+import ses.grid;
+import ses.spectral;
 
 namespace {
 

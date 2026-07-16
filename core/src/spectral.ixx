@@ -1,15 +1,16 @@
-#pragma once
+module;
+#include <numbers>
+#include <vector>
+export module ses.spectral;
+import ses.grid;
+
 
 // FFT-bin -> physical-wavenumber mapping for a periodic Grid1D (fftfreq layout):
 //     k_j = 2 pi j / L        j = 0 .. n/2 - 1
 //     k_j = 2 pi (j - n) / L  j = n/2 .. n - 1
 
-import ses.grid;
 
-#include <numbers>
-#include <vector>
-
-namespace ses {
+export namespace ses {
 
 inline std::vector<double> wavenumbers(const Grid1D& g) {
     const double dk = 2.0 * std::numbers::pi / (g.xmax - g.xmin);

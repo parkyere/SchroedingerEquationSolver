@@ -11,7 +11,7 @@
 #include <core/fft.hpp>
 #include <core/field.hpp>
 import ses.grid;
-#include <core/spectral.hpp>
+import ses.spectral;
 
 #include <cmath>
 #include <cstddef>

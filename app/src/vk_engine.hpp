@@ -38,7 +38,7 @@ import ses.mc.tables;
 #include <core/decay.hpp>
 #include <core/drive.hpp>
 import ses.grid;
-#include <core/spectral.hpp>
+import ses.spectral;
 import ses.vec;
 
 #include <algorithm>

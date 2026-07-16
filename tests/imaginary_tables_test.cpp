@@ -8,7 +8,7 @@
 import ses.grid;
 #include <core/imaginary_time.hpp>
 #include <core/potential.hpp>
-#include <core/spectral.hpp>
+import ses.spectral;
 import ses.vec;
 
 #include <gtest/gtest.h>
