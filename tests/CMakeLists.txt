@@ -29,6 +29,7 @@ add_executable(sesolver_tests
     degenerate_guards_test.cpp
     drive_test.cpp
     dynamics3_test.cpp
+    eigenstate_flush_test.cpp
     emission_test.cpp
     fft3_test.cpp
     fft_test.cpp
