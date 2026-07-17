@@ -139,6 +139,107 @@ TEST(HoEigenstate, IsOmegaGeneric) {
     }
 }
 
+// RED: ladder_rung_stable(psi, omega, n_from, up) -- the noise-free ladder
+// rung for a state KNOWN to be the eigenstate |n_from> (up to a global
+// phase). The raw spectral operator supplies the counting norm^2 and the
+// global phase; the state itself is rebuilt from the direct Hermite oracle
+// carrying that phase. Same mathematical object (adag|n> = sqrt(n+1)|n+1>),
+// computed by the stable route -- so the round-off floor RESETS at every
+// rung instead of compounding, and descending no longer amplifies the
+// high-k residue that the raw chain leaves behind (the observed
+// ladder-down instability). The usable range becomes the grid's
+// REPRESENTABILITY ceiling, not the raw-chain noise cap.
+TEST(LadderRungStable, RoundTripsFarBeyondTheRawChain) {
+    // Up 25 rungs then down 25: far past the raw-chain cap (12 at omega =
+    // 0.25, where a raw round trip disintegrates into high-k garbage), the
+    // stable rungs land exactly back on the ground state.
+    const std::vector<double> v = ses::harmonic_potential(kGrid, kOmega);
+    ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 0);
+    for (int n = 0; n < 25; ++n) {
+        const double norm2 = ses::ladder_rung_stable(psi, kOmega, n, true);
+        EXPECT_NEAR(norm2, n + 1.0, 1e-5) << "up from n = " << n;
+        EXPECT_NEAR(overlap_sq(psi, ses::ho_eigenstate(kGrid, kOmega, n + 1)),
+                    1.0, 1e-10)
+            << "clean at n = " << n + 1;
+    }
+    for (int n = 25; n > 0; --n) {
+        const double norm2 = ses::ladder_rung_stable(psi, kOmega, n, false);
+        EXPECT_NEAR(norm2, static_cast<double>(n), 1e-5) << "down from n = " << n;
+    }
+    EXPECT_NEAR(overlap_sq(psi, ses::ho_eigenstate(kGrid, kOmega, 0)), 1.0,
+                1e-10);
+    EXPECT_NEAR(ses::mean_energy(psi, v), 0.5 * kOmega, 1e-9);
+}
+
+TEST(LadderRungStable, CarriesTheGlobalPhase) {
+    // e^{i theta}|5> must rung to e^{i theta}|6>: the phase a stationary
+    // state accumulated under evolution survives the stable rung (the raw
+    // operator supplies it; the oracle rebuild must not reset it).
+    const double theta = 0.7;
+    const std::complex<double> ph{std::cos(theta), std::sin(theta)};
+    ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 5);
+    for (int i = 0; i < psi.size(); ++i) {
+        psi[i] *= ph;
+    }
+    const double norm2 = ses::ladder_rung_stable(psi, kOmega, 5, true);
+    EXPECT_NEAR(norm2, 6.0, 1e-6);
+    const ses::Field1D oracle = ses::ho_eigenstate(kGrid, kOmega, 6);
+    std::complex<double> ov{};
+    for (int i = 0; i < psi.size(); ++i) {
+        ov += std::conj(oracle[i]) * psi[i];
+    }
+    ov *= kGrid.spacing();
+    EXPECT_NEAR(ov.real(), std::cos(theta), 1e-10);
+    EXPECT_NEAR(ov.imag(), std::sin(theta), 1e-10);
+}
+
+TEST(LadderRungStable, GroundAnnihilationStillRefuses) {
+    ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 0);
+    const ses::Field1D before = psi;
+    const double norm2 = ses::ladder_rung_stable(psi, kOmega, 0, false);
+    EXPECT_LT(norm2, 1e-9);
+    for (int i = 0; i < psi.size(); ++i) {
+        EXPECT_EQ(psi[i], before[i]) << "annihilated rung must not write psi";
+    }
+}
+
+// RED: ho_level_cap(grid, omega) -- the REPRESENTABILITY ceiling: the
+// largest level whose direct Hermite oracle is still faithful on the grid
+// (discrete energy within 0.1% of (n+1/2)w). This is what caps the stable
+// rungs; it is limited by the BOX at soft omega (wide turning points) and
+// by the Nyquist band at stiff omega, far above the raw-chain noise cap.
+TEST(HoLevelCap, SitsFarAboveTheRawChainCapAndPeaksNearMatchedNyquist) {
+    for (double w : {0.05, 0.25, 1.0, 4.0}) {
+        const int level = ses::ho_level_cap(kGrid, w);
+        const int raw = ses::ladder_cap(kGrid, w);
+        std::fprintf(stderr, "ho_level_cap(w=%.2f) = %d (raw chain %d)\n", w,
+                     level, raw);
+        EXPECT_GE(level, raw) << "omega=" << w;
+    }
+    const int c025 = ses::ho_level_cap(kGrid, 0.25);
+    const int c1 = ses::ho_level_cap(kGrid, 1.0);
+    const int c4 = ses::ho_level_cap(kGrid, 4.0);
+    EXPECT_GE(c025, 25);  // box-limited but far beyond raw cap 12
+    EXPECT_GE(c1, 80);    // matched Nyquist: the ceiling peaks here
+    EXPECT_GT(c1, c025);
+    EXPECT_GT(c1, c4);    // stiff well: k-band-limited again
+    EXPECT_GE(c4, 25);
+}
+
+TEST(HoLevelCap, EveryLevelBelowTheCapIsActuallyClean) {
+    // Spot-check the cap's meaning: at omega = 0.25 the oracle at the cap
+    // is faithful (energy AND variance), one past it need not be.
+    const double w = 0.25;
+    const std::vector<double> v = ses::harmonic_potential(kGrid, w);
+    const int cap = ses::ho_level_cap(kGrid, w);
+    for (int n : {cap / 2, cap}) {
+        const ses::Field1D psi = ses::ho_eigenstate(kGrid, w, n);
+        const double e_exact = (n + 0.5) * w;
+        EXPECT_NEAR(ses::mean_energy(psi, v), e_exact, 1e-3 * e_exact)
+            << "n = " << n;
+    }
+}
+
 TEST(Ladder, GroundStateSetupHasEnergyHalfOmega) {
     const ses::Field1D psi = ho_ground();
     const std::vector<double> v = ses::harmonic_potential(kGrid, kOmega);
