@@ -17,6 +17,9 @@ target_sources(ses_scenario
         src/hydrogen_director.ixx
         src/harmonic_director.ixx
         src/tunneling_director.ixx
+        src/line1d_director.ixx
+        src/harmonic1d_director.ixx
+        src/tunneling1d_director.ixx
         src/selftest_arcs.ixx)
 target_compile_features(ses_scenario PUBLIC cxx_std_20)
 target_link_libraries(ses_scenario

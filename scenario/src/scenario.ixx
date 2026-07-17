@@ -70,6 +70,28 @@ struct TunnelApi {
     virtual double transmitted_max() const = 0;
 };
 
+// 1D harmonic-oscillator ladder controls (the textbook 1D trap scene).
+struct Ladder1dApi {
+    virtual ~Ladder1dApi() = default;
+    virtual int level() const = 0;           // current Fock level n
+    virtual double level_energy() const = 0;  // live <H> (Ha)
+    // Apply a-dag (up) / a (down); false = refused (a|0> = 0, or the
+    // spectral-band cap on the way up).
+    virtual bool ladder(bool up) = 0;
+};
+
+// A 1D-scene overlay polyline: packed (x, y, z) float triples drawn as one
+// LINE_STRIP in world space with a constant color. The xyz pointer stays
+// valid until the director's next run_frame().
+struct OverlayCurve {
+    const float* xyz = nullptr;
+    int count = 0;
+    float r = 1.0f;
+    float g = 1.0f;
+    float b = 1.0f;
+    float a = 1.0f;
+};
+
 class ScenarioDirector {
 public:
     virtual ~ScenarioDirector() = default;
@@ -77,6 +99,12 @@ public:
     // Capability queries: non-null only for the scene that implements them.
     virtual HydrogenApi* hydrogen() { return nullptr; }
     virtual TunnelApi* tunnel() { return nullptr; }
+    virtual Ladder1dApi* ladder1d() { return nullptr; }
+
+    // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
+    // scenes return 0 and the renderer draws nothing extra.
+    virtual int overlay_curve_count() const { return 0; }
+    virtual OverlayCurve overlay_curve(int /*i*/) const { return {}; }
 
     // Photons emitted by quantum jumps, if the scene has any (generic so
     // arcs can probe every jump-capable scene; hydrogen's override serves
