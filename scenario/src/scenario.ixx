@@ -78,6 +78,11 @@ public:
     virtual HydrogenApi* hydrogen() { return nullptr; }
     virtual TunnelApi* tunnel() { return nullptr; }
 
+    // Photons emitted by quantum jumps, if the scene has any (generic so
+    // arcs can probe every jump-capable scene; hydrogen's override serves
+    // both this and HydrogenApi).
+    virtual long long photon_count() const { return 0; }
+
     // ---- lifecycle ----
     virtual const ses::Grid3D& grid() const = 0;
     virtual void init_compute(ses_vk::DeviceContext& ctx, bool device_ok,

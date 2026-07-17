@@ -301,7 +301,11 @@ public:
                 app::draw_generic_panel(*this, ui_, {});
             } else {
                 app::draw_generic_panel(
-                    *this, ui_, {{"Relax to ground (2)", '2'}});
+                    *this, ui_,
+                    {{"Relax to ground (2)", '2'},
+                     {"Excite N (5)", '5'},
+                     {"Decay (D)", 'D'},
+                     {"Measure E (E)", 'E'}});
             }
             // Panel controls mutate the director directly, so keep the status
             // block current here -- otherwise a control changed while PAUSED
@@ -737,6 +741,9 @@ int main(int argc, char* argv[]) {
     if (std::find(args.begin(), args.end(), "--selftest-tunnel") !=
         args.end()) {
         scene = "tunnel";  // the arc drives its own scene
+    } else if (std::find(args.begin(), args.end(), "--selftest-trapdecay") !=
+               args.end()) {
+        scene = "harmonic";  // the trap ladder arc drives its own scene
     } else {
         // Every other selftest arc drives the hydrogen scene (it reaches the
         // director through hydrogen()); force it so a mismatched --scene
