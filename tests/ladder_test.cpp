@@ -240,6 +240,101 @@ TEST(HoLevelCap, EveryLevelBelowTheCapIsActuallyClean) {
     }
 }
 
+// RED: ladder_fock(psi, omega, up, n_top, &residual) -- the superposition
+// counterpart of ladder_rung_stable: project onto the truncated Fock basis
+// |0..n_top>, act EXACTLY on the coefficients (adag: c'_{n+1} = sqrt(n+1)
+// c_n; a: c'_n = sqrt(n+1) c_{n+1}), resynthesize from the noise-free
+// oracles. The same linear operator, computed in the basis where it is
+// trivial -- no spectral derivative, so it works at ANY grid k_max (the
+// raw chain's noise gain grows with k_max and dies on fine grids).
+// *residual reports the input's outside-band weight; the caller gates on
+// it (a state not inside the band must take the raw operator instead).
+TEST(LadderFock, AgreesWithTheRawOperatorOnTheCoarseGrid) {
+    ses::Field1D psi{kGrid};
+    const ses::Field1D e0 = ses::ho_eigenstate(kGrid, kOmega, 0);
+    const ses::Field1D e1 = ses::ho_eigenstate(kGrid, kOmega, 1);
+    for (int i = 0; i < psi.size(); ++i) {
+        psi[i] = e0[i] + e1[i];
+    }
+    ses::normalize(psi);
+    ses::Field1D raw = psi;
+    const double n2_raw = ses::ladder_lower(raw, kOmega);
+    double residual = 1.0;
+    const double n2 = ses::ladder_fock(psi, kOmega, false, 8, &residual);
+    EXPECT_NEAR(n2, n2_raw, 1e-9);
+    EXPECT_NEAR(n2, 0.5, 1e-9);
+    EXPECT_LT(residual, 1e-10);
+    EXPECT_NEAR(overlap_sq(psi, raw), 1.0, 1e-9);
+    EXPECT_NEAR(overlap_sq(psi, e0), 1.0, 1e-9);
+}
+
+TEST(LadderFock, RaisesASuperpositionOnAFineGridWhereTheRawChainDies) {
+    // 4096 points over +-20: k_max ~ 640, raw-chain gain ~ 900 per rung --
+    // the raw operators are useless here, the Fock path is exact.
+    const ses::Grid1D fine{-20.0, 20.0, 4096};
+    ses::Field1D psi{fine};
+    const ses::Field1D e2 = ses::ho_eigenstate(fine, kOmega, 2);
+    const ses::Field1D e4 = ses::ho_eigenstate(fine, kOmega, 4);
+    for (int i = 0; i < psi.size(); ++i) {
+        psi[i] = e2[i] + e4[i];
+    }
+    ses::normalize(psi);
+    // First raise: counting norm^2 = sum (n+1)|c_n|^2 = (3 + 5)/2 = 4.
+    double residual = 1.0;
+    EXPECT_NEAR(ses::ladder_fock(psi, kOmega, true, 16, &residual), 4.0, 1e-9);
+    EXPECT_LT(residual, 1e-10);
+    for (int k = 0; k < 5; ++k) {
+        ses::ladder_fock(psi, kOmega, true, 16, &residual);
+    }
+    // After 6 raises: (adag)^6 (|2> + |4>) ~ sqrt(8!/2!)|8> + sqrt(10!/4!)|10>.
+    const double a8 = std::sqrt(40320.0 / 2.0);       // 8!/2!
+    const double a10 = std::sqrt(3628800.0 / 24.0);   // 10!/4!
+    const ses::Field1D e8 = ses::ho_eigenstate(fine, kOmega, 8);
+    const ses::Field1D e10 = ses::ho_eigenstate(fine, kOmega, 10);
+    ses::Field1D expect{fine};
+    for (int i = 0; i < expect.size(); ++i) {
+        expect[i] = a8 * e8[i] + a10 * e10[i];
+    }
+    ses::normalize(expect);
+    EXPECT_NEAR(overlap_sq(psi, expect), 1.0, 1e-9);
+}
+
+TEST(LadderFock, ReportsOutsideBandResidualAndRefusesNothingItself) {
+    // |10> against a band capped at n_top = 5: everything is residual; the
+    // state must be left untouched (the caller's fallback signal).
+    ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 10);
+    const ses::Field1D before = psi;
+    double residual = 0.0;
+    ses::ladder_fock(psi, kOmega, true, 5, &residual);
+    EXPECT_GT(residual, 0.99);
+    for (int i = 0; i < psi.size(); ++i) {
+        EXPECT_EQ(psi[i], before[i]);
+    }
+}
+
+TEST(LadderFock, AnnihilatesThePureGroundOnLowering) {
+    ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 0);
+    const ses::Field1D before = psi;
+    double residual = 1.0;
+    const double n2 = ses::ladder_fock(psi, kOmega, false, 8, &residual);
+    EXPECT_LT(n2, 1e-9);
+    EXPECT_LT(residual, 1e-10);
+    for (int i = 0; i < psi.size(); ++i) {
+        EXPECT_EQ(psi[i], before[i]);
+    }
+}
+
+TEST(LadderFock, AgreesWithTheStableRungOnEigenstates) {
+    ses::Field1D fock = ses::ho_eigenstate(kGrid, kOmega, 7);
+    ses::Field1D rung = fock;
+    double residual = 1.0;
+    const double n2f = ses::ladder_fock(fock, kOmega, true, 16, &residual);
+    const double n2r = ses::ladder_rung_stable(rung, kOmega, 7, true);
+    EXPECT_NEAR(n2f, 8.0, 1e-9);
+    EXPECT_NEAR(n2r, 8.0, 1e-6);
+    EXPECT_NEAR(overlap_sq(fock, rung), 1.0, 1e-10);
+}
+
 TEST(Ladder, GroundStateSetupHasEnergyHalfOmega) {
     const ses::Field1D psi = ho_ground();
     const std::vector<double> v = ses::harmonic_potential(kGrid, kOmega);
