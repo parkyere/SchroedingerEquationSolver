@@ -23,7 +23,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <complex>
+#include <numbers>
 #include <vector>
 
 import ses.field;
@@ -109,6 +111,36 @@ TEST(Ladder, RaiseThenLowerRoundTripsToTheGroundState) {
     ses::ladder_raise(psi, kOmega);
     ses::ladder_lower(psi, kOmega);
     EXPECT_NEAR(overlap_sq(psi, ground), 1.0, 1e-10);
+}
+
+TEST(Ladder, ChainIsOmegaGeneric) {
+    // The operators take omega as a parameter: a stiffer well (omega = 0.75)
+    // must climb just as cleanly (its ground is a narrower Gaussian and its
+    // noise gain k_max/sqrt(2 omega) is LOWER than at 0.25).
+    const double w = 0.75;
+    ses::Field1D psi =
+        ses::gaussian_wavepacket(kGrid, 0.0, 1.0 / std::sqrt(2.0 * w), 0.0);
+    const std::vector<double> v = ses::harmonic_potential(kGrid, w);
+    for (int n = 0; n < 4; ++n) {
+        EXPECT_NEAR(ses::ladder_raise(psi, w), n + 1.0, 1e-9);
+        EXPECT_NEAR(ses::mean_energy(psi, v), (n + 1.5) * w, 1e-9);
+    }
+}
+
+TEST(LadderCap, TracksTheSpectralNoiseModel) {
+    // ladder_cap(omega, k_max): the largest Fock level the FFT ladder
+    // reaches before the k_max round-off floor, amplified by
+    // g/sqrt(n+1) per raise (g = k_max/sqrt(2 omega)), would become
+    // display-visible. Anchors pin the tuned model at the scene grid
+    // (k_max = pi/h, h = 40/256); monotone: stiffer well (larger omega)
+    // -> lower gain -> higher cap, finer grid -> higher k_max -> lower cap.
+    const double k_max = std::numbers::pi / (40.0 / 256.0);
+    EXPECT_EQ(ses::ladder_cap(0.25, k_max), 10);  // the fixed cap it replaces
+    EXPECT_EQ(ses::ladder_cap(1.0, k_max), 15);
+    EXPECT_EQ(ses::ladder_cap(0.05, k_max), 7);
+    EXPECT_LE(ses::ladder_cap(0.25, 2.0 * k_max), 10);
+    EXPECT_GE(ses::ladder_cap(0.5, k_max), ses::ladder_cap(0.25, k_max));
+    EXPECT_GE(ses::ladder_cap(0.05, k_max), 1);
 }
 
 TEST(Ladder, LowerOnSuperpositionKeepsTheReachablePart) {

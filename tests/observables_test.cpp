@@ -7,14 +7,22 @@
 // tunneling readout T = P(right of barrier) is measured against the initial
 // unit norm, so flux removed by the absorbing mask must reduce -- never
 // inflate -- the report. Total over the whole box therefore equals norm_sq.
+//
+// RED: energy_variance(psi, V) -- Var(H) = <H^2> - <H>^2, scale-invariant,
+// H psi built spectrally (T in k-space) + V in real space. The honest
+// eigenstate discriminator: zero (to round-off) iff psi is an H eigenstate,
+// and exactly (E1 - E0)^2 / 4 on an equal two-level superposition -- no
+// measurement, no basis bookkeeping.
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <complex>
 
 import ses.field;
 import ses.grid;
 import ses.observables;
+import ses.potential;
 import ses.wavepacket;
 
 namespace {
@@ -55,6 +63,46 @@ TEST(ProbabilityInRange, AdjacentHalfOpenIntervalsTileExactly) {
     const double right = ses::probability_in_range(f, 5.0, 16.0);
     EXPECT_DOUBLE_EQ(left + mid + right,
                      ses::probability_in_range(f, -16.0, 16.0));
+}
+
+TEST(EnergyVariance, VanishesOnEigenstatesAndIsExactOnTwoLevelMixes) {
+    // HO at omega = 0.25 on the ladder-clean grid; psi_0 is the exact
+    // Gaussian, psi_1 = sqrt(2 omega) x psi_0 analytically.
+    const double omega = 0.25;
+    const ses::Grid1D g{-20.0, 20.0, 256};
+    const std::vector<double> v = ses::harmonic_potential(g, omega);
+    const double sigma = 1.0 / std::sqrt(2.0 * omega);
+    ses::Field1D psi0 = ses::gaussian_wavepacket(g, 0.0, sigma, 0.0);
+    EXPECT_NEAR(ses::energy_variance(psi0, v), 0.0, 1e-10);
+
+    ses::Field1D psi1{g};
+    for (int i = 0; i < g.n; ++i) {
+        psi1[i] = std::sqrt(2.0 * omega) * g.coord(i) * psi0[i];
+    }
+    ses::normalize(psi1);
+    EXPECT_NEAR(ses::energy_variance(psi1, v), 0.0, 1e-10);
+    EXPECT_NEAR(ses::mean_energy(psi1, v), 1.5 * omega, 1e-10);
+
+    // (|0> + |1>)/sqrt(2): <H> = omega, Var = (E1 - E0)^2 / 4 = omega^2/4.
+    ses::Field1D mix{g};
+    for (int i = 0; i < g.n; ++i) {
+        mix[i] = psi0[i] + psi1[i];
+    }
+    ses::normalize(mix);
+    EXPECT_NEAR(ses::mean_energy(mix, v), omega, 1e-10);
+    EXPECT_NEAR(ses::energy_variance(mix, v), omega * omega / 4.0, 1e-10);
+}
+
+TEST(EnergyVariance, IsScaleInvariant) {
+    const ses::Grid1D g{-16.0, 16.0, 128};
+    const std::vector<double> v = ses::harmonic_potential(g, 0.5);
+    ses::Field1D f = ses::gaussian_wavepacket(g, 1.0, 1.3, 0.4);
+    const double var1 = ses::energy_variance(f, v);
+    for (int i = 0; i < f.size(); ++i) {
+        f[i] *= 3.0;
+    }
+    EXPECT_NEAR(ses::energy_variance(f, v), var1, 1e-9 * (1.0 + var1));
+    EXPECT_GT(var1, 0.0);  // a displaced squeezed packet is no eigenstate
 }
 
 TEST(ProbabilityInRange, SymmetricPacketSplitsEvenlyAboutItsCenter) {
