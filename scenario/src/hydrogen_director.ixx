@@ -1563,7 +1563,6 @@ private:
     bool mcwf_damping_ = true;  // no-jump H_eff damping between jumps
     int mcwf_scratch_ = -1;     // reused synthesis buffer (see synth_over)
     bool pending_energy_measure_ = false;  // Key E: serviced in run_frame
-    double radiated_power_ = 0.0;  // semiclassical Larmor power (au)
 
     // Tracked atom: radial solve, synthesis bookkeeping, E1 channel table;
     // engine-backed calls pass engine_ explicitly.

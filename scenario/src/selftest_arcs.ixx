@@ -3,6 +3,7 @@ module;
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <string>
 export module ses.scenario.selftest_arcs;
 export import ses.scenario.manifold_spec;
 
@@ -136,19 +137,26 @@ void register_verification_arcs(ShellT* shell) {
                                                                  bool harm_runs) {
                 const bool harm_ok =
                     shell->hy() == nullptr && shell->tn() == nullptr;
+                // Scene-generic Larmor readout: the oscillating coherent
+                // state must report a radiated power in the title.
+                const bool harm_emits =
+                    shell->status_text().find("emit P") != std::string::npos;
+                std::fprintf(stderr, "selftest-scene: harmonic status: %s\n",
+                             shell->status_text().c_str());
                 shell->request_scene(2);  // tunneling barrier
                 selftest_scene_wait_running(
                     shell, "tunnel", 0,
-                    [shell, hy_ok, harm_ok, harm_runs](bool tn_runs) {
+                    [shell, hy_ok, harm_ok, harm_emits,
+                     harm_runs](bool tn_runs) {
                         const bool tn_ok = shell->tn() != nullptr;
-                        const bool pass = hy_ok && harm_ok && harm_runs &&
-                                          tn_ok && tn_runs;
+                        const bool pass = hy_ok && harm_ok && harm_emits &&
+                                          harm_runs && tn_ok && tn_runs;
                         std::fprintf(
                             stderr,
                             "selftest-scene: hydrogen %d, harmonic %d "
-                            "(runs %d), tunnel %d (runs %d)  [%s]\n",
-                            hy_ok, harm_ok, harm_runs, tn_ok, tn_runs,
-                            pass ? "PASS" : "FAIL");
+                            "(runs %d, emits %d), tunnel %d (runs %d)  [%s]\n",
+                            hy_ok, harm_ok, harm_runs, harm_emits, tn_ok,
+                            tn_runs, pass ? "PASS" : "FAIL");
                         shell->request_exit(pass ? 0 : 1);
                     });
             });

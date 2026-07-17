@@ -23,12 +23,14 @@ export import ses.marching_cubes;
 export import ses.field;
 export import ses.potential;
 export import ses.colormap;
+import ses.emission;
 
 
 // Shared machinery for potential-swap scenarios (harmonic trap, tunneling):
 // the CPU truth session, the ses_vk engine, and the generic frame/tick/
 // relax/measure flow with virtual hooks for the scenario-specific parts.
-// HydrogenDirector keeps its own bespoke flow and does not derive from this.
+// HydrogenDirector derives from this for the shared members/controls but
+// overrides the whole frame flow with its bespoke one.
 // volk.h textually first: VK_* macros never cross module boundaries, and the
 // early textual claim inoculates against GMF/textual redefinitions.
 
@@ -312,6 +314,9 @@ public:
                                 kBaseHaToEv)
                      : strf("E ~ %.3f eV   ", relax_energy_display_ * kBaseHaToEv);
         }
+        if (stepping_ == BaseStepping::RealTime && use_gpu_path()) {
+            s += strf("emit P = %.2e au   ", radiated_power_);
+        }
         s += strf("norm = %.6f   [%s, %s, %s]  1=real 2=relax R=reset tab=view "
                   "[ ]=density M=pos",
                   norm_display_,
@@ -357,6 +362,10 @@ protected:
                 absorber_width() == 0.0) {
                 engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
             }
+            // Semiclassical Larmor readout, valid for ANY potential: an
+            // accelerating charge radiates (a trap coherent state visibly
+            // oscillates); ~0 for a stationary state.
+            radiated_power_ = ses::larmor_power(engine_.mean_force());
         }
         // ASYNC: overlaps this frame's render (previous display volume);
         // next frame's run_frame waits and flips. after_step_batch hooks
@@ -478,6 +487,7 @@ protected:
     double gpu_time_ = 0.0;
     double norm_display_ = 1.0;
     double relax_energy_display_ = 0.0;
+    double radiated_power_ = 0.0;  // semiclassical Larmor power (au)
     double relax_prev_energy_ = 0.0;
     int relax_plateau_ = 0;
     std::vector<float> readback_buf_;
