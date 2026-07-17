@@ -55,6 +55,34 @@ TEST(BarrierPotential, SlabAlongXExactAndZeroElsewhere) {
     EXPECT_EQ(v[static_cast<std::size_t>(g.flat(11, 8, 8))], 0.0);    // x = 3: half-open
 }
 
+TEST(BarrierPotential, OneDimensionalSlabExactAndHalfOpen) {
+    // 1D overload for the textbook tunneling scene: V = v0 on [x_lo, x_hi),
+    // 0 elsewhere -- same half-open convention as the 3D slab.
+    const ses::Grid1D g{-8.0, 8.0, 16};  // h = 1: coords -8 .. 7
+    const std::vector<double> v = ses::barrier_potential(g, 0.25, 0.0, 3.0);
+    ASSERT_EQ(v.size(), 16u);
+    EXPECT_EQ(v[8], 0.25);   // x = 0: inside
+    EXPECT_EQ(v[10], 0.25);  // x = 2: inside
+    EXPECT_EQ(v[7], 0.0);    // x = -1: outside
+    EXPECT_EQ(v[11], 0.0);   // x = 3: half-open upper edge
+}
+
+TEST(AbsorbingMask, OneDimensionalRampMatchesTheAxisFormula) {
+    // 1D overload: exactly 1 in the interior, cos^2 ramp to 0 within `width`
+    // of each wall -- the same per-axis factor the 3D mask multiplies.
+    const ses::Grid1D g{-8.0, 8.0, 16};  // h = 1: coords -8 .. 7
+    const std::vector<double> m = ses::absorbing_mask(g, 3.0);
+    ASSERT_EQ(m.size(), 16u);
+    EXPECT_DOUBLE_EQ(m[8], 1.0);      // x = 0: deep interior
+    EXPECT_NEAR(m[0], 0.0, 1e-12);    // x = -8: on the wall
+    const double s = std::sin(0.5 * 3.14159265358979323846 * (1.0 / 3.0));
+    EXPECT_NEAR(m[1], s * s, 1e-12);  // x = -7: one step into the layer
+    for (double v : m) {
+        EXPECT_GE(v, 0.0);
+        EXPECT_LE(v, 1.0 + 1e-12);
+    }
+}
+
 TEST(HarmonicPotential, ExactValuesAndMinimum) {
     // omega = 2, x0 = 1:  V(x) = 2 (x-1)^2
     const std::vector<double> v = ses::harmonic_potential(kGrid, 2.0, 1.0);

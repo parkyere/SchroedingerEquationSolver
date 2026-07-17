@@ -50,6 +50,7 @@ add_executable(sesolver_tests
     mcwf_test.cpp
     measurement_test.cpp
     multichannel_decay_test.cpp
+    observables_test.cpp
     parallel_test.cpp
     potential_test.cpp
     projection_test.cpp
