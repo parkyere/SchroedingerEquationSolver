@@ -179,3 +179,23 @@ via `--selftest-decay` / `--selftest-rabi` / `--selftest-cascade` /
 `--selftest-manifold` / `--selftest-energy` / `--selftest-efield` /
 `--selftest-magnetic` / `--selftest-tunnel`, and `--dump-frame` /
 `--dump-frame-near` verify the render path end to end.
+
+## License
+
+This project is published under the **BSD 3-Clause License** — see
+[LICENSE](LICENSE). Copyright (c) 2026, Kyeo-Reh, Park (박겨레).
+
+Third-party components keep their own licenses and are **not** part of this
+repository's source (they enter as git submodules or build-time downloads):
+
+| Component | How it enters | License |
+|---|---|---|
+| Dear ImGui | submodule `external/imgui` | MIT |
+| vcpkg | submodule `external/vcpkg` | MIT |
+| SDL3 | vcpkg | zlib |
+| volk / VMA / VkFFT | vcpkg | MIT |
+| glslang | vcpkg (VkFFT's runtime compiler) | BSD/MIT/Apache-2.0 (mixed) |
+| Vulkan headers / loader | vcpkg | Apache-2.0 / MIT |
+| GoogleTest | vcpkg | BSD 3-Clause |
+| Boost.Program_options | vcpkg | BSL-1.0 |
+| Slang compiler (`slangc`) | build-time tool download | MIT |
