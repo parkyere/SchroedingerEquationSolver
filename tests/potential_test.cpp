@@ -91,7 +91,7 @@ TEST(DoubleWellPotential, MinimaBarrierAndSymmetryExact) {
     EXPECT_EQ(v[8], 0.1);                 // x = 0: the barrier top
     EXPECT_EQ(v[4], 0.0);                 // x = -4: left minimum
     EXPECT_EQ(v[12], 0.0);                // x = +4: right minimum
-    EXPECT_EQ(v[0], 0.1 * 9.0);           // x = -8: ((4)-1)^2 = 9
+    EXPECT_NEAR(v[0], 0.1 * 9.0, 1e-12);  // x = -8: ((4)-1)^2 = 9
     EXPECT_EQ(v[6], v[10]);               // symmetry about the origin
     EXPECT_EQ(v[2], v[14]);
 }

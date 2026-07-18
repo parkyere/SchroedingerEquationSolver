@@ -56,13 +56,14 @@ int node_count(const ses::Field1D& f) {
 }
 
 TEST(BoundStates1D, ReproducesTheHarmonicLadderInABox) {
-    const ses::Grid1D g{-20.0, 20.0, 512};
+    const ses::Grid1D g{-20.0, 20.0, 1024};
     const double w = 0.5;
     const std::vector<double> v = ses::harmonic_potential(g, w);
     const std::vector<ses::Bound1D> s = ses::bound_states_1d(g, v, 6);
     ASSERT_EQ(s.size(), 6u);
     for (int k = 0; k < 6; ++k) {
-        EXPECT_NEAR(s[static_cast<std::size_t>(k)].energy, (k + 0.5) * w, 1e-4)
+        // FD is O(h^2): at h ~ 0.04 the top level carries ~7e-4.
+        EXPECT_NEAR(s[static_cast<std::size_t>(k)].energy, (k + 0.5) * w, 1e-3)
             << "E_" << k;
         EXPECT_NEAR(ses::norm_sq(s[static_cast<std::size_t>(k)].psi), 1.0, 1e-9)
             << "norm_" << k;
@@ -140,16 +141,35 @@ TEST(DoubleWell1D, SplittingDrivesTheFullTunnelingOscillation) {
 TEST(PoschlTeller1D, IsReflectionlessWhereTheSquareWellReflects) {
     // Same packet (E = 0.125), two attractive wells of EQUAL depth and
     // integrated area: the lambda = 2 sech^2 well transmits everything;
-    // the sharp-edged square well reflects a visible fraction.
-    const ses::Grid1D g{-60.0, 60.0, 2048};
-    const double v0 = 0.375;  // lambda (lambda+1) / (2 a^2), lambda=2, a=2
+    // the sharp-edged square well reflects a visible fraction. R is the
+    // NEGATIVE-momentum probability after the interaction -- the definition
+    // of reflection -- so the slow transmitted tail (still near the well in
+    // position space at finite t) cannot pollute the verdict. The incident
+    // packet's own k < 0 content is e^{-2 (k0/sigma_k)^2 } ~ 1e-11.
+    const ses::Grid1D g{-80.0, 80.0, 2048};
+    // The MAGIC depth: lambda (lambda+1) / (2 a^2) = 6/8 at lambda = 2,
+    // a = 2 (a non-integer lambda well DOES reflect -- measured ~1% at
+    // v0 = 0.375, which is how this constant got its regression lock).
+    const double v0 = 0.75;
     const double dt = 0.04;
-    const int steps = 2250;  // t = 90 au: transit complete, nothing at walls
+    const int steps = 2500;  // t = 100 au: interaction long complete
     auto reflected = [&](const std::vector<double>& v) {
-        ses::Field1D psi = ses::gaussian_wavepacket(g, -25.0, 4.0, 0.5);
+        ses::Field1D psi = ses::gaussian_wavepacket(g, -25.0, 5.0, 0.5);
         ses::SplitOperator1D prop{g, v, dt};
         prop.step(psi, steps);
-        return ses::probability_in_range(psi, g.xmin, -10.0);
+        std::vector<std::complex<double>> phi = psi.data();
+        ses::fft(phi);
+        const std::vector<double> kv = ses::wavenumbers(g);
+        double neg = 0.0;
+        double tot = 0.0;
+        for (std::size_t j = 0; j < phi.size(); ++j) {
+            const double w = std::norm(phi[j]);
+            tot += w;
+            if (kv[j] < 0.0) {
+                neg += w;
+            }
+        }
+        return neg / tot;
     };
     const double r_pt =
         reflected(ses::poschl_teller_potential(g, v0, 2.0));
