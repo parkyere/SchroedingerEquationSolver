@@ -96,6 +96,36 @@ struct Ladder1dApi {
     virtual void random_superposition() = 0;
 };
 
+// The double-well tunneling-oscillation scene.
+struct DoubleWellApi {
+    virtual ~DoubleWellApi() = default;
+    virtual double splitting() const = 0;  // dE = E1 - E0 (Ha)
+    virtual double p_left() const = 0;
+    virtual double p_right() const = 0;
+    // Re-prepare psi_L in a well with the new barrier (a preparation demo).
+    virtual void set_barrier(double vb) = 0;
+    virtual double barrier() const = 0;
+};
+
+// The reflectionless (Poschl-Teller) scattering scene.
+struct ReflectApi {
+    virtual ~ReflectApi() = default;
+    // Largest negative-momentum fraction seen while most of the norm was
+    // still in the box (the honest R; absorbed flux must not inflate it).
+    virtual double reflected_max() const = 0;
+    virtual bool square_well() const = 0;
+    virtual void toggle_well() = 0;  // sech^2 <-> equal square, relaunch
+};
+
+// The Morse anharmonic-ladder scene (eigenstate jumps, shrinking gaps).
+struct MorseApi {
+    virtual ~MorseApi() = default;
+    virtual int level() const = 0;           // -1 = pair superposition
+    virtual double level_energy() const = 0;
+    virtual bool jump(bool up) = 0;
+    virtual int bound_count() const = 0;
+};
+
 // A 1D-scene overlay primitive: packed (x, y, z) float triples drawn in
 // world space with a constant color -- a LINE_STRIP polyline, or with
 // `fill` a TRIANGLE_STRIP sheet (the faint xy reference plane). The xyz
@@ -118,6 +148,9 @@ public:
     virtual HydrogenApi* hydrogen() { return nullptr; }
     virtual TunnelApi* tunnel() { return nullptr; }
     virtual Ladder1dApi* ladder1d() { return nullptr; }
+    virtual DoubleWellApi* doublewell() { return nullptr; }
+    virtual ReflectApi* reflect() { return nullptr; }
+    virtual MorseApi* morse() { return nullptr; }
 
     // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
     // scenes return 0 and the renderer draws nothing extra.
