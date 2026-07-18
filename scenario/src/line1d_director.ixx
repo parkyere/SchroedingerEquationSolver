@@ -190,10 +190,12 @@ protected:
     // Swap the potential on the SAME grid/dt: rebuilds the propagator
     // tables and the red profile. psi is deliberately untouched -- a
     // sudden quench is legitimate physics (the state persists, the well
-    // changes under it).
+    // changes under it). a_field_ (the AB ring's uniform vector potential)
+    // rides into the kinetic tables; 0 for every line scene.
     void set_potential(std::vector<double> v) {
         potential_ = std::move(v);
-        prop_ = std::make_unique<ses::SplitOperator1D>(grid1d_, potential_, dt_);
+        prop_ = std::make_unique<ses::SplitOperator1D>(grid1d_, potential_,
+                                                       dt_, a_field_);
         pot_curve_ = ses::potential_curve(grid1d_, potential_, e_scale_, y_clamp_);
         display_changed_ = true;
         title_dirty_ = true;
@@ -239,6 +241,7 @@ protected:
     ses::Grid1D grid1d_;
     ses::Grid3D grid3d_;
     std::vector<double> potential_;
+    double a_field_ = 0.0;  // ring vector potential (AB scene only)
     double dt_;
     double r_scale_;
     double e_scale_;

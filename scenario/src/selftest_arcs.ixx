@@ -794,6 +794,102 @@ void register_verification_arcs(ShellT* shell) {
         });
     }
 
+    // Double-slit arc (main forces --scene=doubleslit1d): the far-field
+    // screen is decided at the aperture instant, so everything is
+    // assertable immediately -- Young bright/dark structure at Phi = 0,
+    // then the Chambers shift at Phi = pi (center dark, half-fringe
+    // bright, envelope-fixed transmission).
+    if (shell->has_arg("--selftest-doubleslit")) {
+        shell->sched().after(1000, [shell] {
+            selftest_scene_wait_running(shell, "doubleslit1d", 0, [shell](
+                                                                     bool
+                                                                         runs) {
+                auto* sl = shell->sl();
+                if (!runs || sl == nullptr) {
+                    std::fprintf(stderr, "selftest-doubleslit: scene not "
+                                         "running or no api  [FAIL]\n");
+                    shell->request_exit(1);
+                    return;
+                }
+                const double pi = 3.14159265358979323846;
+                const double dk = 2.0 * pi / sl->separation();
+                const double frac = sl->transmitted_fraction();
+                const double b0 = sl->screen_at(0.0);
+                const double dark0 = sl->screen_at(0.5 * dk);
+                const double b1 = sl->screen_at(dk);
+                sl->set_flux(pi);
+                const double cpi = sl->screen_at(0.0);
+                const double bpi = sl->screen_at(0.5 * dk);
+                const bool frac_ok = frac > 0.01 && frac < 0.3;
+                const bool young_ok = dark0 < 0.05 * b0 && b1 > 0.3 * b0;
+                const bool ab_ok = cpi < 0.05 * b0 && bpi > 0.3 * b0;
+                const bool pass = frac_ok && young_ok && ab_ok;
+                std::fprintf(stderr,
+                             "selftest-doubleslit: T = %.3f, screen(0/half/"
+                             "fringe) = %.3f/%.4f/%.3f, Phi=pi -> %.4f/%.3f  "
+                             "[%s]\n",
+                             frac, b0, dark0, b1, cpi, bpi,
+                             pass ? "PASS" : "FAIL");
+                shell->request_exit(pass ? 0 : 1);
+            });
+        });
+    }
+
+    // AB ring arc (main forces --scene=abring1d): run the pair to the
+    // antipode at Phi = 0 (bright meeting), half a flux quantum (dark),
+    // and one full quantum (bright again) -- SIM-TIME polled to the
+    // meeting each leg.
+    if (shell->has_arg("--selftest-abring")) {
+        shell->sched().after(1000, [shell] {
+            selftest_scene_wait_running(shell, "abring1d", 0, [shell](
+                                                                  bool runs) {
+                auto* rg = shell->rg();
+                if (!runs || rg == nullptr) {
+                    std::fprintf(stderr, "selftest-abring: scene not "
+                                         "running or no api  [FAIL]\n");
+                    shell->request_exit(1);
+                    return;
+                }
+                const double pi = 3.14159265358979323846;
+                // Run each leg PAST the crossing and compare the maxima:
+                // a single poll lands at a slightly different instant of
+                // the crossing every leg, but the max over it is stable.
+                const double tm = 1.3 * rg->meet_time();
+                shell->set_time_scale(16);
+                selftest_wait_sim_time(shell, tm, 0, [shell, tm,
+                                                      pi](bool ok1) {
+                    const double bright = shell->rg()->meet_density_max();
+                    shell->rg()->set_flux(pi);  // refire, sim time resets
+                    selftest_wait_sim_time(shell, tm, 0, [shell, tm, pi,
+                                                          ok1, bright](
+                                                             bool ok2) {
+                        const double dark = shell->rg()->meet_density_max();
+                        shell->rg()->set_flux(2.0 * pi);
+                        selftest_wait_sim_time(
+                            shell, tm, 0,
+                            [shell, ok1, ok2, bright, dark](bool ok3) {
+                                const double again =
+                                    shell->rg()->meet_density_max();
+                                const bool pass = ok1 && ok2 && ok3 &&
+                                                  bright > 0.0 &&
+                                                  dark < 0.35 * bright &&
+                                                  std::abs(again - bright) <
+                                                      0.1 * bright;
+                                std::fprintf(
+                                    stderr,
+                                    "selftest-abring: meet density "
+                                    "Phi=0: %.4f, pi: %.4f, 2pi: %.4f  "
+                                    "[%s]\n",
+                                    bright, dark, again,
+                                    pass ? "PASS" : "FAIL");
+                                shell->request_exit(pass ? 0 : 1);
+                            });
+                    });
+                });
+            });
+        });
+    }
+
     // H2+ arc (main forces --scene=h2plus): sigma_g then sigma_u at the
     // equilibrium R, then the stretched geometry -- asserting the bond:
     // E_total(R_eq) < E_total(R_far), and sigma_u above sigma_g. State

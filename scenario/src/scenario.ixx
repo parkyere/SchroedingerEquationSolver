@@ -142,6 +142,41 @@ struct MorseApi {
     virtual int bound_count() const = 0;
 };
 
+// Double-slit scene (transverse frame: the 1D axis is the coordinate
+// parallel to the slit plane; flight toward the screen is time -- the
+// exact paraxial reduction). Sliders re-fire a fresh electron through the
+// wall; flux is the solenoid's AB phase on slit 2.
+struct SlitApi {
+    virtual ~SlitApi() = default;
+    virtual void set_separation(double d) = 0;
+    virtual double separation() const = 0;
+    virtual void set_width(double w) = 0;
+    virtual double width() const = 0;
+    virtual void set_flux(double phi) = 0;
+    virtual double flux() const = 0;
+    virtual void refire() = 0;
+    virtual double transmitted_fraction() const = 0;
+    // Far-field screen density at the bin nearest angle-wavenumber k
+    // (arcs probe the bright/dark fringes with this).
+    virtual double screen_at(double k) const = 0;
+};
+
+// AB ring scene: flux through the (periodic-grid) ring in radians, one
+// flux quantum = 2 pi. Setting flux re-fires the +-k pair.
+struct RingApi {
+    virtual ~RingApi() = default;
+    virtual void set_flux(double phi) = 0;
+    virtual double flux() const = 0;
+    virtual void refire() = 0;
+    virtual double meet_time() const = 0;
+    // Crest-averaged density at the meeting point (bright ~ high at
+    // Phi = 0, near zero at Phi = pi), live and its max since the fire
+    // (the arcs' sampling-robust probe: polling lands at slightly
+    // different instants of the crossing each leg).
+    virtual double meet_density() const = 0;
+    virtual double meet_density_max() const = 0;
+};
+
 // A 1D-scene overlay primitive: packed (x, y, z) float triples drawn in
 // world space with a constant color -- a LINE_STRIP polyline, or with
 // `fill` a TRIANGLE_STRIP sheet (the faint xy reference plane). When
@@ -184,6 +219,8 @@ public:
     virtual ReflectApi* reflect() { return nullptr; }
     virtual MorseApi* morse() { return nullptr; }
     virtual MoleculeApi* molecule() { return nullptr; }
+    virtual SlitApi* slit() { return nullptr; }
+    virtual RingApi* ring() { return nullptr; }
 
     // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
     // scenes return 0 and the renderer draws nothing extra.

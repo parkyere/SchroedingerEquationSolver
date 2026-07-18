@@ -23,6 +23,8 @@ target_sources(ses_scenario
         src/doublewell1d_director.ixx
         src/ptwell1d_director.ixx
         src/morse1d_director.ixx
+        src/doubleslit1d_director.ixx
+        src/abring1d_director.ixx
         src/molecule_director.ixx
         src/selftest_arcs.ixx)
 target_compile_features(ses_scenario PUBLIC cxx_std_20)

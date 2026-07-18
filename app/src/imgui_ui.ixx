@@ -37,6 +37,12 @@ struct UiState {
     float dw_barrier = 0.12f;
     // H2+ bond length knob (snapped to the grid by the director).
     float h2p_r = 2.0f;
+    // Double slit: separation / width / solenoid AB phase (units of pi).
+    float ds_sep = 8.0f;
+    float ds_width = 1.5f;
+    float ds_flux_pi = 0.0f;
+    // AB ring: flux in flux quanta (Phi / 2 pi).
+    float ab_flux_q = 0.0f;
 };
 
 // The x/y/z axis-cycle button shared by the cross-section controls.
@@ -458,6 +464,89 @@ void draw_benzene_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) 
             ImGui::Text("E2 = %.3f", ml.energy(2));
         }
     }
+    draw_time_scale(shell, ui);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(shell.status_text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+}
+
+// Double-slit panel (transverse frame): geometry sliders re-fire a fresh
+// electron; the flux slider is the solenoid's AB phase (Chambers).
+template <typename ShellT>
+void draw_doubleslit_panel(ShellT& shell, UiState& ui,
+                           ses_shell::SlitApi& sl) {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
+    draw_scene_picker(shell);
+    draw_perf_readout(shell);
+    if (ImGui::Button("Refire (2)")) shell.press('2');
+    ImGui::SameLine();
+    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
+    ImGui::SameLine();
+    if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
+    if (ImGui::SliderFloat("Slit separation d", &ui.ds_sep, 2.0f, 16.0f,
+                           "%.1f")) {
+        sl.set_separation(static_cast<double>(ui.ds_sep));
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Fringe spacing on the screen goes as 1/d.");
+    }
+    if (ImGui::SliderFloat("Slit width w", &ui.ds_width, 0.5f, 4.0f,
+                           "%.1f")) {
+        sl.set_width(static_cast<double>(ui.ds_width));
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Single-slit envelope width goes as 1/w.");
+    }
+    if (ImGui::SliderFloat("Solenoid flux (pi)", &ui.ds_flux_pi, -2.0f, 2.0f,
+                           "%.2f")) {
+        sl.set_flux(static_cast<double>(ui.ds_flux_pi) * 3.14159265f);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Aharonov-Bohm: a solenoid behind the wall "
+                          "between the slits.\nFringes SLIDE, the envelope "
+                          "stays -- period 2 pi (one flux quantum).\nB = 0 "
+                          "everywhere the electron goes.");
+    }
+    ImGui::Text("Transmitted: %.1f%%", 100.0 * sl.transmitted_fraction());
+    draw_time_scale(shell, ui);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(shell.status_text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+}
+
+// AB ring panel: one knob -- the flux through the ring.
+template <typename ShellT>
+void draw_abring_panel(ShellT& shell, UiState& ui, ses_shell::RingApi& rg) {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
+    draw_scene_picker(shell);
+    draw_perf_readout(shell);
+    if (ImGui::Button("Refire (2)")) shell.press('2');
+    ImGui::SameLine();
+    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
+    ImGui::SameLine();
+    if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
+    if (ImGui::SliderFloat("Flux (quanta)", &ui.ab_flux_q, -1.5f, 1.5f,
+                           "%.2f")) {
+        rg.set_flux(static_cast<double>(ui.ab_flux_q) * 2.0f *
+                    3.14159265f);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Flux through the ring's hole; B = 0 ON the ring "
+                          "(pure Aharonov-Bohm).\nThe two halves meet at "
+                          "the marker with relative phase = flux:\nbright "
+                          "at 0, dark at half a quantum, period exactly "
+                          "one quantum.");
+    }
+    ImGui::Text("Meet at t = %.1f au, density there %.4f", rg.meet_time(),
+                rg.meet_density());
     draw_time_scale(shell, ui);
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);

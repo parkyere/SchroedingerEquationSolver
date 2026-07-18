@@ -52,6 +52,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <SDL3/SDL_main.h>
+import ses.scenario.abring1d_director;
+import ses.scenario.doubleslit1d_director;
 import ses.scenario.tunneling_director;
 
 import app.scheduler;
@@ -81,11 +83,11 @@ constexpr std::uint64_t kTickMs = 16;
 
 // The demo scenes, panel-selectable at runtime (and picked at boot by
 // --scene=). Index order is the panel combo's order.
-constexpr const char* kSceneNames[] = {"hydrogen",   "harmonic", "tunnel",
-                                       "harmonic1d", "tunnel1d", "doublewell1d",
-                                       "ptwell1d",   "morse1d",  "h2plus",
-                                       "benzene"};
-constexpr int kSceneCount = 10;
+constexpr const char* kSceneNames[] = {
+    "hydrogen", "harmonic", "tunnel",  "harmonic1d",   "tunnel1d",
+    "doublewell1d", "ptwell1d", "morse1d", "h2plus",   "benzene",
+    "doubleslit1d", "abring1d"};
+constexpr int kSceneCount = 12;
 std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
     if (idx == 1) {
         return std::make_unique<ses_shell::HarmonicDirector>();
@@ -113,6 +115,12 @@ std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
     }
     if (idx == 9) {
         return std::make_unique<ses_shell::BenzeneDirector>();
+    }
+    if (idx == 10) {
+        return std::make_unique<ses_shell::DoubleSlit1DDirector>();
+    }
+    if (idx == 11) {
+        return std::make_unique<ses_shell::RingAB1DDirector>();
     }
     return std::make_unique<ses_shell::HydrogenDirector>();
 }
@@ -353,6 +361,10 @@ public:
                 } else {
                     app::draw_benzene_panel(*this, ui_, *mol);
                 }
+            } else if (auto* slit = director_->slit()) {
+                app::draw_doubleslit_panel(*this, ui_, *slit);
+            } else if (auto* ring = director_->ring()) {
+                app::draw_abring_panel(*this, ui_, *ring);
             } else if (director_->tunnel() != nullptr) {
                 app::draw_generic_panel(*this, ui_, {});
             } else {
@@ -456,6 +468,8 @@ public:
     ses_shell::ReflectApi* rf() { return director_->reflect(); }
     ses_shell::MorseApi* mo() { return director_->morse(); }
     ses_shell::MoleculeApi* ml() { return director_->molecule(); }
+    ses_shell::SlitApi* sl() { return director_->slit(); }
+    ses_shell::RingApi* rg() { return director_->ring(); }
     bool solving() const { return director_->solving(); }
     bool manifold_ready() const { return director_->scene_ready(); }
     void debug_set_camera_distance(double d) {
@@ -855,6 +869,12 @@ int main(int argc, char* argv[]) {
     } else if (std::find(args.begin(), args.end(), "--selftest-morse1d") !=
                args.end()) {
         scene = "morse1d";
+    } else if (std::find(args.begin(), args.end(),
+                         "--selftest-doubleslit") != args.end()) {
+        scene = "doubleslit1d";
+    } else if (std::find(args.begin(), args.end(), "--selftest-abring") !=
+               args.end()) {
+        scene = "abring1d";
     } else if (std::find(args.begin(), args.end(), "--selftest-h2p") !=
                args.end()) {
         scene = "h2plus";
@@ -892,6 +912,10 @@ int main(int argc, char* argv[]) {
         scene_index = 8;
     } else if (scene == "benzene") {
         scene_index = 9;
+    } else if (scene == "doubleslit1d") {
+        scene_index = 10;
+    } else if (scene == "abring1d") {
+        scene_index = 11;
     } else if (scene != "hydrogen") {
         std::fprintf(stderr, "scene: unknown '%s' -- using hydrogen\n",
                      scene.c_str());
