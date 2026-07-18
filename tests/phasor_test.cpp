@@ -18,6 +18,7 @@
 #include <complex>
 #include <vector>
 
+import ses.colormap;
 import ses.field;
 import ses.grid;
 import ses.phasor;
@@ -88,6 +89,54 @@ TEST(PhasorCurve, GlobalPhaseRotatesTheWholeCurveRigidly) {
         const double za = a[static_cast<std::size_t>(3 * i + 2)];
         EXPECT_NEAR(b[static_cast<std::size_t>(3 * i + 1)], c * ya - sn * za, 1e-5);
         EXPECT_NEAR(b[static_cast<std::size_t>(3 * i + 2)], sn * ya + c * za, 1e-5);
+    }
+}
+
+// RED: the phasor tube's SHADOW on the z = 0 plane. The 3D curve sweeps a
+// radius r = r_scale |psi|^2 about the x axis; its silhouette projected
+// onto the xy plane is the band y in [-r, +r] -- a TRIANGLE_STRIP with two
+// vertices per grid point, colored per vertex by the phase wheel (the SAME
+// ses::phase_color the 3D volume view uses, so hue means the same thing in
+// every scene). Colors are premultiplied for the overlay blend. Where
+// |psi|^2 ~ 0 the band is zero-height, so the (undefined) phase there is
+// invisible by construction.
+TEST(DensityBand, ProjectsAmplitudeSquaredSymmetricallyOntoThePlane) {
+    ses::Field1D psi{kGrid};
+    psi[1] = std::complex<double>{2.0, 0.0};
+    psi[3] = std::complex<double>{0.0, -1.5};
+    const double s = 0.5;
+    const std::vector<float> b = ses::density_band(psi, s);
+    ASSERT_EQ(b.size(), static_cast<std::size_t>(6 * kGrid.n));
+    for (int i = 0; i < kGrid.n; ++i) {
+        const std::size_t o = static_cast<std::size_t>(6 * i);
+        const double r = s * std::norm(psi[i]);
+        EXPECT_FLOAT_EQ(b[o + 0], static_cast<float>(kGrid.coord(i)));
+        EXPECT_NEAR(b[o + 1], -r, 1e-6);  // lower edge first ...
+        EXPECT_EQ(b[o + 2], 0.0f);
+        EXPECT_FLOAT_EQ(b[o + 3], static_cast<float>(kGrid.coord(i)));
+        EXPECT_NEAR(b[o + 4], r, 1e-6);   // ... then upper: strip order
+        EXPECT_EQ(b[o + 5], 0.0f);
+    }
+}
+
+TEST(DensityBand, ColorsCarryTheVolumePhaseWheelPremultiplied) {
+    ses::Field1D psi{kGrid};
+    psi[1] = std::complex<double>{2.0, 0.0};    // arg = 0
+    psi[2] = std::complex<double>{0.0, 2.0};    // arg = +pi/2
+    psi[3] = std::complex<double>{-3.0, 0.0};   // arg = pi
+    psi[4] = std::complex<double>{1.0, -1.0};   // arg = -pi/4
+    const float alpha = 0.35f;
+    const std::vector<float> c = ses::phase_band_colors(psi, alpha);
+    ASSERT_EQ(c.size(), static_cast<std::size_t>(8 * kGrid.n));
+    for (int i : {1, 2, 3, 4}) {
+        const ses::Rgb want = ses::phase_color(std::arg(psi[i]));
+        for (int v = 0; v < 2; ++v) {  // both band vertices share the color
+            const std::size_t o = static_cast<std::size_t>(8 * i + 4 * v);
+            EXPECT_NEAR(c[o + 0], want.r * alpha, 1e-6) << "i=" << i;
+            EXPECT_NEAR(c[o + 1], want.g * alpha, 1e-6) << "i=" << i;
+            EXPECT_NEAR(c[o + 2], want.b * alpha, 1e-6) << "i=" << i;
+            EXPECT_NEAR(c[o + 3], alpha, 1e-6) << "i=" << i;
+        }
     }
 }
 
