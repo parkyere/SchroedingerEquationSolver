@@ -731,8 +731,14 @@ private:
                              oc.b,   oc.a,     oc.fill, oc.rgba};
         }
         in.overlay_count = nov;
-        // Scene props: origin marker + visualized barrier slab.
-        in.marker = director_->center_marker();
+        // Scene props: nucleus marker balls + visualized barrier slab.
+        const int nmk = std::min(director_->marker_count(),
+                                 ses_vk::SceneRenderer::kMaxMarkers);
+        for (int m = 0; m < nmk; ++m) {
+            const ses_shell::SceneMarker mk = director_->marker(m);
+            in.markers[m] = {mk.x, mk.y, mk.z, mk.radius, mk.r, mk.g, mk.b};
+        }
+        in.marker_count = nmk;
         double barrier_lo = 0.0;
         double barrier_hi = 0.0;
         in.barrier_on = director_->barrier_slab(barrier_lo, barrier_hi);

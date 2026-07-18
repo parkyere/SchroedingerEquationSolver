@@ -15,15 +15,20 @@ struct Ubo {
     float4 eye;             // .xyz
     float4 box_min;         // .xyz
     float4 box_max;         // .xyz
-    float4 proton_center;   // .xyz
-    float4 proton_color;    // .xyz
+    float4 proton_center;   // legacy layout slot (markers are the arrays)
+    float4 proton_color;    // legacy layout slot
     float inv_peak;
     float absorbance;
-    float proton_radius;
+    float proton_radius;    // legacy layout slot
     float jitter_frame;  // temporal rotation of the raymarch jitter
     float4 clip;   // .x enable, .y axis(0/1/2), .z sign(+-1), .w offset
     float4 slice;  // (slice pass only; here to share the UBO layout)
     float4 barrier;  // .x enable, .y x_lo, .z x_hi, .w fog density
+    // Nucleus marker balls: .xyz center + .w radius / .rgb color per ball,
+    // count in marker_meta.x (hydrogen's proton, the molecules' CPK atoms).
+    float4 marker_cr[16];
+    float4 marker_col[16];
+    float4 marker_meta;
 };
 [[vk::binding(0, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
@@ -43,10 +48,10 @@ float2 ray_box(float3 o, float3 d) {
 }
 
 // Mirrors the tested ses::ray_sphere (unit direction, raw interval).
-float2 ray_sphere(float3 o, float3 d) {
-    float3 oc = o - ubo.proton_center.xyz;
+float2 ray_sphere(float3 o, float3 d, float3 center, float radius) {
+    float3 oc = o - center;
     float b = dot(oc, d);
-    float c = dot(oc, oc) - ubo.proton_radius * ubo.proton_radius;
+    float c = dot(oc, oc) - radius * radius;
     float disc = b * b - c;
     if (disc < 0.0) {
         return float2(1.0, -1.0);  // empty interval = miss
@@ -83,13 +88,20 @@ float4 main(FSIn input) : SV_Target {
         if (t_stop <= tn) discard;
     }
 
-    // Terminate the march at the proton sphere: cloud IN FRONT still fogs
-    // it, cloud BEHIND is correctly occluded.
-    bool hit_proton = false;
-    float2 sp = ray_sphere(ubo.eye.xyz, dir);
-    if (sp.x <= sp.y && sp.x > tn && sp.x < t_stop) {
-        hit_proton = true;
-        t_stop = sp.x;
+    // Terminate the march at the NEAREST marker ball: cloud IN FRONT still
+    // fogs it, cloud BEHIND is correctly occluded. One analytic sphere test
+    // per ball (<= 16), nothing per march step.
+    int hit_marker = -1;
+    float hit_t = 0.0;
+    int n_markers = int(ubo.marker_meta.x + 0.5);
+    for (int m = 0; m < n_markers; ++m) {
+        float2 sp = ray_sphere(ubo.eye.xyz, dir, ubo.marker_cr[m].xyz,
+                               ubo.marker_cr[m].w);
+        if (sp.x <= sp.y && sp.x > tn && sp.x < t_stop) {
+            hit_marker = m;
+            hit_t = sp.x;
+            t_stop = sp.x;
+        }
     }
 
     const int kSteps = 384;  // ~0.42 Bohr/sample across the +-80 box
@@ -169,13 +181,15 @@ float4 main(FSIn input) : SV_Target {
         }
     }
 
-    if (hit_proton) {
-        float3 p = ubo.eye.xyz + sp.x * dir;
-        float3 n = (p - ubo.proton_center.xyz) / ubo.proton_radius;
+    if (hit_marker >= 0) {
+        float3 p = ubo.eye.xyz + hit_t * dir;
+        float3 n = (p - ubo.marker_cr[hit_marker].xyz) /
+                   ubo.marker_cr[hit_marker].w;
         float diffuse = max(dot(n, -dir), 0.0);
         float spec = pow(diffuse, 32.0);
-        float3 shaded = ubo.proton_color.xyz * (0.25 + 0.75 * diffuse) +
-                        float3(0.2, 0.2, 0.2) * spec;
+        float3 shaded =
+            ubo.marker_col[hit_marker].xyz * (0.25 + 0.75 * diffuse) +
+            float3(0.2, 0.2, 0.2) * spec;
         C += (1.0 - A) * shaded;
         A = 1.0;
     }

@@ -56,7 +56,6 @@ export import ses.volume;
 export namespace ses_vk {
 
 constexpr int kPhaseLutSize = 256;
-constexpr double kProtonMarkerRadius = 0.35;  // symbolic (real ~1e-5 Bohr)
 
 // SPIR-V blobs for the pipelines + post chain (offline-baked; caller owns).
 struct RenderKernels {
@@ -118,6 +117,20 @@ public:
     };
     static constexpr int kMaxOverlayCurves = 6;
 
+    // A nucleus marker ball (world space): hydrogen's proton, the
+    // molecules' CPK atoms. Shaded as a real sphere in both views -- the
+    // mesh pipeline in Surface, the raymarcher in Cloud.
+    struct Marker {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float radius = 0.0f;
+        float r = 1.0f;
+        float g = 1.0f;
+        float b = 1.0f;
+    };
+    static constexpr int kMaxMarkers = 16;
+
     // Per-frame inputs computed by the shell. Non-null mesh/volume_staging
     // pointers request a (re)upload before the pass records.
     struct FrameInput {
@@ -133,10 +146,12 @@ public:
         bool flow = false;          // draw the probability-flow particles
         bool flow_animate = false;  // advance the advection (false = paused)
         bool volume_changed = false;  // psi/absorbance changed: rebuild aux
-        // Scene props: the origin marker (hydrogen's proton, the trap's
-        // center) and a visualized potential slab [lo, hi) on x (the
-        // tunneling barrier), raymarch-composited with the cloud.
-        bool marker = true;
+        // Scene props: nucleus marker balls (hydrogen's proton, the trap's
+        // center, the molecules' CPK atoms) and a visualized potential
+        // slab [lo, hi) on x (the tunneling barrier), raymarch-composited
+        // with the cloud.
+        Marker markers[kMaxMarkers]{};
+        int marker_count = 0;
         bool barrier_on = false;
         float barrier_lo = 0.0f;
         float barrier_hi = 0.0f;
@@ -262,6 +277,9 @@ public:
             point_volume_binding(in.psi_volume);
         }
         if (in.overlay_count > 0 && !upload_overlay(in)) {
+            return false;
+        }
+        if (!ensure_marker_vbuf(in)) {
             return false;
         }
 
@@ -432,9 +450,9 @@ public:
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     mesh_pl_, 0, 1, &scene_set_, 0, nullptr);
-            if (in.marker) {
-                vkCmdBindVertexBuffers(cb, 0, 1, &proton_vbuf_.buf, &zero_off);
-                vkCmdDraw(cb, static_cast<std::uint32_t>(proton_vertex_count_),
+            if (in.marker_count > 0 && marker_vertex_count_ > 0) {
+                vkCmdBindVertexBuffers(cb, 0, 1, &marker_vbuf_.buf, &zero_off);
+                vkCmdDraw(cb, static_cast<std::uint32_t>(marker_vertex_count_),
                           1, 0, 0);
             }
             if (in.gpu_mesh_vbuf != VK_NULL_HANDLE &&
@@ -619,7 +637,7 @@ public:
         ctx_->destroy_buffer(&scene_ubuf_);
         ctx_->destroy_buffer(&gizmo_ubuf_);
         ctx_->destroy_buffer(&volume_ubuf_);
-        ctx_->destroy_buffer(&proton_vbuf_);
+        ctx_->destroy_buffer(&marker_vbuf_);
         ctx_->destroy_buffer(&gizmo_vbuf_);
         ctx_->destroy_buffer(&cube_vbuf_);
         ctx_->destroy_buffer(&zlabel_vbuf_);
@@ -675,6 +693,9 @@ private:
         float eye[4];
         float box_min[4];
         float box_max[4];
+        // Legacy layout slots (the shorter Ubo the vert/slice/shadow/
+        // occupancy stages declare includes them as prefix padding); the
+        // raymarched markers moved to the arrays appended at the end.
         float proton_center[4];
         float proton_color[4];
         float inv_peak = 0.0f;
@@ -686,6 +707,11 @@ private:
         // Appended LAST: the shorter Ubo the vert/slice stages declare stays
         // layout-compatible (std140 offsets of earlier fields unchanged).
         float barrier[4] = {0, 0, 0, 0};  // enable, x_lo, x_hi, fog density
+        // Nucleus marker balls (volume.frag only): xyz + radius / rgb per
+        // ball, count in marker_meta[0]. float4-aligned = std140 clean.
+        float marker_cr[kMaxMarkers][4] = {};
+        float marker_col[kMaxMarkers][4] = {};
+        float marker_meta[4] = {0, 0, 0, 0};  // count
     };
 
     struct DslHolder {
@@ -1751,19 +1777,49 @@ private:
         return true;
     }
 
-    bool create_static_geometry() {
-        // Proton marker: warm sphere at the nucleus.
-        {
-            const ses::Mesh sphere =
-                ses::sphere_mesh(ses::Vec3d{}, kProtonMarkerRadius, 16, 24);
-            const float rgb[3] = {1.0f, 0.45f, 0.20f};
-            const std::vector<float> iv = interleave_mesh(sphere, rgb, nullptr);
-            proton_vertex_count_ = static_cast<int>(sphere.vertices.size());
-            if (!upload_device_vbuf(&proton_vbuf_, iv.data(),
-                                    iv.size() * sizeof(float))) {
-                return false;
-            }
+    // Nucleus marker balls for the Surface (mesh) view: one combined
+    // triangle soup of shaded UV-spheres, one per marker, each baked at its
+    // world position with its own radius and solid color -- no pipeline or
+    // shader change, just vertices. Rebuilt only when the marker list
+    // actually changes (scene switch, bond-length scan); a rebuild waits
+    // the device idle exactly like an overlay regrow, which is fine at
+    // that rarity.
+    bool ensure_marker_vbuf(const FrameInput& in) {
+        const int n = std::min(in.marker_count, kMaxMarkers);
+        bool same = n == marker_cached_count_;
+        for (int m = 0; same && m < n; ++m) {
+            same = std::memcmp(&in.markers[m], &marker_cached_[m],
+                               sizeof(Marker)) == 0;
         }
+        if (same) {
+            return true;
+        }
+        vkDeviceWaitIdle(ctx_->device);
+        ctx_->destroy_buffer(&marker_vbuf_);
+        marker_vertex_count_ = 0;
+        marker_cached_count_ = n;
+        for (int m = 0; m < n; ++m) {
+            marker_cached_[m] = in.markers[m];
+        }
+        if (n == 0) {
+            return true;
+        }
+        std::vector<float> iv;
+        for (int m = 0; m < n; ++m) {
+            const Marker& mk = in.markers[m];
+            const ses::Mesh sphere = ses::sphere_mesh(
+                ses::Vec3d{mk.x, mk.y, mk.z}, mk.radius, 16, 24);
+            const float rgb[3] = {mk.r, mk.g, mk.b};
+            const std::vector<float> part =
+                interleave_mesh(sphere, rgb, nullptr);
+            iv.insert(iv.end(), part.begin(), part.end());
+        }
+        marker_vertex_count_ = static_cast<int>(iv.size() / 9);
+        return upload_device_vbuf(&marker_vbuf_, iv.data(),
+                                  iv.size() * sizeof(float));
+    }
+
+    bool create_static_geometry() {
         // XYZ gizmo: three colored arrows.
         {
             struct Axis {
@@ -2037,16 +2093,23 @@ private:
         vol_u.box_max[0] = static_cast<float>(grid_.x.xmax);
         vol_u.box_max[1] = static_cast<float>(grid_.y.xmax);
         vol_u.box_max[2] = static_cast<float>(grid_.z.xmax);
-        vol_u.proton_color[0] = 1.0f;
-        vol_u.proton_color[1] = 0.45f;
-        vol_u.proton_color[2] = 0.2f;
         vol_u.inv_peak =
             static_cast<float>(in.peak > 0.0 ? 1.0 / in.peak : 0.0);
         vol_u.absorbance = static_cast<float>(in.absorbance);
-        // Radius 0 = no marker: the shader's sphere test then never hits
-        // (scene-controlled; tunneling has no nucleus to suggest).
-        vol_u.proton_radius =
-            in.marker ? static_cast<float>(kProtonMarkerRadius) : 0.0f;
+        // Nucleus marker balls; count 0 = none (scene-controlled; the
+        // tunneling scene has no nucleus to suggest).
+        const int nmk = std::min(in.marker_count, kMaxMarkers);
+        for (int m = 0; m < nmk; ++m) {
+            const Marker& mk = in.markers[m];
+            vol_u.marker_cr[m][0] = mk.x;
+            vol_u.marker_cr[m][1] = mk.y;
+            vol_u.marker_cr[m][2] = mk.z;
+            vol_u.marker_cr[m][3] = mk.radius;
+            vol_u.marker_col[m][0] = mk.r;
+            vol_u.marker_col[m][1] = mk.g;
+            vol_u.marker_col[m][2] = mk.b;
+        }
+        vol_u.marker_meta[0] = static_cast<float>(nmk);
         // Rotate the raymarch jitter ONLY while accumulating: a still frame
         // averages the rotating pattern into hundreds of effective samples,
         // while a moving/evolving scene keeps a STATIC dither (no shimmer --
@@ -2226,7 +2289,7 @@ private:
     Buffer scene_ubuf_{};
     Buffer gizmo_ubuf_{};
     Buffer volume_ubuf_{};
-    Buffer proton_vbuf_{};
+    Buffer marker_vbuf_{};
     Buffer gizmo_vbuf_{};
     Buffer cube_vbuf_{};
     Buffer zlabel_vbuf_{};
@@ -2236,7 +2299,9 @@ private:
     VkDeviceSize mesh_vbuf_bytes_ = 0;
     DeviceContext::Image phase_tex_{};
     DeviceContext::Image fallback_tex_{};
-    int proton_vertex_count_ = 0;
+    int marker_vertex_count_ = 0;
+    int marker_cached_count_ = -1;  // -1: no list seen yet (force build)
+    Marker marker_cached_[kMaxMarkers]{};
     int gizmo_vertex_count_ = 0;
     int mesh_vertex_count_ = 0;
 };

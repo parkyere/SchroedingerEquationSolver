@@ -122,7 +122,7 @@ public:
                     sim_time_, dt_, grid1d_.n, title_suffix().c_str());
     }
 
-    bool center_marker() const override { return false; }
+    int marker_count() const override { return 0; }  // a line has no nucleus
 
     int overlay_curve_count() const override { return 4; }
     OverlayCurve overlay_curve(int i) const override {

@@ -159,6 +159,19 @@ struct OverlayCurve {
     const float* rgba = nullptr;  // per-vertex premultiplied color
 };
 
+// A nucleus marker BALL (world space, symbolic radius): hydrogen's proton,
+// the molecules' CPK atoms. Shaded as a real sphere in both views -- the
+// mesh pipeline in Surface, the raymarcher in Cloud.
+struct SceneMarker {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float radius = 0.35f;
+    float r = 1.0f;
+    float g = 1.0f;
+    float b = 1.0f;
+};
+
 class ScenarioDirector {
 public:
     virtual ~ScenarioDirector() = default;
@@ -183,10 +196,15 @@ public:
     virtual long long photon_count() const { return 0; }
 
     // Scene-prop hints for the renderer (display only, physics never reads
-    // them): the origin marker (hydrogen's proton, the trap's center -- a
-    // barrier scene has NO point to suggest), and a visualized potential
-    // slab [lo, hi) on x (the tunneling barrier).
-    virtual bool center_marker() const { return true; }
+    // them): nucleus marker BALLS -- position, radius, color per ball (the
+    // default single warm origin sphere serves hydrogen and the trap; the
+    // molecules supply their CPK ball list; a barrier scene has NO point
+    // to suggest and returns 0) -- and a visualized potential slab
+    // [lo, hi) on x (the tunneling barrier).
+    virtual int marker_count() const { return 1; }
+    virtual SceneMarker marker(int /*i*/) const {
+        return {0.0f, 0.0f, 0.0f, 0.35f, 1.0f, 0.45f, 0.20f};
+    }
     virtual bool barrier_slab(double& /*lo*/, double& /*hi*/) const {
         return false;
     }

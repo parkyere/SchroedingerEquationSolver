@@ -103,7 +103,15 @@ public:
         return false;
     }
 
-    bool center_marker() const override { return false; }
+    // CPK nucleus balls, filled by the scenes' rebuild_markers(): real
+    // shaded spheres in both views (the hydrogen scene's proton machinery,
+    // generalized to a list).
+    int marker_count() const override {
+        return static_cast<int>(balls_.size());
+    }
+    SceneMarker marker(int i) const override {
+        return balls_[static_cast<std::size_t>(i)];
+    }
 
 protected:
     static constexpr int kStates = 3;
@@ -264,38 +272,19 @@ protected:
                                         ses::Vec3d{});
     }
 
-    // Append a filled hexagonal disc (in the molecular z-plane) to a
-    // TRIANGLE_STRIP overlay buffer -- the CPK-style atom marker. Discs
-    // are chained with repeated (degenerate, zero-area) bridge vertices so
-    // MANY atoms fit in ONE overlay curve.
-    static void append_disc(std::vector<float>& out, const ses::Vec3d& c,
-                            double r) {
-        static constexpr int kOrder[6] = {0, 1, 5, 2, 4, 3};  // 6-gon strip
-        const double kPi = 3.14159265358979323846;
-        float px[6];
-        float py[6];
-        for (int i = 0; i < 6; ++i) {
-            const double th = kPi / 3.0 * i;
-            px[i] = static_cast<float>(c.x + r * std::cos(th));
-            py[i] = static_cast<float>(c.y + r * std::sin(th));
-        }
-        auto put = [&](int i) {
-            out.push_back(px[i]);
-            out.push_back(py[i]);
-            out.push_back(static_cast<float>(c.z));
-        };
-        if (!out.empty()) {
-            const std::size_t n = out.size();
-            out.push_back(out[n - 3]);  // repeat the previous strip's tail
-            out.push_back(out[n - 2]);
-            out.push_back(out[n - 1]);
-            put(kOrder[0]);  // and this disc's head: degenerate bridge
-        }
-        for (int i : kOrder) {
-            put(i);
-        }
+    // The scenes' CPK ball helper.
+    static SceneMarker ball(const ses::Vec3d& c, double radius, float r,
+                            float g, float b) {
+        return {static_cast<float>(c.x),
+                static_cast<float>(c.y),
+                static_cast<float>(c.z),
+                static_cast<float>(radius),
+                r,
+                g,
+                b};
     }
 
+    std::vector<SceneMarker> balls_;
     int geom_ = 0;
     double param_ = 0.0;
     int buf_[kStates] = {-1, -1, -1};
@@ -325,13 +314,6 @@ public:
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.28; }
     double default_camera_distance() const override { return 55.0; }
-
-    int overlay_curve_count() const override { return 1; }
-    OverlayCurve overlay_curve(int /*i*/) const override {
-        // Two protons as CPK hydrogen-white discs.
-        return {disc_.data(), static_cast<int>(disc_.size() / 3),
-                0.95f, 0.95f, 0.95f, 1.0f, true};
-    }
 
 protected:
     const char* scene_name() const override { return "H2+ molecular ion"; }
@@ -413,13 +395,11 @@ private:
     }
 
     void rebuild_markers() {
+        // Two protons as CPK hydrogen-white balls.
         const std::vector<ses::Vec3d> c = centers();
-        disc_.clear();
-        append_disc(disc_, c[0], 0.4);
-        append_disc(disc_, c[1], 0.4);
+        balls_ = {ball(c[0], 0.4, 0.95f, 0.95f, 0.95f),
+                  ball(c[1], 0.4, 0.95f, 0.95f, 0.95f)};
     }
-
-    std::vector<float> disc_;
 };
 
 // ---- Benzene one-electron toy --------------------------------------------
@@ -448,22 +428,15 @@ public:
     double default_camera_elevation() const override { return 0.7; }
     double default_camera_distance() const override { return 40.0; }
 
-    // CPK-convention rendering: neutral gray bond skeleton underneath,
-    // then carbon-black and hydrogen-white atom discs on top.
-    int overlay_curve_count() const override { return 3; }
-    OverlayCurve overlay_curve(int i) const override {
-        if (i == 0) {  // bonds (hexagon + C-H spokes)
-            return {ring_marker_.data(),
-                    static_cast<int>(ring_marker_.size() / 3),
-                    0.55f, 0.55f, 0.60f, 0.9f};
-        }
-        if (i == 1) {  // carbons: CPK black (charcoal against the dark bg)
-            return {c_disc_.data(), static_cast<int>(c_disc_.size() / 3),
-                    0.22f, 0.22f, 0.25f, 1.0f, true};
-        }
-        // hydrogens: CPK white
-        return {h_disc_.data(), static_cast<int>(h_disc_.size() / 3),
-                0.95f, 0.95f, 0.95f, 1.0f, true};
+    // Ball-and-stick: the neutral gray bond skeleton as an overlay line,
+    // the atoms themselves as CPK marker balls (carbon black, hydrogen
+    // white).
+    int overlay_curve_count() const override { return 1; }
+    OverlayCurve overlay_curve(int /*i*/) const override {
+        // bonds (hexagon + C-H spokes)
+        return {ring_marker_.data(),
+                static_cast<int>(ring_marker_.size() / 3),
+                0.55f, 0.55f, 0.60f, 0.9f};
     }
 
 protected:
@@ -574,18 +547,21 @@ private:
             put(c[static_cast<std::size_t>(i)]);
         }
         put(c[0]);  // close the hexagon
-        // CPK atom discs: carbon larger and dark, hydrogen smaller, white.
-        c_disc_.clear();
-        h_disc_.clear();
+        // CPK atom balls: carbon larger and dark, hydrogen smaller, white.
+        balls_.clear();
         for (int i = 0; i < 6; ++i) {
-            append_disc(c_disc_, c[static_cast<std::size_t>(i)], 0.55);
-            append_disc(h_disc_, h[static_cast<std::size_t>(i)], 0.38);
+            balls_.push_back(
+                ball(c[static_cast<std::size_t>(i)], 0.55, 0.22f, 0.22f,
+                     0.25f));
+        }
+        for (int i = 0; i < 6; ++i) {
+            balls_.push_back(
+                ball(h[static_cast<std::size_t>(i)], 0.38, 0.95f, 0.95f,
+                     0.95f));
         }
     }
 
     std::vector<float> ring_marker_;
-    std::vector<float> c_disc_;
-    std::vector<float> h_disc_;
 };
 
 }  // namespace ses_shell

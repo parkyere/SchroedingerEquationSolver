@@ -44,9 +44,9 @@ protected:
     double absorber_width() const override { return 10.0; }
     bool relax_allowed() const override { return false; }  // no bound target
 
-    // No nucleus here: the origin dot would misread as one. Instead the
+    // No nucleus here: an origin ball would misread as one. Instead the
     // renderer composites the slab itself into the raymarch.
-    bool center_marker() const override { return false; }
+    int marker_count() const override { return 0; }
     bool barrier_slab(double& lo, double& hi) const override {
         lo = kTunnelXLo;
         hi = kTunnelXHi;
