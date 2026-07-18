@@ -514,6 +514,22 @@ TEST(HoLevelCapDeep, ReachesTheBoxCeilingNotTheSeedFloor) {
     const ses::Field1D at_cap = ses::ho_eigenstate(kDeepGrid, kDeepOmega, cap);
     const double e_exact = (cap + 0.5) * kDeepOmega;
     EXPECT_NEAR(ses::mean_energy(at_cap, v), e_exact, 1e-3 * e_exact);
+    // RED: ... and CONTAINED. The energy check alone cannot see box
+    // truncation: a clipped Hermite slice still satisfies k(x)^2/2 + V = E
+    // locally at every sample, so its grid energy sits within 1e-5 of
+    // (n+1/2)w even when the turning points are OUTSIDE the box (measured:
+    // at w = 4 on the scene grid the energy criterion never fails and the
+    // old cap ran to the arbitrary probe bound). An eigenstate at the cap
+    // must actually LIVE in the box: boundary density negligible against
+    // the bulk.
+    double edge = 0.0;
+    double bulk = 0.0;
+    for (int i = 0; i < kDeepGrid.n; ++i) {
+        bulk = std::max(bulk, std::norm(at_cap[i]));
+    }
+    edge = std::max(std::norm(at_cap[0]),
+                    std::norm(at_cap[kDeepGrid.n - 1]));
+    EXPECT_LT(edge, 1e-6 * bulk);
 }
 
 TEST(LadderFockDeep, RaisesADeepPairBeyondTheSeedWall) {
