@@ -1,4 +1,5 @@
 module;
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -197,27 +198,20 @@ inline std::vector<double> regularized_coulomb_potential(
     return v;
 }
 
-// Multi-center soft Coulomb: the molecular-toy pseudopotential (smooth, so
-// off-lattice centers keep their symmetry to O(h^2) -- the six-center
-// benzene ring cannot sit on a cubic lattice exactly).
-inline std::vector<double> soft_coulomb_potential(
-    const Grid3D& g, double Z, double a, const std::vector<Vec3d>& centers) {
-    std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
-    const double a2 = a * a;
-    for (const Vec3d& c : centers) {
-        for (int k = 0; k < g.z.n; ++k) {
-            for (int j = 0; j < g.y.n; ++j) {
-                for (int i = 0; i < g.x.n; ++i) {
-                    const double dx = g.x.coord(i) - c.x;
-                    const double dy = g.y.coord(j) - c.y;
-                    const double dz = g.z.coord(k) - c.z;
-                    v[static_cast<std::size_t>(g.flat(i, j, k))] +=
-                        -Z / std::sqrt(dx * dx + dy * dy + dz * dz + a2);
-                }
-            }
-        }
-    }
-    return v;
+// Snap a point to the nearest grid point (per axis, clamped to the valid
+// coords -- xmax is not a point on the periodic grid). Molecular centers
+// MUST sit on grid points: the bare multi-center builder regularizes only
+// exact-hit nucleus cells, and an off-grid center would hand its nearest
+// cell an arbitrary -Z/r depth. (Project rule: bare regularized Coulomb
+// everywhere; soft Coulomb is avoided.)
+inline Vec3d snap_to_grid(const Grid3D& g, Vec3d p) {
+    auto axis = [](const Grid1D& ax, double x) {
+        const double h = ax.spacing();
+        double i = std::round((x - ax.xmin) / h);
+        i = std::min(std::max(i, 0.0), static_cast<double>(ax.n - 1));
+        return ax.xmin + i * h;
+    };
+    return {axis(g.x, p.x), axis(g.y, p.y), axis(g.z, p.z)};
 }
 
 // Absorbing mask for the periodic box: exactly 1 in the interior, cos^2
