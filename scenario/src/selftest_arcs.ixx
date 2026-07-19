@@ -962,36 +962,44 @@ void register_verification_arcs(ShellT* shell) {
     // capture the ground INSIDE the fence with the J0-mode energy scale.
     if (shell->has_arg("--selftest-corral")) {
         shell->sched().after(1000, [shell] {
-            selftest_scene_wait_running(shell, "corral2d", 0, [shell](
-                                                                  bool runs) {
-                auto* cr = shell->cr();
-                if (!runs || cr == nullptr) {
-                    std::fprintf(stderr, "selftest-corral: scene not "
-                                         "running or no api  [FAIL]\n");
-                    shell->request_exit(1);
+            auto* cr = shell->cr();
+            if (cr == nullptr) {
+                std::fprintf(stderr, "selftest-corral: scene not "
+                                     "running or no api  [FAIL]\n");
+                shell->request_exit(1);
+                return;
+            }
+            // The corral BOOTS inside its relax (sim time frozen), so the
+            // generic sim-time running gate cannot apply: poll the capture
+            // directly, bounded (annealed 512^2 relax takes a while).
+            shell->set_time_scale(16);
+            auto poll = std::make_shared<int>(-1);
+            auto tries = std::make_shared<int>(0);
+            *poll = shell->sched().every(1000, [shell, poll, tries] {
+                auto* c = shell->cr();
+                if (c->relaxing() || c->captured() < 1) {
+                    if (++*tries >= 240) {
+                        shell->sched().cancel(*poll);
+                        std::fprintf(stderr,
+                                     "selftest-corral: relax never "
+                                     "converged  [FAIL]\n");
+                        shell->request_exit(1);
+                    }
                     return;
                 }
-                shell->set_time_scale(16);
-                auto poll = std::make_shared<int>(-1);
-                *poll = shell->sched().every(1000, [shell, poll] {
-                    auto* c = shell->cr();
-                    if (c->relaxing() || c->captured() < 1) {
-                        return;
-                    }
-                    shell->sched().cancel(*poll);
-                    const double conf = c->confinement();
-                    const double e = c->energy(0);
-                    const double r = c->radius();
-                    const double e_hard =
-                        2.405 * 2.405 / (2.0 * r * r);
-                    const bool pass = conf > 0.85 && e > 0.6 * e_hard &&
-                                      e < 2.0 * e_hard;
-                    std::fprintf(stderr,
-                                 "selftest-corral: E0 = %.4f (J0 scale "
-                                 "%.4f), P(inside) = %.2f  [%s]\n",
-                                 e, e_hard, conf, pass ? "PASS" : "FAIL");
-                    shell->request_exit(pass ? 0 : 1);
-                });
+                shell->sched().cancel(*poll);
+                const double conf = c->confinement();
+                const double e = c->energy(0);
+                const double r = c->radius();
+                const double e_hard =
+                    2.405 * 2.405 / (2.0 * r * r);
+                const bool pass = conf > 0.85 && e > 0.6 * e_hard &&
+                                  e < 2.0 * e_hard;
+                std::fprintf(stderr,
+                             "selftest-corral: E0 = %.4f (J0 scale "
+                             "%.4f), P(inside) = %.2f  [%s]\n",
+                             e, e_hard, conf, pass ? "PASS" : "FAIL");
+                shell->request_exit(pass ? 0 : 1);
             });
         });
     }

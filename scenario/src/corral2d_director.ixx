@@ -8,25 +8,41 @@ module;
 #include <vector>
 export module ses.scenario.corral2d_director;
 export import ses.scenario.lattice2d_director;
+import ses.heightfield;
+import ses.imaginary_time;
+import ses.observables;
+import ses.propagator;
 import ses.parallel;
 
 
 // Quantum corral (Crommie, Lutz & Eigler, IBM 1993): 48 Fe adatom ring
-// on Cu(111), circular standing waves. Here: 48 Gaussian bumps on a
-// ring of radius R, states relaxed INSIDE the leaky fence by lattice
-// imaginary time with Gram-Schmidt deflation -- [2] re-relaxes the
-// ground, [3] captures the next state, [F] scatters a packet off the
-// fence live. The adatoms render as shaded iron balls (the marker
-// machinery).
+// on Cu(111), circular standing waves. B = 0, so the propagator is the
+// SPECTRAL split-operator on the (512, 512, 1) grid -- exact continuum
+// k^2/2 dispersion, the faithful model of the Cu(111) 2DEG (physics-first
+// rule: the Peierls lattice is reserved for scenes that need gauge-exact
+// flux). States relax INSIDE the leaky fence by spectral imaginary time
+// with per-step Gram-Schmidt deflation, annealed coarse -> fine dtau --
+// [2] re-relaxes the ground, [3] captures the next state, [F] scatters a
+// packet off the fence live. The adatoms render as shaded iron balls.
+// Display is the STM-style HEIGHT surface: z = |psi|^2 (peak-tracked),
+// phase as vertex color -- not the volume slab.
 
 
 export namespace ses_shell {
 
 constexpr double kCr2dBox = 16.0;
-constexpr int kCr2dN = 256;
+constexpr int kCr2dN = 512;
 constexpr int kCr2dNz = 4;
 constexpr double kCr2dZHalf = 2.0;
+constexpr double kCr2dSurfH = 6.0;   // peak |psi|^2 -> 6 Bohr of height
+constexpr int kCr2dMeshStride = 2;   // 512^2 physics -> 256^2 display mesh
 constexpr double kCr2dDt = 0.02;
+// Annealed relax: the coarse dtau settles fast (spectral kinetic decay is
+// exact, no stability limit), the fine dtau then polishes the Strang
+// [T,V] Trotter bias away before capture -- at 512^2 the k-space
+// bandwidth is large enough that a single big dtau biases E0 visibly.
+constexpr double kCr2dCoarseDtau = 0.05;
+constexpr double kCr2dFineDtau = 0.005;
 constexpr int kCr2dAtoms = 48;
 constexpr double kCr2dR = 10.0;
 constexpr double kCr2dRMin = 6.0;
@@ -36,6 +52,8 @@ constexpr double kCr2dBumpSigma = 0.6;
 constexpr int kCr2dMaxStates = 6;
 // Relax convergence: energy drift per check below this for 3 checks.
 constexpr double kCr2dConvTol = 1e-7;
+// Coarse-stage plateau tolerance: crossing it flips to the fine stage.
+constexpr double kCr2dCoarseTol = 1e-5;
 
 class Corral2DDirector final : public Lattice2DDirectorBase,
                                public CorralApi {
@@ -86,6 +104,7 @@ public:
     }
     bool relaxing() const override { return relaxing_; }
     void fire_packet() override {
+        disp_peak_ = 0.0;  // re-snap: the packet scale differs from a ground
         relaxing_ = false;
         ses::parallel_for(kCr2dN, [&](int j) {
             const double y = phys_grid_.y.coord(j);
@@ -123,7 +142,21 @@ public:
     }
 
     double sim_dt() const override { return kCr2dDt; }
-    double default_camera_distance() const override { return 95.0; }
+
+    // ---- STM-style surface display (mesh path; cloud off) ----
+    bool cloud() const override { return false; }
+    const ses::Mesh& mesh() const override { return hf_.mesh; }
+    const std::vector<ses::Rgb>& colors() const override {
+        return hf_.colors;
+    }
+    bool take_mesh_dirty() override {
+        return std::exchange(mesh_dirty_, false);
+    }
+
+    // Tilted boot view so the height relief reads (face-on would hide it).
+    double default_camera_azimuth() const override { return 0.35; }
+    double default_camera_elevation() const override { return 0.95; }
+    double default_camera_distance() const override { return 60.0; }
 
     // The 48 iron adatoms as shaded balls (CPK-ish iron orange).
     int marker_count() const override { return kCr2dAtoms; }
@@ -155,15 +188,57 @@ public:
     }
 
 protected:
+    // Heightfield surface instead of the volume slab: peak-tracked height
+    // keeps the relief visible through relax; phase rides as vertex color.
+    // Surface normalizer: SNAP to the first observed max (the base's
+    // peak_ starts at an arbitrary 1.0 and only decays 2%/frame -- heavy
+    // relax frames are far too few to reach the true ~1e-2 scale, which
+    // squashed the dome to ~0.1 Bohr), then 0.98-decay smoothing.
+    void rebuild_display() override {
+        double cur = 0.0;
+        for (int j = 0; j < kCr2dN; ++j) {
+            for (int i = 0; i < kCr2dN; ++i) {
+                cur = std::max(cur, std::norm(psi_(i, j, 0)));
+            }
+        }
+        disp_peak_ = disp_peak_ <= 0.0 ? cur
+                                       : std::max(cur, 0.98 * disp_peak_);
+        hf_ = ses::heightfield_surface(psi_, kCr2dSurfH, disp_peak_,
+                                       kCr2dMeshStride);
+        mesh_dirty_ = true;
+    }
+
     void do_steps(int n) override {
         if (relaxing_) {
             // Imaginary time runs at 4x the tick budget (same cost per
             // step as real time; convergence is what the user waits on).
-            prop_->relax(psi_, 4 * n);
-            deflate();
-            const double e = prop_->energy(psi_);
-            if (std::abs(e - last_e_) < kCr2dConvTol * std::max(1.0, e)) {
-                if (++conv_streak_ >= 3) {
+            // Per-step Gram-Schmidt deflation rides inside relax_deflated;
+            // the disc projection between chunks makes the PREPARATION the
+            // closed-corral Dirichlet problem (the J0 object) -- without
+            // it the leaky fence honestly drains the relax into the lower
+            // outside quasi-continuum and no plateau ever forms. Real time
+            // (F key) runs the true leaky Hamiltonian, unprojected.
+            std::vector<const ses::Field3D*> lower;
+            lower.reserve(captured_.size());
+            for (const ses::Field3D& s : captured_) {
+                lower.push_back(&s);
+            }
+            int left = 4 * n;
+            const int chunk = fine_ ? 100 : 20;  // tau ~ 0.5 / 1.0 per cut
+            while (left > 0) {
+                const int c = std::min(left, chunk);
+                (fine_ ? itp_fine_ : itp_coarse_)
+                    ->relax_deflated(psi_, lower, c);
+                project_disc();
+                left -= c;
+            }
+            const double e = ses::mean_energy(psi_, v_);
+            const double tol = fine_ ? kCr2dConvTol : kCr2dCoarseTol;
+            if (std::abs(e - last_e_) < tol * std::max(1.0, e)) {
+                if (!fine_) {
+                    fine_ = true;  // coarse settled: polish at small dtau
+                    conv_streak_ = 0;
+                } else if (++conv_streak_ >= 3) {
                     capture(e);
                 }
             } else {
@@ -205,8 +280,13 @@ private:
                 }
             }
         }
-        prop_ = std::make_unique<ses::PeierlsLattice2D>(phys_grid_, v,
-                                                        kCr2dDt);
+        v_ = std::move(v);
+        prop_ = std::make_unique<ses::SplitOperator3D>(phys_grid_, v_,
+                                                      kCr2dDt);
+        itp_coarse_ = std::make_unique<ses::ImaginaryTimePropagator3D>(
+            phys_grid_, v_, kCr2dCoarseDtau);
+        itp_fine_ = std::make_unique<ses::ImaginaryTimePropagator3D>(
+            phys_grid_, v_, kCr2dFineDtau);
         captured_.clear();
         energies_.clear();
     }
@@ -227,9 +307,26 @@ private:
         ses::normalize(psi_);
         deflate();
         relaxing_ = true;
+        fine_ = false;
+        disp_peak_ = 0.0;  // re-snap the surface normalizer
         conv_streak_ = 0;
         last_e_ = 1e30;
         mark_fired();
+    }
+
+    // Preparation-only Dirichlet cut at the fence centerline: zero psi
+    // outside r = R and renormalize (projected ITP = the closed-corral
+    // eigenproblem). Never applied in real time.
+    void project_disc() {
+        ses::parallel_for(kCr2dN, [&](int j) {
+            const double y = phys_grid_.y.coord(j);
+            for (int i = 0; i < kCr2dN; ++i) {
+                if (std::hypot(phys_grid_.x.coord(i), y) > radius_) {
+                    psi_(i, j, 0) = 0.0;
+                }
+            }
+        });
+        ses::normalize(psi_);
     }
 
     // Gram-Schmidt against every captured state (the deflation).
@@ -259,13 +356,20 @@ private:
         title_dirty_ = true;
     }
 
-    std::unique_ptr<ses::PeierlsLattice2D> prop_;
+    std::vector<double> v_;  // fence potential (mean_energy readout)
+    std::unique_ptr<ses::SplitOperator3D> prop_;
+    std::unique_ptr<ses::ImaginaryTimePropagator3D> itp_coarse_;
+    std::unique_ptr<ses::ImaginaryTimePropagator3D> itp_fine_;
+    ses::Heightfield hf_;
+    bool mesh_dirty_ = false;
     std::vector<ses::Field3D> captured_;
     std::vector<double> energies_;
     double radius_ = kCr2dR;
     double last_e_ = 1e30;
+    double disp_peak_ = 0.0;  // surface height normalizer (snap-first)
     int conv_streak_ = 0;
     bool relaxing_ = false;
+    bool fine_ = false;  // anneal stage: coarse dtau -> fine polish
 };
 
 }  // namespace ses_shell

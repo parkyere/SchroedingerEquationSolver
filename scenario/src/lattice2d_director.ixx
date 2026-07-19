@@ -54,7 +54,7 @@ public:
         }
         if (staging_dirty_) {
             staging_dirty_ = false;
-            rebuild_staging();
+            rebuild_display();
         }
         if (++frames_ % 10 == 0) {
             title_dirty_ = true;
@@ -122,6 +122,9 @@ protected:
     // Scene hooks: the subclass owns the propagator and the batch.
     virtual void do_steps(int n) = 0;
     virtual int steps_per_tick() const { return 8; }
+    // Display rebuild after psi moved: default = the phase-hued volume
+    // slab; a scene may substitute its own display (corral's heightfield).
+    virtual void rebuild_display() { rebuild_staging(); }
 
     // Reset the clock and the display flags around a re-preparation.
     void mark_fired() {
