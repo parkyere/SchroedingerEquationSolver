@@ -53,7 +53,8 @@ struct RadialBinIndex {
 
 // The fp32-identical bin key for a cell: -1 if r >= rmax (outside the sphere),
 // 0 if r < h (origin segment), else i0 = int(r/h - 1). Free function so the
-// GLSL kernel and the CPU sort provably share it.
+// Slang deposit kernel (project_deposit.comp.slang) and the CPU sort
+// provably share it.
 inline int radial_bin_key(const Grid3D& g, const RadialGrid& rgrid, int i, int j,
                           int k) noexcept {
     const float hf = static_cast<float>(rgrid.h());

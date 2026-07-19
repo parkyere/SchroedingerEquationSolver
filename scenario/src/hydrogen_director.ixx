@@ -628,8 +628,8 @@ public:
     bool scene_ready() const override { return manifold_ready(); }
 
     bool solving() const override { return gpu_ok_ && !atlas_done_; }
-    // Ready only once the FULL table is assembled (channels_ fills
-    // incrementally during the pair phase -- do not race it).
+    // Ready = atlas finale done AND channel table built (empty table =
+    // build failed/skipped, e.g. the no-GPU give-up path).
     bool manifold_ready() const { return atlas_done_ && !atom_.channels().empty(); }
     double state_energy(int idx) const override { return atom_.state_energy(idx); }
     int spectro_count() const override {
@@ -1391,8 +1391,8 @@ private:
     }
 
     // Advance the startup atlas build one chunk per paint: synthesize + show
-    // one orbital (montage), then evaluate dipole pairs, then assemble the
-    // channel table and resume the wavepacket.
+    // one orbital (montage); after the last, build the factorized channel
+    // table (instant, CPU) and resume the wavepacket.
     void run_atlas_chunk() {
         if (montage_hold_ > 0) {
             --montage_hold_;

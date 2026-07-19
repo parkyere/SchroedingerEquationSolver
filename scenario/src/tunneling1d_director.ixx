@@ -69,7 +69,7 @@ protected:
                     kTun1dXHi, p_right_, t_max_);
     }
 
-    // 1024 points: the probe is microseconds, so track T every batch.
+    // 64k-point linear probe is still microseconds: track T every batch.
     void after_batch() override {
         p_left_ = ses::probability_in_range(psi_, grid1d_.xmin, kTun1dXLo);
         p_right_ = ses::probability_in_range(psi_, kTun1dXHi, grid1d_.xmax);

@@ -59,8 +59,9 @@ public:
 
     const ses::Grid3D& grid() const override { return sim_.grid(); }
 
-    // Engine init + relax tables + gradient (+ absorber when the scenario
-    // wants one); any failure demotes to CPU stepping wholesale.
+    // Engine init + gradient (+ absorber when the scenario wants one).
+    // Engine/gradient failure demotes to CPU stepping; absorber failure
+    // only drops the mask. Relax tables are transient (relax entry).
     void init_compute(ses_vk::DeviceContext& ctx, bool device_ok,
                       std::int64_t /*free_vram_bytes*/) override {
         compute_attempted_ = true;

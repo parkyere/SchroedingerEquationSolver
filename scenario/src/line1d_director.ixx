@@ -20,10 +20,10 @@ export import ses.potential;
 export import ses.propagator;
 
 
-// Shared base for the textbook 1D scenes (harmonic ladder, tunneling
-// barrier). Physics is pure CPU double -- a few hundred grid points cost
-// microseconds per split-operator step, so no engine is involved and
-// gpu_ok() stays false by design. Display goes through the overlay polyline
+// Shared base for the six textbook 1D scenes (HO ladder, tunneling,
+// double well, Poschl-Teller, Morse, Bloch). Physics is pure CPU double
+// -- even the 64k-point split-operator step is cheap, so no engine is
+// involved and gpu_ok() stays false by design. Display goes through the overlay polyline
 // seam: the wavefunction as the white phasor curve (radius = r_scale |psi|^2,
 // twist = arg psi -- ON THE CURVE phase is geometry, never color), its
 // |psi|^2 shadow band on the z = 0 plane (phase as per-vertex hue there,
@@ -82,7 +82,7 @@ public:
     }
 
     // ---- generic controls ----
-    void do_set_real_time() override {}  // 1D scenes are always real-time
+    void do_set_real_time() override {}  // no-op: NVI base already resets time_scale to 1
     void reset_simulation() override {
         psi_ = initial_;
         sim_time_ = 0.0;

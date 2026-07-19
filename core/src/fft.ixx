@@ -26,9 +26,9 @@ export namespace ses {
 // Twiddle table w[j] = e^{-2 pi i j / n}, j = 0 .. n/2-1, computed directly
 // so every factor sits within ~1 ulp of the unit circle. (The recurrence
 // w *= wlen drifts off the circle and damps the norm -- caught by
-// SplitOperator.ConservesNorm.) Stateless by design (no thread_local: MSVC
-// modules miscompile it with omp, and a table per 3D axis pass is cheaper
-// than a per-thread cache anyway); the 3D passes share one read-only table.
+// SplitOperator.ConservesNorm.) Stateless by design (no thread_local):
+// the 3D passes share one read-only table per axis, cheaper than a
+// per-thread cache.
 inline std::vector<std::complex<double>> fft_twiddles(std::size_t n) {
     std::vector<std::complex<double>> w(n / 2);
     const double ang = -2.0 * std::numbers::pi / static_cast<double>(n);
@@ -131,8 +131,7 @@ inline void fft(Field3D& f) {
         });
     }
 
-    // One gather/scatter line per worker, reused across the y and z passes
-    // (the thread_local scratch of the OpenMP version, made explicit).
+    // One gather/scatter line per worker, reused across the y and z passes.
     std::vector<std::vector<std::complex<double>>> scratch(
         static_cast<std::size_t>(parallel_workers()));
 

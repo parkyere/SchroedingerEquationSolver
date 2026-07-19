@@ -18,8 +18,9 @@ export import ses.lattice2d;
 import ses.parallel;
 
 
-// Shared base for the CPU 2D lattice scenes (double slit, Landau,
-// corral, quantum dot): physics on one z-plane (nz = 1) of a Field3D,
+// Shared base for the corral and qdot CPU 2D lattice scenes (doubleslit/
+// landau are standalone ScenarioDirectors with their own slab plumbing):
+// physics on one z-plane (nz = 1) of a Field3D,
 // displayed through the volume path by replicating the plane into a thin
 // z slab (CPU staging fallback -- gpu_ok() false by design). Subclasses
 // own the propagator and stepping (do_steps), the base owns the frame

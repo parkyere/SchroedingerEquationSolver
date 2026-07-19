@@ -6,8 +6,8 @@ export module ses.vram_budget;
 // Pick the resident eigenstate-atlas precision (fp32 vs fp16) that fits GPU
 // VRAM: an fp32 atlas that overflows VRAM makes WDDM page across PCIe and
 // thrash every frame. Pure integer decision (no GPU-API deps, unit-tested);
-// the VK_EXT_memory_budget query lives in the app/ shell, which passes
-// kVramUnknown when unavailable.
+// the VK_EXT_memory_budget probe is ses.vk.vram_probe (solver/), which
+// returns kVramUnknown when unmeasurable; the app shell forwards it.
 
 
 export namespace ses {

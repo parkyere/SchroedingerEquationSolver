@@ -60,8 +60,8 @@ struct HydrogenApi {
     // Spectrometer record: the energies (eV) of the photons emitted by
     // quantum jumps since the last reset, in emission order. spectro_max_ev
     // is the strip's full scale (the ionization limit) -- 0 hides the
-    // strip (the trap scene shares this Api but hydrogen's emission rules
-    // are hydrogen-only).
+    // strip (0 defaults: hydrogen is the sole HydrogenApi implementer;
+    // emission rules are hydrogen-only).
     virtual int spectro_count() const { return 0; }
     virtual double spectro_ev(int /*i*/) const { return 0.0; }
     virtual double spectro_max_ev() const { return 0.0; }

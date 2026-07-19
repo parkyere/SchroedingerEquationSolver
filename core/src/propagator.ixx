@@ -103,8 +103,8 @@ public:
 
     double dt() const noexcept { return dt_; }
 
-    // Read access to the phase tables so the GPU engine consumes the TESTED
-    // tables instead of re-deriving them.
+    // Read access for CPU driven_step (ses.drive) and the table-pinning
+    // tests; the GPU engine derives phases in-shader from V + k^2 tables.
     const std::vector<std::complex<double>>& half_potential_phase() const noexcept { return half_v_; }
     const std::vector<std::complex<double>>& kinetic_phase() const noexcept { return kinetic_; }
 

@@ -237,22 +237,6 @@ inline Field1D ho_eigenstate(const Grid1D& g, double omega, int n) {
     return cur;
 }
 
-// Noise-free ladder rung for a state KNOWN to be the eigenstate |n_from>
-// (up to a global phase; the caller's Var(H) classifier is the gate). The
-// raw spectral operator is still what ACTS: it supplies the counting
-// norm^2 (n+1 / n) and the global phase of the result. Only the state
-// body is then rebuilt from the direct Hermite oracle carrying that phase
-// -- the same mathematical object (adag|n> = sqrt(n+1)|n+1>) computed by
-// the stable route, so the round-off floor RESETS at every rung instead
-// of compounding. Descending is the payoff: the raw chain's noise gains
-// (derivative k_max/sqrt(2w), x-term x_max*sqrt(w/2)) amplify residue
-// FASTER on the way down (signal shrinks as sqrt(n)), which showed up as
-// visible high-k garbage; stable rungs kill it, and the usable range
-// becomes the grid's representability ceiling (ho_level_cap), not the
-// raw-chain noise cap. Down at the ground still refuses via the operator
-// itself (returns ~0, psi untouched). If psi is NOT the claimed
-// eigenstate (oracle overlap < 1/2), the raw result is kept as-is: the
-// caller misclassified, and the honest operator output stands.
 // The REPRESENTABILITY ceiling: the largest level whose direct Hermite
 // oracle is still faithful on the grid (discrete energy within 0.1% of
 // (n+1/2)w). Box-limited for a soft well (wide turning points), Nyquist-

@@ -116,8 +116,8 @@ public:
     }
 
     double dt() const noexcept { return dt_; }
-    // Accumulated drift A(t) = F t: the packet's quasimomentum shift
-    // (the scene's Brillouin-zone marker reads it).
+    // Accumulated quasimomentum shift F*t (= -A(t)); the scene's
+    // Brillouin-zone marker reads it.
     double drift() const noexcept { return force_ * t_; }
     void reset_time() noexcept { t_ = 0.0; }
 
