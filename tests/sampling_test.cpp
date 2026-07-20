@@ -1,15 +1,4 @@
-// RED: trilinear sampling of the complex field at arbitrary points, and
-// per-vertex phase colors for a mesh.
-//
-// Marching-cubes vertices sit BETWEEN grid points, so painting phase on the
-// isosurface needs interpolation of psi at arbitrary positions.
-//
-// Sharp oracles:
-//  - trilinear interpolation reproduces any function linear in x,y,z EXACTLY;
-//  - for psi = A(r) e^{i phi0} with real A > 0, the interpolated amplitude
-//    cancels inside atan2, so every vertex phase is EXACTLY phi0;
-//  - for a unit-amplitude plane wave e^{i k x} the interpolated phase tracks
-//    k*x to O((kh)^2) between grid points (tolerance-checked).
+// RED: trilinear complex-field sampling + per-vertex mesh phase colors.
 
 #include <complex>
 
@@ -86,8 +75,7 @@ TEST(TrilinearSample, WorksAtTheLastGridPoint) {
 }
 
 TEST(PhaseColors, UniformPhaseGivesExactlyUniformColor) {
-    // psi = A(r) e^{i 0.7}, A real positive Gaussian: interpolation scales
-    // the amplitude only, so atan2 recovers 0.7 exactly at every vertex.
+    // A(r) e^{i phi0}: interp scales amplitude only -> phase = phi0 exact.
     const Grid1D axis{-8.0, 8.0, 16};
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
@@ -116,8 +104,7 @@ TEST(PhaseColors, UniformPhaseGivesExactlyUniformColor) {
 }
 
 TEST(PhaseColors, PlaneWavePhaseTracksKx) {
-    // Unit-amplitude e^{i k x}: between grid points the interpolated phase
-    // deviates from k*x only at O((kh)^2) (~1e-3 rad here).
+    // e^{i k x}: interpolated phase deviates from k*x by O((kh)^2) (~1e-3 rad).
     const Grid1D axis{-8.0, 8.0, 16};  // h = 1
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
@@ -130,7 +117,7 @@ TEST(PhaseColors, PlaneWavePhaseTracksKx) {
             }
         }
     }
-    // Hand-built probe mesh: interior vertices with known x (normals unused).
+    // hand-built probe mesh, known x; normals unused.
     Mesh mesh;
     mesh.vertices = {Vec3d{0.5, 0.25, -1.75}, Vec3d{-3.3, 2.0, 4.4}, Vec3d{5.6, -6.0, 0.0}};
     mesh.normals.resize(mesh.vertices.size());

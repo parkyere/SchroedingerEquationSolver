@@ -1,18 +1,7 @@
 // RED: orbital-free angular-decomposition projection.
-//
-// The tracked eigenstates factorize as |n> = (u_nl(r)/r) Y_lm(Omega) (soft-
-// Coulomb is central). The direct grid inner product <n|psi> can therefore be
-// REORGANIZED: deposit each cell's Y_lm(cell)*psi(cell)*dV into radial bins
-// with a linear (cloud-in-cell) weight that folds in the 1/r Jacobian and the
-// radial interpolation -> g_lm[c][j]; then <n|psi> = sum_j u_nl[j] g_lm[c][j],
-// a cheap 1-D radial dot. The grid pass is done ONCE for all (l,m) up to l_max
-// and is INDEPENDENT of the number of states -- so it needs no resident 3-D
-// atlas and scales to a larger basis / 512^3.
-//
-// THE gate (this file): the reorganized amplitude must EQUAL the direct grid
-// inner product <(u/r)Y_lm | psi> to ~1e-12 -- it is the same sum, merely
-// reassociated. The reference orbital is built by fill_orbital (the un-
-// normalized (u_interp/r)Y_lm the projection algebraically equals).
+// Reorg identity: |n>=(u_nl/r)Y_lm reorganizes <n|psi> = sum_j u_nl[j] g_lm[c][j],
+// which must EQUAL the direct inner product to ~1e-12 (same sum reassociated).
+// Oracle = fill_orbital((u/r)Y_lm).
 
 
 #include <complex>
@@ -34,9 +23,7 @@ using ses::Grid1D;
 using ses::Grid3D;
 using ses::Vec3d;
 
-// An arbitrary smooth radial u(r) with u(0)=0. The reorganization identity is
-// algebraic -- it holds for ANY u (normalized or not, eigenstate or not),
-// because amp*sqrt(norm2) reconstructs the raw dot regardless.
+// Arbitrary smooth u(r); the reorg identity is algebraic, so it holds for ANY u.
 std::vector<double> make_u(const ses::RadialGrid& rg, int kind) {
     std::vector<double> u(static_cast<std::size_t>(rg.n));
     for (int i = 0; i < rg.n; ++i) {
@@ -53,11 +40,9 @@ TEST(RadialAngularProjection, ExactReorgIdentity) {
     const ses::RadialGrid rg{10.0, 159};
     const std::vector<std::vector<double>> u_by_level = {make_u(rg, 0), make_u(rg, 1)};
 
-    // A genuinely COMPLEX test state (nonzero k0 gives psi a phase).
     const ses::Field3D psi = ses::gaussian_wavepacket(
         g, Vec3d{1.2, 0.6, -0.4}, Vec3d{1.7, 1.7, 1.7}, Vec3d{0.3, -0.2, 0.1});
 
-    // Cover l = 0 (worst near-origin), l = 1, and l = 5 (highest harmonic).
     const std::vector<ses::ProjectorState> states = {
         {0, 0, 0}, {1, 1, 0}, {1, 1, 1}, {1, 1, -1}, {0, 5, 3}, {1, 5, 0}};
 
@@ -71,7 +56,6 @@ TEST(RadialAngularProjection, ExactReorgIdentity) {
         ses::fill_orbital(orbital, g, rg,
                           u_by_level[static_cast<std::size_t>(st.level)], st.l, st.m);
         const std::complex<double> oracle = ses::inner_product(orbital, psi);
-        // raw (un-normalized) amplitude = amp * sqrt(norm2) = sum_j u[j] g_lm[j].
         const std::complex<double> raw =
             proj.amp[s] * std::sqrt(proj.norm2[static_cast<std::size_t>(s)]);
         const double tol = 1e-11 * (1.0 + std::abs(oracle.real()) + std::abs(oracle.imag()));
@@ -80,10 +64,6 @@ TEST(RadialAngularProjection, ExactReorgIdentity) {
     }
 }
 
-// The two boundary branches that most easily drift from fill_orbital: a cell at
-// the exact origin (r < h) deposits to bin 0 only and only the l=0 harmonic
-// (Y_{l>0}(0)=0); a cell beyond rmax is excluded entirely (the box-corner
-// continuum, correctly part of the deficit).
 TEST(RadialAngularProjection, OriginAndRmaxShape) {
     const Grid1D ax{-10.0, 10.0, 48};
     const Grid3D g{ax, ax, ax};
@@ -97,14 +77,14 @@ TEST(RadialAngularProjection, OriginAndRmaxShape) {
         psi(24, 24, 24) = std::complex<double>{1.0, 0.0};
         const ses::RadialAngularProjection proj =
             ses::project_radial_angular(psi, rg, u_by_level, states, 5);
-        // l=0: only bin 0 receives (weight 1/h); every other bin is exactly 0.
+        // l=0 origin cell deposits weight 1/h into bin 0 only.
         EXPECT_GT(std::abs(proj.g_lm[static_cast<std::size_t>(ses::lm_index(0, 0))][0]), 0.0);
         for (int jr = 1; jr < rg.n; ++jr) {
             EXPECT_EQ(std::abs(proj.g_lm[static_cast<std::size_t>(ses::lm_index(0, 0))]
                                        [static_cast<std::size_t>(jr)]),
                       0.0);
         }
-        // all l>0 harmonics vanish at the origin -> those components are 0.
+        // Y_{l>0}(0)=0 -> all l>0 components vanish.
         for (int l = 1; l <= 5; ++l) {
             for (int m = -l; m <= l; ++m) {
                 for (int jr = 0; jr < rg.n; ++jr) {
@@ -127,31 +107,24 @@ TEST(RadialAngularProjection, OriginAndRmaxShape) {
     }
 }
 
-// The angular part is exact analytically: projecting a pure Y_{1,0} orbital
-// recovers the (1,0) amplitude and gives ~0 for the orthogonal (1,+-1) (exact
-// by x/y symmetry) and a small grid-limited residual for a different l.
 TEST(RadialAngularProjection, AngularOrthogonality) {
     const Grid1D ax{-10.0, 10.0, 48};
     const Grid3D g{ax, ax, ax};
     const ses::RadialGrid rg{10.0, 159};
     const std::vector<std::vector<double>> u_by_level = {make_u(rg, 0)};
     ses::Field3D psi{g};
-    ses::fill_orbital(psi, g, rg, u_by_level[0], 1, 0);  // a real 2p_z profile
+    ses::fill_orbital(psi, g, rg, u_by_level[0], 1, 0);
     const std::vector<ses::ProjectorState> states = {
         {0, 1, 0}, {0, 1, 1}, {0, 1, -1}, {0, 3, 0}};
     const ses::RadialAngularProjection proj =
         ses::project_radial_angular(psi, rg, u_by_level, states, 5);
     const double a10 = std::abs(proj.amp[0]);
     EXPECT_GT(a10, 1e-3);
-    // Same-l cross-m orthogonality is near-exact (Y_1,+-1 _|_ Y_10 by x/y parity).
+    // Same-l cross-m: Y_{1,+-1} _|_ Y_{1,0} by x/y parity (near-exact).
     EXPECT_LT(std::abs(proj.amp[1]), 1e-8 * a10);
     EXPECT_LT(std::abs(proj.amp[2]), 1e-8 * a10);
-    // Different-l (Y_30 vs Y_10) is orthogonal only in the continuum; on a
-    // coarse Cartesian grid the near-origin shells are angularly undersampled,
-    // leaving a residual (~5% at 48^3). Crucially that residual is the GRID's,
-    // NOT the projector's -- the projector reproduces the DIRECT grid inner
-    // product exactly, so it is no worse than the resident-atlas path it
-    // replaces (which would inner-product the same two grid orbitals).
+    // Different-l is orthogonal only in the continuum; the coarse grid leaves a
+    // residual, so compare against the direct grid inner product, not 0.
     ses::Field3D o30{g};
     ses::fill_orbital(o30, g, rg, u_by_level[0], 3, 0);
     const std::complex<double> direct = ses::inner_product(o30, psi);
@@ -161,8 +134,7 @@ TEST(RadialAngularProjection, AngularOrthogonality) {
     EXPECT_NEAR(raw3.imag(), direct.imag(), tol);
 }
 
-// The core scaling claim: the grid pass (g_lm) is done ONCE and is INDEPENDENT
-// of the number of states -- only the cheap 1-D radial dots scale with #states.
+// Contract: the g_lm grid pass runs ONCE, INDEPENDENT of #states.
 TEST(RadialAngularProjection, StateCountIndependence) {
     const Grid1D ax{-10.0, 10.0, 40};
     const Grid3D g{ax, ax, ax};
@@ -182,22 +154,19 @@ TEST(RadialAngularProjection, StateCountIndependence) {
         ses::project_radial_angular(psi, rg, u_by_level, few, 5);
     const ses::RadialAngularProjection pm =
         ses::project_radial_angular(psi, rg, u_by_level, many, 5);
-    // Identical g_lm (same one pass) regardless of the state list.
     for (int c = 0; c < ses::lm_count(5); ++c) {
         for (int jr = 0; jr < rg.n; ++jr) {
             EXPECT_EQ(pf.g_lm[static_cast<std::size_t>(c)][static_cast<std::size_t>(jr)],
                       pm.g_lm[static_cast<std::size_t>(c)][static_cast<std::size_t>(jr)]);
         }
     }
-    // Overlapping amplitudes (few's states are many's first two) identical.
     for (std::size_t s = 0; s < few.size(); ++s) {
         EXPECT_EQ(pf.amp[s], pm.amp[s]);
     }
 }
 
-// Deterministic: fixed-order accumulation, no atomics/RNG -> two runs are
-// bit-for-bit identical (the property the GPU kernel must preserve so vkcheck
-// stays a clean bitwise-close comparison against this oracle).
+// Deterministic: fixed-order accumulation (no atomics/RNG) -> bit-for-bit repro,
+// the property the GPU kernel must preserve for the vkcheck oracle comparison.
 TEST(RadialAngularProjection, DeterministicRepro) {
     const Grid1D ax{-9.0, 9.0, 40};
     const Grid3D g{ax, ax, ax};
@@ -221,10 +190,8 @@ TEST(RadialAngularProjection, DeterministicRepro) {
     }
 }
 
-// The static counting-sort geometry that lets the GPU deposit run one
-// deterministic gather per radial bin (no atomics). Structural invariants: a
-// valid CSR; every in-sphere cell appears EXACTLY once and is stored in the bin
-// equal to its fp32 key; and the build is bit-for-bit reproducible.
+// Counting-sort bin index (no atomics). Invariants: valid CSR; every in-sphere
+// cell appears EXACTLY once in its fp32-key bin; build is bit-for-bit reproducible.
 TEST(RadialAngularProjection, StaticRadialBinIndex) {
     const Grid1D ax{-8.0, 8.0, 40};
     const Grid3D g{ax, ax, ax};
@@ -261,8 +228,8 @@ TEST(RadialAngularProjection, StaticRadialBinIndex) {
             const int ci = static_cast<int>(flat) % g.x.n;
             const int cj = (static_cast<int>(flat) / g.x.n) % g.y.n;
             const int ck = static_cast<int>(flat) / (g.x.n * g.y.n);
-            EXPECT_EQ(ses::radial_bin_key(g, rg, ci, cj, ck), b);  // stored in its own bin
-            EXPECT_EQ(seen[flat], 0);                              // exactly once
+            EXPECT_EQ(ses::radial_bin_key(g, rg, ci, cj, ck), b);
+            EXPECT_EQ(seen[flat], 0);
             seen[flat] = 1;
         }
     }
@@ -272,16 +239,10 @@ TEST(RadialAngularProjection, StaticRadialBinIndex) {
     EXPECT_EQ(idx.bin_off, idx2.bin_off);
 }
 
-// GO/NO-GO for the GPU deposit: the GPU accumulates
-// each radial bin's g_lm in fp32 (one workgroup per bin), strictly less precise
-// than this double CPU oracle. Will fp32-per-bin accumulation stay within the
-// vkcheck tolerance (~1e-4), even on the HARD cancelling / continuum cases
-// (a plane wave weights every outer bin fully and cancels hard against Y_lm)?
-// We answer it on the CPU by simulating the fp32 accumulation (conservatively:
-// sequential float, worse than the GPU's shared-memory tree reduction), then
-// finishing the u-dot in double as the shell will. If this passes, fp32-per-bin
-// is GO; if not, the kernel needs multiple fp32 partials per bin summed in
-// double. Sized to ~3000 cells/bin (near the production 256^3/5119 ratio).
+// GO/NO-GO for the GPU deposit: the GPU accumulates each bin's g_lm in fp32 (one
+// workgroup per bin). Does fp32-per-bin stay under the vkcheck ~1e-4 tolerance even
+// on the adversarial continuum case? CPU sim is conservative (sequential float,
+// u-dot in double). GO -> fp32-per-bin; NO-GO -> fp32 partials summed in double.
 namespace {
 double fp32_accum_worst_rel(const ses::Field3D& psi, const ses::RadialGrid& rg,
                             const std::vector<std::vector<double>>& u_by_level,
@@ -290,7 +251,7 @@ double fp32_accum_worst_rel(const ses::Field3D& psi, const ses::RadialGrid& rg,
     const int nx = g.x.n, ny = g.y.n, nz = g.z.n, nr = rg.n;
     const double h = rg.h(), rmax = rg.rmax, dV = g.cell_volume();
     const int ncomp = ses::lm_count(5);
-    // fp32 accumulators, exactly the GPU's per-bin storage.
+    // fp32 accumulators = the GPU's per-bin storage.
     std::vector<std::vector<std::complex<float>>> g32(
         static_cast<std::size_t>(ncomp),
         std::vector<std::complex<float>>(static_cast<std::size_t>(nr)));
@@ -320,7 +281,6 @@ double fp32_accum_worst_rel(const ses::Field3D& psi, const ses::RadialGrid& rg,
                         const double Y = ses::real_spherical_harmonic(l, m, x, y, z);
                         const std::complex<double> c = pdV * Y;
                         const std::size_t cc = static_cast<std::size_t>(ses::lm_index(l, m));
-                        // accumulate in fp32 (the GPU workgroup's precision)
                         g32[cc][static_cast<std::size_t>(b0)] +=
                             std::complex<float>{static_cast<float>(c.real() * w0),
                                                 static_cast<float>(c.imag() * w0)};
@@ -363,13 +323,12 @@ TEST(RadialAngularProjection, Fp32PerBinAccumulationHoldsTolerance) {
     const std::vector<ses::ProjectorState> states = {
         {0, 0, 0}, {1, 1, 0}, {0, 2, -1}, {1, 5, 3}, {0, 4, 0}};
 
-    // (1) bound-like: a Gaussian bump (u ~ e^{-r} suppresses the noisy outer bins).
+    // (1) bound-like: u ~ e^{-r} suppresses the noisy outer bins.
     const double e_bound = fp32_accum_worst_rel(
         ses::gaussian_wavepacket(g, Vec3d{0.6, -0.4, 0.3}, Vec3d{1.8, 1.8, 1.8},
                                  Vec3d{0.2, 0.1, -0.1}),
         rg, u_by_level, states);
-    // (2) CONTINUUM stress: a plane wave fills every outer bin at full amplitude
-    //     and cancels hard against Y_lm -- the adversarial worst case.
+    // (2) continuum stress: a plane wave fills every outer bin and cancels against Y_lm.
     ses::Field3D plane{g};
     const Vec3d kk{2.3, -1.7, 1.1};
     for (int k = 0; k < g.z.n; ++k)
@@ -383,8 +342,6 @@ TEST(RadialAngularProjection, Fp32PerBinAccumulationHoldsTolerance) {
 
     std::printf("[fp32-per-bin go/no-go] bound rel err = %.3e, continuum rel err = %.3e\n",
                 e_bound, e_continuum);
-    // GO if fp32-per-bin stays under the vkcheck ~1e-4 tolerance even on the
-    // adversarial continuum case (the CPU sim is conservative vs the GPU tree).
     EXPECT_LT(e_bound, 1e-4);
     EXPECT_LT(e_continuum, 1e-4);
 }

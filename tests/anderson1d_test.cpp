@@ -1,8 +1,5 @@
-// RED: Anderson localization contracts. The disorder landscape is
-// deterministic per seed, bounded by the amplitude range, and every
-// barrier sits BELOW the packet energy (the classical particle passes);
-// yet the quantum packet's transport HALTS -- coherent backscattering --
-// while the clean (W = 0) twin flies ballistically.
+// RED: Anderson localization contract -- deterministic bounded sub-energy
+// landscape, yet transport HALTS (coherent backscattering) vs ballistic W=0 twin.
 
 #include <gtest/gtest.h>
 
@@ -27,26 +24,22 @@ TEST(Anderson1D, LandscapeIsDeterministicBoundedAndSubEnergy) {
     const std::vector<double> b = ses_shell::anderson_potential(g, 1.0, 7);
     const std::vector<double> c = ses_shell::anderson_potential(g, 1.0, 8);
     ASSERT_EQ(a.size(), b.size());
-    EXPECT_EQ(a, b);  // same seed -> bitwise identical
-    EXPECT_NE(a, c);  // fresh seed -> fresh landscape
+    EXPECT_EQ(a, b);
+    EXPECT_NE(a, c);
     double vmax = 0.0;
     double vsum = 0.0;
     for (const double v : a) {
         vmax = std::max(vmax, std::abs(v));
         vsum += std::abs(v);
     }
-    EXPECT_GT(vsum, 0.0);  // there IS a landscape
-    // Overlap-bounded: the speckle field peaks under ~1.4 x the grain
-    // range (this landscape was drawn at w = 1.0).
+    EXPECT_GT(vsum, 0.0);
+    // speckle overlap peaks ~1.4x the w=1.0 grain range
     EXPECT_LT(vmax, 1.4);
 }
 
 TEST(Anderson1D, DisorderBlocksTheBallisticPacket) {
-    // Conductance framing on an OPEN wire (edge CAPs eat whatever exits;
-    // the periodic FFT box would otherwise wrap the transmitted tail into
-    // the readout): the CLEAN wire transmits the whole packet -- the norm
-    // drains; the DISORDERED wire reflects/localizes it -- the norm stays,
-    // parked on the entry side. Same landscape, E above every barrier.
+    // OPEN wire: edge CAPs absorb exits -- a periodic FFT box would wrap the
+    // transmitted tail back into the readout. Packet E is above every barrier.
     const ses::Grid1D g{-60.0, 60.0, 4096};
     const double x0 = -45.0;
     const double w0 = 4.0;
@@ -61,8 +54,7 @@ TEST(Anderson1D, DisorderBlocksTheBallisticPacket) {
                 std::exp(-w0 * t * t * 0.01);
         }
     }
-    // TRANSMITTED flux = what the RIGHT cap eats (reflected flux exits
-    // the LEFT cap -- that IS blocking, it must not count against it).
+    // transmitted = flux the RIGHT cap (x>0) absorbs; reflected exits LEFT, uncounted
     auto run = [&](const std::vector<double>& v) {
         const ses::SplitOperator1D prop{g, v, 0.01};
         ses::Field1D psi =
@@ -88,8 +80,8 @@ TEST(Anderson1D, DisorderBlocksTheBallisticPacket) {
     const double t_dis = run(dis);
     std::printf("anderson: transmitted clean %.3f, disordered %.3f\n",
                 t_clean, t_dis);
-    EXPECT_GT(t_clean, 0.7);           // clean wire: conducts
-    EXPECT_LT(t_dis, 0.3 * t_clean);   // disorder: the wire INSULATES
+    EXPECT_GT(t_clean, 0.7);
+    EXPECT_LT(t_dis, 0.3 * t_clean);
 }
 
 }  // namespace

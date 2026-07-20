@@ -1,10 +1,4 @@
-// RED: WavepacketSimulation -- the tested orchestration layer between the
-// physics core and the untested app shell. Owns grid + potential +
-// propagator + psi, advances real time, and hands the shell density frames.
-// Keeping this in core means the shell stays logic-free.
-//
-// Also: marching_cubes_at_fraction -- isovalue as a fraction of the current
-// density peak, so an animated (dispersing) cloud keeps a visible surface.
+// marching_cubes_at_fraction: isovalue = fraction*peak, keeps a dispersing cloud visible.
 
 
 #include <gtest/gtest.h>
@@ -61,8 +55,6 @@ TEST(WavepacketSimulation, ConservesNormWhileAdvancing) {
 }
 
 TEST(WavepacketSimulation, MatchesManualPropagation) {
-    // The sim must be exactly "gaussian_wavepacket, then SplitOperator3D
-    // steps" -- no hidden extras.
     const WavepacketSimulation::Config cfg = demo_config();
     WavepacketSimulation sim{cfg};
     sim.advance(5);

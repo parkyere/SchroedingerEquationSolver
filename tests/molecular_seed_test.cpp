@@ -1,11 +1,7 @@
-// RED: the H2+ scene's state seeds -- the symmetry-resolved known molecular
-// orbitals + an arbitrary random-shaped wavefunction.
-//
-// The MO seeds are fed to the deflated imaginary-time chain: a symmetry
-// sector's seed converges to the LOWEST orbital of that irrep (symmetry
-// orthogonality keeps sectors apart; deflation handles the same-irrep
-// tower). The random seed is a legitimate normalized state of arbitrary
-// (symmetry-broken) shape -- what the user drops in to watch evolve.
+// RED: H2+ MO seeds (symmetry-resolved) + random seed.
+// Deflated relax: each irrep seed -> that irrep's LOWEST orbital (symmetry
+// separates sectors; deflation clears the same-irrep tower, hence su/pu
+// deflate against {sg} only).
 
 #include <gtest/gtest.h>
 
@@ -32,14 +28,12 @@ using ses_shell::molecular_orbital_seed;
 using ses_shell::MolOrbital;
 using ses_shell::random_molecular_seed;
 
-// h = 0.5, origin at index 16; mirror of index i (1..15) is 32 - i, i = 16
-// is the plane itself (coord 0). Index 0 (coord -8) has no in-range mirror.
+// n=32: origin at index 16; mirror of i is 32-i (i=0 has none).
 Grid3D grid() {
     const Grid1D ax{-8.0, 8.0, 32};
     return {ax, ax, ax};
 }
 
-// Plane density (node candidate) and bulk density on an axis-`ax` mid-plane.
 void plane_vs_bulk(const Field3D& f, int axis, int mid, double& node,
                    double& bulk) {
     const Grid3D& g = f.grid();
@@ -64,7 +58,6 @@ TEST(MolecularSeed, SigmaGIsEvenAndNodeless) {
     const Grid3D g = grid();
     const Field3D s = molecular_orbital_seed(g, MolOrbital::SigmaG);
     EXPECT_NEAR(ses::norm_sq(s), 1.0, 1e-9);
-    // no nodal plane at the center: the x = 0 mid-plane carries real density.
     double node = 0.0;
     double bulk = 0.0;
     plane_vs_bulk(s, 0, 16, node, bulk);
@@ -75,7 +68,6 @@ TEST(MolecularSeed, SigmaUIsOddUnderXReflection) {
     const Grid3D g = grid();
     const Field3D s = molecular_orbital_seed(g, MolOrbital::SigmaU);
     EXPECT_NEAR(ses::norm_sq(s), 1.0, 1e-9);
-    // antisymmetric in x about index 16, with a node in the x = 0 plane.
     double anti = 0.0;
     double mag = 0.0;
     for (int k = 0; k < g.z.n; ++k) {
@@ -103,7 +95,7 @@ TEST(MolecularSeed, PiUyIsOddUnderYReflection) {
     double bulk = 0.0;
     plane_vs_bulk(s, 1, 16, node, bulk);
     EXPECT_LT(node, 1e-6 * bulk) << "pi_u has a nodal plane containing the axis";
-    // and it is EVEN in x (not a sigma_u): the x = 0 plane is NOT a node.
+    // even in x (not sigma_u): the x=0 plane is not a node.
     double xnode = 0.0;
     double xbulk = 0.0;
     plane_vs_bulk(s, 0, 16, xnode, xbulk);
@@ -116,7 +108,6 @@ TEST(MolecularSeed, RandomIsNormalizedDeterministicAndArbitrary) {
     const Field3D b = random_molecular_seed(g, 42);
     const Field3D c = random_molecular_seed(g, 7);
     EXPECT_NEAR(ses::norm_sq(a), 1.0, 1e-9);
-    // deterministic: same seed -> identical field.
     double diff_ab = 0.0;
     double diff_ac = 0.0;
     for (int i = 0; i < g.size(); ++i) {
@@ -127,9 +118,7 @@ TEST(MolecularSeed, RandomIsNormalizedDeterministicAndArbitrary) {
     }
     EXPECT_LT(diff_ab, 1e-18) << "same seed reproduces the field";
     EXPECT_GT(diff_ac, 0.1) << "different seeds give different shapes";
-    // Arbitrary shape: NOT an inversion eigenstate. The parity overlap
-    // ratio |<psi|P psi>| / <psi|psi> is 1 for an even/odd state and well
-    // below 1 for a symmetry-broken one.
+    // parity overlap |<psi|P psi>|/<psi|psi>: 1 if eigenstate, <1 when broken.
     std::complex<double> ov{};
     double self = 0.0;
     for (int k = 0; k < g.z.n; ++k) {

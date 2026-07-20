@@ -1,8 +1,5 @@
-// RED: the quantum-point-contact staircase. Transverse modes open every
-// lambda/2 = pi/k0 of gap width: below the first threshold the wall
-// insulates (tunneling dribble only); above it a channel conducts; the
-// next lambda/2 opens a second channel and the transmitted flux steps UP
-// again. Wide coherent front, edge CAPs, right-cap flux = transmission.
+// RED: QPC conductance staircase -- transverse modes open every
+// lambda/2 = pi/k0 of gap width. Right-cap flux = transmission.
 
 #include <gtest/gtest.h>
 
@@ -23,7 +20,7 @@ TEST(Qpc2d, TransmissionClimbsTheModeStaircase) {
     const ses::Grid3D g{ses::Grid1D{-30.0, 30.0, 256},
                         ses::Grid1D{-20.0, 20.0, 128},
                         ses::Grid1D{0.0, 2.0, 1}};
-    const double k0 = 1.0;  // lambda/2 = pi: thresholds ~3.1, ~6.3
+    const double k0 = 1.0;  // mode thresholds ~3.1, ~6.3
     const double dt = 0.01;
     const double cap_w = 5.0;
     const double cap_w0 = 4.0;
@@ -84,17 +81,17 @@ TEST(Qpc2d, TransmissionClimbsTheModeStaircase) {
         }
         return transmitted;
     };
-    const double t_closed = transmission(2.0);   // below the first mode
-    const double t_one = transmission(4.5);      // one channel open
-    const double t_plateau = transmission(5.5);  // still one channel
-    const double t_two = transmission(8.0);      // two channels
+    const double t_closed = transmission(2.0);
+    const double t_one = transmission(4.5);
+    const double t_plateau = transmission(5.5);
+    const double t_two = transmission(8.0);
     std::printf("qpc: T(2.0) %.4f, T(4.5) %.4f, T(5.5) %.4f, T(8.0) %.4f\n",
                 t_closed, t_one, t_plateau, t_two);
-    EXPECT_LT(t_closed, 0.25 * t_one);            // insulating foot
-    EXPECT_GT(t_one, 0.02);                       // the channel conducts
+    EXPECT_LT(t_closed, 0.25 * t_one);
+    EXPECT_GT(t_one, 0.02);
     EXPECT_LT(std::abs(t_plateau - t_one),
-              0.35 * t_one);                      // first plateau
-    EXPECT_GT(t_two, 1.4 * t_one);                // second channel opens
+              0.35 * t_one);
+    EXPECT_GT(t_two, 1.4 * t_one);
 }
 
 }  // namespace

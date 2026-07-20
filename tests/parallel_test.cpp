@@ -1,17 +1,10 @@
-// RED: specification for ses.parallel -- the project's own worker-pool
-// parallelism, replacing OpenMP (whose pragmas MSVC miscompiles or crashes
-// inside C++20 module interfaces; see core/src/parallel.ixx).
-//
-// Contract:
-//  - parallel_for(n, body):    body(i) once per i in [0, n); disjoint writes.
-//  - parallel_sum(n, init, f): sum of f(i); chunk boundaries depend only on n
-//    and partials combine in chunk order, so the result is BITWISE identical
-//    run-to-run and for any worker count (OpenMP reduction never promised
-//    this; the CPU is the oracle, so determinism outranks speed).
-//  - parallel_ranges(n, body): body(worker, begin, end) over disjoint chunks
-//    covering [0, n); 0 <= worker < parallel_workers() indexes per-worker
-//    scratch (the thread_local replacement).
-//  - Nested calls (a body that itself calls parallel_*) must not deadlock.
+// ses.parallel: worker pool replacing OpenMP, whose pragmas MSVC miscompiles
+// inside C++20 module interfaces (see core/src/parallel.ixx).
+// parallel_sum combines partials in fixed chunk order -> bitwise-identical
+// run-to-run and for any worker count (OpenMP reduction never promised this;
+// CPU is the oracle, so determinism outranks speed). parallel_ranges' worker
+// index (0 <= worker < parallel_workers()) selects per-worker scratch, the
+// thread_local replacement.
 
 #include <gtest/gtest.h>
 
@@ -43,8 +36,6 @@ TEST(ParallelFor, NestedCallDoesNotDeadlockAndStaysCorrect) {
     const int inner = 1000;
     std::vector<std::int64_t> sums(outer, 0);
     ses::parallel_for(outer, [&](int o) {
-        // Serial accumulation into this iteration's own slot; the inner
-        // parallel_for exercises re-entrancy, not shared writes.
         std::int64_t s = 0;
         std::vector<int> hits(inner, 0);
         ses::parallel_for(inner, [&](int i) { ++hits[static_cast<std::size_t>(i)]; });
@@ -59,9 +50,7 @@ TEST(ParallelFor, NestedCallDoesNotDeadlockAndStaysCorrect) {
     }
 }
 
-// Adversarial magnitudes (e^-30 .. e^+30, alternating signs): any change in
-// summation order shows up in the low bits, so bitwise-equal repeats prove
-// the combine order is fixed.
+// Adversarial magnitudes (e^+-30, alt signs): order shows in low bits; bitwise-equal repeats prove fixed combine order.
 TEST(ParallelSum, BitwiseDeterministicAcrossRuns) {
     const int n = 4001;
     auto term = [](int i) {
@@ -104,7 +93,7 @@ TEST(ParallelRanges, DisjointCoverageAndWorkerIndexBounds) {
         ASSERT_GE(worker, 0);
         ASSERT_LT(worker, workers);
         ASSERT_LT(begin, end);
-        used[static_cast<std::size_t>(worker)] = 1;  // own slot: no race
+        used[static_cast<std::size_t>(worker)] = 1;
         for (int i = begin; i < end; ++i) {
             ++hits[static_cast<std::size_t>(i)];
         }

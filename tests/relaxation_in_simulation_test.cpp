@@ -1,14 +1,4 @@
-// RED: imaginary-time relaxation inside WavepacketSimulation, so the shell
-// can show the cloud settling into the ground state live and then hand the
-// relaxed state straight back to real-time evolution.
-//
-// Oracles:
-//  - relax() lowers <H> monotonically toward the known ground-state energy
-//    (3D harmonic: E0 = 3 omega / 2), keeps unit norm, and does NOT advance
-//    real time;
-//  - the punchline of the whole feature: a relaxed state is STATIONARY --
-//    subsequent real-time evolution must leave the density where it is
-//    (only the invisible global phase turns).
+// RED: imaginary-time relax() inside WavepacketSimulation.
 
 
 #include <gtest/gtest.h>
@@ -35,7 +25,7 @@ WavepacketSimulation::Config harmonic_config() {
     return WavepacketSimulation::Config{
         g,
         ses::harmonic_potential(g, 1.0, Vec3d{}),
-        Vec3d{1.5, 0.0, 0.0},  // displaced on purpose
+        Vec3d{1.5, 0.0, 0.0},
         Vec3d{1.0, 1.0, 1.0},
         Vec3d{},
         0.02,
@@ -56,7 +46,7 @@ TEST(SimulationRelax, KeepsUnitNormAndFreezesRealTime) {
     sim.advance(5);
     const double t_before = sim.time();
     sim.relax(100, 0.05);
-    EXPECT_EQ(sim.time(), t_before);  // imaginary time is not real time
+    EXPECT_EQ(sim.time(), t_before);
     EXPECT_NEAR(ses::norm_sq(sim.psi()), 1.0, 1e-12);
 }
 

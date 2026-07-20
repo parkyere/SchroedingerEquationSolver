@@ -1,9 +1,4 @@
-// RED: the exact 4x4 Heisenberg contracts. A product boot round-trips
-// the per-site Bloch vectors; the all-up ferromagnet is an eigenstate
-// (arrows frozen at +z); a single flipped spin's magnon HOPS while total
-// sigma_z is conserved; the Neel product ENTANGLES (arrows shrink --
-// the thing the mean-field ansatz cannot do); energy is conserved and
-// the norm stays round-off.
+// RED: exact 4x4 Heisenberg contracts.
 
 #include <gtest/gtest.h>
 
@@ -89,7 +84,7 @@ TEST(SpinExact, FerroIsStationaryAndMagnonHopsConservingSz) {
         double y = 0.0;
         double z = 0.0;
         ses::exact_site_bloch(up, i, &x, &y, &z);
-        EXPECT_NEAR(z, 1.0, 1e-9);  // all-up: an exact eigenstate
+        EXPECT_NEAR(z, 1.0, 1e-9);
     }
 
     ses::SpinState16 mg = ses::exact_from_product(product_updown(5));
@@ -99,12 +94,12 @@ TEST(SpinExact, FerroIsStationaryAndMagnonHopsConservingSz) {
     for (int k = 0; k < 400; ++k) {
         ses::exact_step(mg, 0.0, 0.0, 0.0, 0.5, 0.01);
     }
-    EXPECT_NEAR(total_sz(mg), sz0, 1e-9);  // sum sigma_z conserved
+    EXPECT_NEAR(total_sz(mg), sz0, 1e-9);
     double x = 0.0;
     double y = 0.0;
     double z5 = 0.0;
     ses::exact_site_bloch(mg, 5, &x, &y, &z5);
-    EXPECT_GT(z5, -0.9);  // the flipped spin delocalized...
+    EXPECT_GT(z5, -0.9);
     double zmin = 1.0;
     for (int i = 0; i < ses::kExactSites; ++i) {
         if (i == 5) {
@@ -114,7 +109,7 @@ TEST(SpinExact, FerroIsStationaryAndMagnonHopsConservingSz) {
         ses::exact_site_bloch(mg, i, &x, &y, &zz);
         zmin = std::min(zmin, zz);
     }
-    EXPECT_LT(zmin, 0.99);  // ...into the neighbors (the magnon hopped)
+    EXPECT_LT(zmin, 0.99);
     (void)z5_min;
     (void)z_other_min;
 }
@@ -149,23 +144,21 @@ TEST(SpinExact, NeelEntanglesArrowsShrinkEnergyConserved) {
         mean_len += std::sqrt(x * x + y * y + z * z);
     }
     mean_len /= ses::kExactSites;
-    EXPECT_LT(mean_len, 0.8);  // ENTANGLED: the product ansatz cannot
+    EXPECT_LT(mean_len, 0.8);
 }
 
 TEST(SpinExact, MeasurementCollapsesASite) {
     ses::SpinLattice l = product_updown(-1);
-    l.s[3] = ses::spinor_from_bloch(1.0, 0.0, 0.0);  // site 3 on +x
+    l.s[3] = ses::spinor_from_bloch(1.0, 0.0, 0.0);
     ses::SpinState16 s = ses::exact_from_product(l);
-    const int out = ses::exact_measure_z(s, 3, 0.4);  // p_up = 1/2
+    const int out = ses::exact_measure_z(s, 3, 0.4);
     EXPECT_NE(out, 0);
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
     ses::exact_site_bloch(s, 3, &x, &y, &z);
-    EXPECT_NEAR(z, static_cast<double>(out), 1e-12);  // eigenstate now
+    EXPECT_NEAR(z, static_cast<double>(out), 1e-12);
     EXPECT_NEAR(norm2(s), 1.0, 1e-12);
-    // The basis-rotation helper: rotate site 3 by pi about y maps
-    // +-z -> -+z (up to phase).
     ses::exact_site_rotate(s, 3, 0.0, 1.0, 0.0,
                            3.14159265358979323846);
     ses::exact_site_bloch(s, 3, &x, &y, &z);

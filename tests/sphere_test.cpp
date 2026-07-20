@@ -1,9 +1,4 @@
-// RED: UV-sphere mesh generator -- the nucleus marker geometry. (A proton is
-// ~1e-5 Bohr, invisible at scene scale; the app draws a symbolic sphere.)
-//
-// Oracles: every vertex sits exactly on the sphere, every normal is the unit
-// outward radial, and the triangle soup is watertight (the same topological
-// check that pinned marching cubes).
+// RED: symbolic nucleus marker (nucleus invisible at scene scale).
 
 
 #include <gtest/gtest.h>
@@ -80,8 +75,6 @@ TEST(SphereMesh, IsWatertight) {
     }
 }
 
-// ---- arrow_mesh: the orientation-gizmo geometry (cylinder shaft + cone) ----
-
 TEST(ArrowMesh, IsANonEmptyTriangleSoupWithUnitNormals) {
     const Mesh a = ses::arrow_mesh(Vec3d{0.0, 0.0, 1.0}, 1.0, 0.05, 0.12, 0.3, 12);
     ASSERT_GT(a.vertices.size(), 0u);
@@ -101,10 +94,10 @@ TEST(ArrowMesh, TipReachesTheLengthAndStaysWithinTheHead) {
         min_z = std::min(min_z, v.z);
         max_r = std::max(max_r, std::sqrt(v.x * v.x + v.y * v.y));
     }
-    EXPECT_NEAR(max_z, len, 1e-9);    // apex sits at z = length
-    EXPECT_NEAR(min_z, 0.0, 1e-9);    // base at the origin
-    EXPECT_LE(max_r, head_r + 1e-9);  // never wider than the head
-    EXPECT_GT(max_r, shaft_r);        // the head flares past the shaft
+    EXPECT_NEAR(max_z, len, 1e-9);
+    EXPECT_NEAR(min_z, 0.0, 1e-9);
+    EXPECT_LE(max_r, head_r + 1e-9);
+    EXPECT_GT(max_r, shaft_r);
 }
 
 TEST(ArrowMesh, OrientsAlongAnArbitraryAxis) {
@@ -113,7 +106,7 @@ TEST(ArrowMesh, OrientsAlongAnArbitraryAxis) {
     for (const Vec3d& v : a.vertices) {
         max_x = std::max(max_x, v.x);
     }
-    EXPECT_NEAR(max_x, 2.0, 1e-9);  // tip along +x at length 2
+    EXPECT_NEAR(max_x, 2.0, 1e-9);
 }
 
 }  // namespace

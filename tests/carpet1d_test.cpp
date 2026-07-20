@@ -1,7 +1,4 @@
-// RED: the quantum-carpet ring contracts. T_rev = L^2 / pi; the free
-// ring packet revives EXACTLY there (spectral dispersion is exact, no
-// walls to smear it), is nowhere near revived at an incommensurate time,
-// and at T/2 reappears as the clone displaced by half the ring.
+// RED: quantum-carpet ring revival, T_rev = L^2 / pi.
 
 #include <gtest/gtest.h>
 
@@ -39,11 +36,11 @@ TEST(Carpet1d, RingRevivesExactlyAtLSquaredOverPi) {
     ses::Field1D psi = psi0;
     const int n_mid = static_cast<int>(0.37 * t_rev / dt + 0.5);
     prop.step(psi, n_mid);
-    EXPECT_LT(overlap2(psi, psi0), 0.5);  // scrambled mid-carpet...
+    EXPECT_LT(overlap2(psi, psi0), 0.5);
     const int n_rest =
         static_cast<int>(t_rev / dt + 0.5) - n_mid;
     prop.step(psi, n_rest);
-    EXPECT_GT(overlap2(psi, psi0), 0.99);  // ...full revival at T_rev
+    EXPECT_GT(overlap2(psi, psi0), 0.99);
 }
 
 TEST(Carpet1d, HalfRevivalIsTheHalfRingClone) {
@@ -54,8 +51,7 @@ TEST(Carpet1d, HalfRevivalIsTheHalfRingClone) {
     const double dt = 0.05;
     const ses::SplitOperator1D prop{g, zero, dt};
     const ses::Field1D psi0 = ses::gaussian_wavepacket(g, -5.0, 2.0, 1.0);
-    // The expected half-Talbot image: psi0 displaced by L/2 around the
-    // ring (launch at -5 -> clone at +15).
+    // half-Talbot image: psi0 shifted by L/2
     ses::Field1D clone{g};
     for (int i = 0; i < g.n; ++i) {
         const int j = (i + g.n / 2) % g.n;
@@ -64,7 +60,7 @@ TEST(Carpet1d, HalfRevivalIsTheHalfRingClone) {
     ses::Field1D psi = psi0;
     prop.step(psi, static_cast<int>(0.5 * t_rev / dt + 0.5));
     EXPECT_GT(overlap2(psi, clone), 0.99);
-    EXPECT_LT(overlap2(psi, psi0), 0.05);  // NOT at the launch site
+    EXPECT_LT(overlap2(psi, psi0), 0.05);
 }
 
 }  // namespace

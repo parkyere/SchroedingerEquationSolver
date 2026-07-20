@@ -1,25 +1,10 @@
 // RED: 1D harmonic-oscillator ladder operators over Field1D (atomic units,
 // m = hbar = 1):
-//
 //     a    = sqrt(omega/2) x + 1/sqrt(2 omega) d/dx
 //     adag = sqrt(omega/2) x - 1/sqrt(2 omega) d/dx
-//
-// acting on eigenstates: adag|n> = sqrt(n+1)|n+1>, a|n> = sqrt(n)|n-1>,
-// a|0> = 0. The load-bearing contracts:
-//
-//  - ladder_raise(psi, omega): applies adag, returns ||adag psi||^2 BEFORE
-//    the internal renormalization (== n+1 on |n>), leaves psi normalized.
-//    Never vanishes: <psi|a adag|psi> = <N> + 1 >= 1 on any normalized state.
-//  - ladder_lower(psi, omega, vanish_eps): applies a, returns ||a psi||^2
-//    (== n on |n>, == <N> in general). When the result norm falls below
-//    vanish_eps the state was annihilated (a|0> = 0): psi is left UNCHANGED
-//    and the return value is the caller's forbidden-transition signal.
-//  - The derivative is spectral (FFT), consistent with the split-operator
-//    periodic grid, so eigenstate chains stay clean to near machine epsilon.
-//
-// Ground state input: gaussian_wavepacket with sigma = 1/sqrt(2 omega) IS the
-// exact HO ground state (E = omega/2), so the whole Fock chain is reachable
-// by repeated raises with no diagonalization anywhere.
+// Derivative is spectral (FFT), matching the split-operator periodic grid.
+// gaussian_wavepacket at sigma = 1/sqrt(2 omega) IS the exact HO ground state,
+// so the whole Fock chain is reachable by repeated raises, no diagonalization.
 
 #include <gtest/gtest.h>
 
@@ -38,21 +23,16 @@ import ses.wavepacket;
 namespace {
 
 constexpr double kOmega = 0.25;
-// Nyquist matched to the physics band: the spectral derivative in a-dag
-// amplifies round-off noise at k_max = pi/h by k_max/sqrt(2 omega) per
-// raise, so an oversampled grid (k_max >> the state's k content) walks the
-// noise floor up the Fock chain exponentially. 256 points over +-20 gives
-// k_max ~ 20 vs psi_8 k content ~ 2.5: clean to ~1e-13 through n = 8, while
-// 1024 points (k_max ~ 80) already loses the chain at n = 8.
+// Nyquist matched to the band, NOT oversampled: the spectral derivative
+// amplifies round-off by k_max/sqrt(2 omega) per raise, so more points walk
+// the noise floor UP the chain. 256/+-20 stays clean to n=8; 1024 loses it.
 const ses::Grid1D kGrid{-20.0, 20.0, 256};
 
 ses::Field1D ho_ground() {
-    // sigma = 1/sqrt(2 omega) makes the Gaussian the exact HO ground state.
     const double sigma = 1.0 / std::sqrt(2.0 * kOmega);
     return ses::gaussian_wavepacket(kGrid, 0.0, sigma, 0.0);
 }
 
-// Discrete overlap |<a|b>|^2 with grid weight (h cancels in normalized pairs).
 double overlap_sq(const ses::Field1D& a, const ses::Field1D& b) {
     std::complex<double> acc{};
     for (int i = 0; i < a.size(); ++i) {
@@ -70,7 +50,7 @@ int node_count(const ses::Field1D& f) {
     for (int i = 0; i < f.size(); ++i) {
         const double re = f[i].real();
         if (std::abs(re) < tiny) {
-            continue;  // skip the amplitude-zero tails / node itself
+            continue;  // near-zero sample: noise, not a real sign change
         }
         if (prev != 0.0 && (re > 0.0) != (prev > 0.0)) {
             ++nodes;
@@ -80,11 +60,9 @@ int node_count(const ses::Field1D& f) {
     return nodes;
 }
 
-// RED: ho_eigenstate(grid, omega, n) -- the exact HO eigenstate built
-// DIRECTLY from the normalized Hermite-Gauss recurrence in x-space (no
-// derivative, so NO spectral round-off amplification). This is the ground-
-// truth oracle the ladder chain is measured against, and lets the scene
-// display any grid-representable level without the ladder noise cap.
+// RED: ho_eigenstate -- exact HO eigenstate via Hermite-Gauss recurrence in
+// x-space (no derivative, no spectral round-off): the oracle the ladder chain
+// is measured against.
 TEST(HoEigenstate, IsNormalizedWithExactEnergyAndZeroVariance) {
     const std::vector<double> v = ses::harmonic_potential(kGrid, kOmega);
     for (int n = 0; n <= 12; ++n) {
@@ -115,9 +93,8 @@ TEST(HoEigenstate, IsOrthonormalAcrossLevels) {
 }
 
 TEST(HoEigenstate, MatchesTheCleanLadderChainAtLowLevels) {
-    // Where the ladder is still clean (n <= 4 at omega = 0.25), the direct
-    // oracle and the ladder-built state are the same physical state (equal
-    // up to a global phase, so overlap^2 = 1).
+    // n <= 4: ladder still clean, so oracle and ladder state match up to a
+    // global phase (overlap^2 = 1).
     ses::Field1D psi = ho_ground();
     for (int n = 1; n <= 4; ++n) {
         ses::ladder_raise(psi, kOmega);
@@ -128,7 +105,6 @@ TEST(HoEigenstate, MatchesTheCleanLadderChainAtLowLevels) {
 }
 
 TEST(HoEigenstate, IsOmegaGeneric) {
-    // A stiffer well (narrower ground): still exact.
     const double w = 0.75;
     const std::vector<double> v = ses::harmonic_potential(kGrid, w);
     for (int n = 0; n <= 6; ++n) {
@@ -139,20 +115,12 @@ TEST(HoEigenstate, IsOmegaGeneric) {
     }
 }
 
-// RED: ladder_rung_stable(psi, omega, n_from, up) -- the noise-free ladder
-// rung for a state KNOWN to be the eigenstate |n_from> (up to a global
-// phase). The raw spectral operator supplies the counting norm^2 and the
-// global phase; the state itself is rebuilt from the direct Hermite oracle
-// carrying that phase. Same mathematical object (adag|n> = sqrt(n+1)|n+1>),
-// computed by the stable route -- so the round-off floor RESETS at every
-// rung instead of compounding, and descending no longer amplifies the
-// high-k residue that the raw chain leaves behind (the observed
-// ladder-down instability). The usable range becomes the grid's
-// REPRESENTABILITY ceiling, not the raw-chain noise cap.
+// RED: ladder_rung_stable(psi, omega, n_from, up) -- for a state KNOWN to be
+// |n_from> up to a global phase: raw operator supplies norm^2 + phase, state
+// rebuilt from the Hermite oracle so round-off resets each rung instead of
+// compounding. Ceiling = grid representability, not the raw-chain noise cap.
 TEST(LadderRungStable, RoundTripsFarBeyondTheRawChain) {
-    // Up 25 rungs then down 25: far past the raw-chain cap (12 at omega =
-    // 0.25, where a raw round trip disintegrates into high-k garbage), the
-    // stable rungs land exactly back on the ground state.
+    // 25 rungs up/down, far past the raw-chain cap (~12 at omega = 0.25).
     const std::vector<double> v = ses::harmonic_potential(kGrid, kOmega);
     ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 0);
     for (int n = 0; n < 25; ++n) {
@@ -172,9 +140,8 @@ TEST(LadderRungStable, RoundTripsFarBeyondTheRawChain) {
 }
 
 TEST(LadderRungStable, CarriesTheGlobalPhase) {
-    // e^{i theta}|5> must rung to e^{i theta}|6>: the phase a stationary
-    // state accumulated under evolution survives the stable rung (the raw
-    // operator supplies it; the oracle rebuild must not reset it).
+    // e^{i theta}|5> must rung to e^{i theta}|6>: the oracle rebuild must
+    // carry the phase, not reset it.
     const double theta = 0.7;
     const std::complex<double> ph{std::cos(theta), std::sin(theta)};
     ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 5);
@@ -203,11 +170,9 @@ TEST(LadderRungStable, GroundAnnihilationStillRefuses) {
     }
 }
 
-// RED: ho_level_cap(grid, omega) -- the REPRESENTABILITY ceiling: the
-// largest level whose direct Hermite oracle is still faithful on the grid
-// (discrete energy within 0.1% of (n+1/2)w). This is what caps the stable
-// rungs; it is limited by the BOX at soft omega (wide turning points) and
-// by the Nyquist band at stiff omega, far above the raw-chain noise cap.
+// RED: ho_level_cap(grid, omega) -- largest level whose Hermite oracle is
+// still faithful (discrete energy within 0.1% of (n+1/2)w). Box-limited at
+// soft omega, Nyquist-limited at stiff omega, far above the raw cap.
 TEST(HoLevelCap, SitsFarAboveTheRawChainCapAndPeaksNearMatchedNyquist) {
     for (double w : {0.05, 0.25, 1.0, 4.0}) {
         const int level = ses::ho_level_cap(kGrid, w);
@@ -227,8 +192,7 @@ TEST(HoLevelCap, SitsFarAboveTheRawChainCapAndPeaksNearMatchedNyquist) {
 }
 
 TEST(HoLevelCap, EveryLevelBelowTheCapIsActuallyClean) {
-    // Spot-check the cap's meaning: at omega = 0.25 the oracle at the cap
-    // is faithful (energy AND variance), one past it need not be.
+    // oracle at cap/2 and at the cap is still energy-faithful.
     const double w = 0.25;
     const std::vector<double> v = ses::harmonic_potential(kGrid, w);
     const int cap = ses::ho_level_cap(kGrid, w);
@@ -240,15 +204,11 @@ TEST(HoLevelCap, EveryLevelBelowTheCapIsActuallyClean) {
     }
 }
 
-// RED: ladder_fock(psi, omega, up, n_top, &residual) -- the superposition
-// counterpart of ladder_rung_stable: project onto the truncated Fock basis
-// |0..n_top>, act EXACTLY on the coefficients (adag: c'_{n+1} = sqrt(n+1)
-// c_n; a: c'_n = sqrt(n+1) c_{n+1}), resynthesize from the noise-free
-// oracles. The same linear operator, computed in the basis where it is
-// trivial -- no spectral derivative, so it works at ANY grid k_max (the
-// raw chain's noise gain grows with k_max and dies on fine grids).
-// *residual reports the input's outside-band weight; the caller gates on
-// it (a state not inside the band must take the raw operator instead).
+// RED: ladder_fock(psi, omega, up, n_top, &residual) -- superposition rung:
+// project onto the truncated Fock basis |0..n_top>, act on coefficients
+// (adag: c'_{n+1} = sqrt(n+1) c_n; a: c'_n = sqrt(n+1) c_{n+1}), resynthesize
+// from oracles. No spectral derivative, so it works at ANY grid k_max.
+// *residual = input's outside-band weight; the caller gates its fallback on it.
 TEST(LadderFock, AgreesWithTheRawOperatorOnTheCoarseGrid) {
     ses::Field1D psi{kGrid};
     const ses::Field1D e0 = ses::ho_eigenstate(kGrid, kOmega, 0);
@@ -269,8 +229,7 @@ TEST(LadderFock, AgreesWithTheRawOperatorOnTheCoarseGrid) {
 }
 
 TEST(LadderFock, RaisesASuperpositionOnAFineGridWhereTheRawChainDies) {
-    // 4096 points over +-20: k_max ~ 640, raw-chain gain ~ 900 per rung --
-    // the raw operators are useless here, the Fock path is exact.
+    // 4096/+-20: k_max ~ 640, raw-chain gain ~900 per rung (raw useless here).
     const ses::Grid1D fine{-20.0, 20.0, 4096};
     ses::Field1D psi{fine};
     const ses::Field1D e2 = ses::ho_eigenstate(fine, kOmega, 2);
@@ -300,8 +259,8 @@ TEST(LadderFock, RaisesASuperpositionOnAFineGridWhereTheRawChainDies) {
 }
 
 TEST(LadderFock, ReportsOutsideBandResidualAndRefusesNothingItself) {
-    // |10> against a band capped at n_top = 5: everything is residual; the
-    // state must be left untouched (the caller's fallback signal).
+    // |10> against a band capped at n_top = 5: all residual, state untouched
+    // (the caller's fallback signal).
     ses::Field1D psi = ses::ho_eigenstate(kGrid, kOmega, 10);
     const ses::Field1D before = psi;
     double residual = 0.0;
@@ -387,9 +346,8 @@ TEST(Ladder, RaiseThenLowerRoundTripsToTheGroundState) {
 }
 
 TEST(Ladder, ChainIsOmegaGeneric) {
-    // The operators take omega as a parameter: a stiffer well (omega = 0.75)
-    // must climb just as cleanly (its ground is a narrower Gaussian and its
-    // noise gain k_max/sqrt(2 omega) is LOWER than at 0.25).
+    // stiffer well (omega = 0.75): noise gain k_max/sqrt(2 omega) is LOWER
+    // than at 0.25, so the chain climbs just as cleanly.
     const double w = 0.75;
     ses::Field1D psi =
         ses::gaussian_wavepacket(kGrid, 0.0, 1.0 / std::sqrt(2.0 * w), 0.0);
@@ -400,11 +358,9 @@ TEST(Ladder, ChainIsOmegaGeneric) {
     }
 }
 
-// Measure the TRUE clean ladder cap at omega: raise from the ground and
-// stop at the first level where EITHER the ladder-built state diverges from
-// the direct Hermite oracle (spectral noise) OR the oracle itself stops
-// being grid-representable (its energy drifts off (n+1/2)w -- the band
-// ceiling). The usable cap is the min of the two, measured not modeled.
+// Independent measurement of the clean cap: raise from ground, stop at the
+// first level where the ladder state diverges from the oracle (spectral noise)
+// OR the oracle stops being grid-representable (energy off (n+1/2)w). Cap = min.
 int measure_clean_cap(double w, const ses::Grid1D& g) {
     const std::vector<double> v = ses::harmonic_potential(g, w);
     ses::Field1D psi = ses::ho_eigenstate(g, w, 0);
@@ -417,10 +373,10 @@ int measure_clean_cap(double w, const ses::Grid1D& g) {
         const bool oracle_representable =
             std::abs(e - e_exact) < 1e-3 * e_exact;
         if (!oracle_representable) {
-            break;  // grid band ceiling: no method reaches this level cleanly
+            break;  // grid band ceiling
         }
         const double defect = 1.0 - overlap_sq(psi, oracle);
-        if (defect > 1e-6) {  // ~0.1% amplitude corruption: display-visible
+        if (defect > 1e-6) {  // ~0.1% amplitude corruption
             break;
         }
         cap = n;
@@ -429,11 +385,8 @@ int measure_clean_cap(double w, const ses::Grid1D& g) {
 }
 
 TEST(LadderCap, MatchesTheIndependentlyMeasuredCleanCap) {
-    // ladder_cap(grid, omega) IS an empirical probe -- it raises from the
-    // ground and finds where the ladder-built state diverges from the
-    // direct Hermite oracle. Cross-check it against measure_clean_cap here,
-    // an INDEPENDENT reimplementation (which also guards on oracle
-    // representability), across the omega sweep.
+    // Cross-check ladder_cap against measure_clean_cap -- an INDEPENDENT
+    // reimplementation -- across the omega sweep.
     for (double w : {0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0}) {
         EXPECT_LE(std::abs(ses::ladder_cap(kGrid, w) - measure_clean_cap(w, kGrid)),
                   1)
@@ -442,23 +395,20 @@ TEST(LadderCap, MatchesTheIndependentlyMeasuredCleanCap) {
 }
 
 TEST(LadderCap, IsNonMonotonicPeakingNearMatchedNyquist) {
-    // Two competing noise gains in a-dag: the derivative term k_max/sqrt(2w)
-    // (worse at small w) and the x term x_max*sqrt(w/2) (worse at large w).
-    // They balance at w = k_max/x_max ~ 1 on this grid, where the clean cap
-    // peaks -- measured, not modeled.
+    // Non-monotonic: derivative gain k_max/sqrt(2w) (worse at small w) vs the
+    // x-term gain x_max*sqrt(w/2) (worse at large w) balance at w ~ 1 on this
+    // grid, where the clean cap peaks.
     const auto cap = [](double w) { return ses::ladder_cap(kGrid, w); };
-    EXPECT_GT(cap(1.0), cap(0.05));  // rising branch (derivative-limited)
-    EXPECT_GT(cap(1.0), cap(8.0));   // falling branch (x-term-limited)
-    EXPECT_GE(cap(1.0), 14);         // the peak is a genuinely useful range
-    EXPECT_LE(cap(0.05), 3);         // soft well: the chain collapses fast
-    EXPECT_LE(cap(8.0), 9);          // stiff well: falls again
+    EXPECT_GT(cap(1.0), cap(0.05));
+    EXPECT_GT(cap(1.0), cap(8.0));
+    EXPECT_GE(cap(1.0), 14);
+    EXPECT_LE(cap(0.05), 3);
+    EXPECT_LE(cap(8.0), 9);
 }
 
 TEST(LadderCap, ReproducesTheRecordedMeasuredCurve) {
-    // Regression lock of the measured clean cap on the scene grid
-    // (-20..20, 256 pts). These are MEASURED values (ladder vs oracle
-    // divergence at 0.1% amplitude), recorded so a change of grid, tol, or
-    // FFT path that shifts the usable range trips the test.
+    // Regression lock: MEASURED clean caps on the scene grid (-20..20, 256),
+    // recorded so a grid/tol/FFT-path change that shifts the range trips this.
     const struct {
         double w;
         int cap;
@@ -470,26 +420,20 @@ TEST(LadderCap, ReproducesTheRecordedMeasuredCurve) {
     }
 }
 
-// RED: the deep-level wall. psi_0 = (w/pi)^{1/4} exp(-w x^2 / 2) underflows
-// double wherever w x^2 / 2 > ~745 (exp < smallest denormal), so the plain
-// recurrence seeds EXACT ZEROS past |x| ~ 38.6/sqrt(w) -- and a zero seed
-// stays zero at every level (the recurrence only multiplies and mixes).
-// High-n eigenstates whose classically allowed region reaches into that
-// dead zone lose their outer lobes: at n = 1200, omega = 1 the wall sits at
-// x ~ 38.6 while the turning points are at +-49, so ~44% of the state's
-// probability is simply MISSING. On top of that, ho_level_cap stopped
-// probing at a fixed 400 levels. The contracts below pin the fix: a scaled
-// per-point (mantissa, power-of-two exponent) chain -- power-of-two scaling
-// is exact, so everything the plain chain got right stays bitwise intact --
-// must push the ceiling to the honest grid physics: box (turning points +
-// tail inside [xmin, xmax]) vs Nyquist (k_n < pi/h), nothing else.
+// RED: the deep-level seed-underflow wall. psi_0 ~ exp(-w x^2/2) underflows
+// double past w x^2/2 > ~745, so the plain recurrence seeds EXACT ZEROS past
+// |x| ~ 38.6/sqrt(w), and a zero seed stays zero at every level -- high-n
+// states lose their outer lobes (n=1200, w=1: wall at x~38.6 vs turning points
+// +-49, ~44% of probability MISSING). Fix pinned below: a scaled per-point
+// (mantissa, power-of-two exponent) chain -- power-of-two scaling is exact, so
+// the plain output stays bitwise intact -- pushing the ceiling to box vs
+// Nyquist, nothing else.
 constexpr double kDeepOmega = 1.0;
-// -60..60 / 4096: k_max ~ 107 so Nyquist allows n ~ 5700; the box allows
-// n_box ~ w x_max^2 / 2 = 1800. Both sit far above the seed wall (~710).
+// -60..60/4096: Nyquist allows n ~ 5700, box n_box = w x_max^2/2 ~ 1800, both
+// far above the seed wall (~710).
 const ses::Grid1D kDeepGrid{-60.0, 60.0, 4096};
 
 TEST(HoEigenstateDeep, SurvivesTheSeedUnderflowWall) {
-    // n = 1200: every node and the exact energy must survive past the wall.
     const std::vector<double> v =
         ses::harmonic_potential(kDeepGrid, kDeepOmega);
     const ses::Field1D psi = ses::ho_eigenstate(kDeepGrid, kDeepOmega, 1200);
@@ -500,28 +444,23 @@ TEST(HoEigenstateDeep, SurvivesTheSeedUnderflowWall) {
 }
 
 TEST(HoLevelCapDeep, ReachesTheBoxCeilingNotTheSeedFloor) {
-    // The measured cap must land AT the box ceiling n_box = w x_max^2 / 2 =
-    // 1800 -- not at the seed wall (~710), not at a fixed probe bound
-    // (400). "At": faithfulness fades over the Airy transition around
-    // n_box (width ~ w^2 x (2 w^2 x)^{-1/3} in energy, ~200 levels here),
-    // so a slight measured overhang past 1800 is honest physics.
+    // Cap must land at the box ceiling n_box = w x_max^2/2 = 1800 -- not the
+    // seed wall (~710), not a fixed probe bound (400). Faithfulness fades over
+    // the Airy transition (~200 levels) around n_box, so a slight overhang is
+    // honest.
     const int cap = ses::ho_level_cap(kDeepGrid, kDeepOmega);
     EXPECT_GE(cap, 1200);
     EXPECT_LT(cap, 2200);
-    // And it must stay honest: the oracle AT the cap is still faithful.
     const std::vector<double> v =
         ses::harmonic_potential(kDeepGrid, kDeepOmega);
     const ses::Field1D at_cap = ses::ho_eigenstate(kDeepGrid, kDeepOmega, cap);
     const double e_exact = (cap + 0.5) * kDeepOmega;
     EXPECT_NEAR(ses::mean_energy(at_cap, v), e_exact, 1e-3 * e_exact);
-    // RED: ... and CONTAINED. The energy check alone cannot see box
-    // truncation: a clipped Hermite slice still satisfies k(x)^2/2 + V = E
-    // locally at every sample, so its grid energy sits within 1e-5 of
-    // (n+1/2)w even when the turning points are OUTSIDE the box (measured:
-    // at w = 4 on the scene grid the energy criterion never fails and the
-    // old cap ran to the arbitrary probe bound). An eigenstate at the cap
-    // must actually LIVE in the box: boundary density negligible against
-    // the bulk.
+    // CONTAINED: the energy check is BLIND to box truncation -- a clipped
+    // Hermite slice still satisfies k^2/2 + V = E at every sample, so grid
+    // energy stays within 1e-5 of (n+1/2)w even with turning points OUTSIDE the
+    // box. So the eigenstate must actually LIVE in the box: edge density
+    // negligible vs bulk.
     double edge = 0.0;
     double bulk = 0.0;
     for (int i = 0; i < kDeepGrid.n; ++i) {
@@ -533,10 +472,9 @@ TEST(HoLevelCapDeep, ReachesTheBoxCeilingNotTheSeedFloor) {
 }
 
 TEST(LadderFockDeep, RaisesADeepPairBeyondTheSeedWall) {
-    // (|1198> + |1200>)/sqrt(2) --adag--> (sqrt(1199)|1199> +
-    // sqrt(1201)|1201>) normalized; counting norm^2 = (1199 + 1201)/2.
-    // The energy contract is against the EXACT spectrum -- a basis and an
-    // input that are broken the same self-consistent way cannot fake it.
+    // (|1198>+|1200>)/sqrt(2) --adag--> (sqrt(1199)|1199>+sqrt(1201)|1201>);
+    // counting norm^2 = (1199+1201)/2 = 1200. Energy vs the EXACT spectrum --
+    // a basis and input broken the same way cannot fake it.
     const ses::Field1D a = ses::ho_eigenstate(kDeepGrid, kDeepOmega, 1198);
     const ses::Field1D b = ses::ho_eigenstate(kDeepGrid, kDeepOmega, 1200);
     ses::Field1D psi{kDeepGrid};
@@ -557,9 +495,9 @@ TEST(LadderFockDeep, RaisesADeepPairBeyondTheSeedWall) {
 }
 
 TEST(LadderFock, WideBandStaysExactForALowState) {
-    // A band top FAR above the state's support must change nothing:
-    // (|0> + |1>)/sqrt(2) raised inside a 1500-level band is still
-    // (|1> + sqrt(2)|2>)/sqrt(3) with counting norm^2 = (1 + 2)/2.
+    // Band top FAR above the state's support must change nothing:
+    // (|0>+|1>)/sqrt(2) raised in a 1500-level band -> (|1>+sqrt(2)|2>)/sqrt(3),
+    // counting norm^2 = (1+2)/2 = 1.5.
     const ses::Field1D g0 = ses::ho_eigenstate(kDeepGrid, kDeepOmega, 0);
     const ses::Field1D g1 = ses::ho_eigenstate(kDeepGrid, kDeepOmega, 1);
     ses::Field1D psi{kDeepGrid};
@@ -583,8 +521,8 @@ TEST(LadderFock, WideBandStaysExactForALowState) {
 }
 
 TEST(Ladder, LowerOnSuperpositionKeepsTheReachablePart) {
-    // psi = (|0> + |1>)/sqrt(2): a psi = (1/sqrt(2))|0>, so the apply is NOT
-    // annihilated (norm^2 = 1/2 >> vanish_eps) and the result is pure ground.
+    // psi = (|0>+|1>)/sqrt(2): a psi = (1/sqrt(2))|0>, NOT annihilated
+    // (norm^2 = 1/2), result is pure ground.
     ses::Field1D ground = ho_ground();
     ses::Field1D excited = ground;
     ses::ladder_raise(excited, kOmega);

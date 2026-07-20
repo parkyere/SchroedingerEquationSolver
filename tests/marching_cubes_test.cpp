@@ -1,16 +1,5 @@
-// RED: marching cubes -- isosurface extraction from a real scalar field on a
-// Grid3D, plus the probability_density bridge from the wavefunction.
-//
-// This is pure geometry generation (no graphics API): the Humble-Object shell
-// will only upload the resulting mesh. Oracles:
-//  - analytic sphere: vertex radii, total area vs 4 pi R^2, outward normals;
-//  - WATERTIGHTNESS (every undirected edge shared by exactly two triangles)
-//    on the sphere and on a two-blob field -- a strong topological check on
-//    the 256-case tables;
-//  - single-hot-corner cube: exactly one triangle at the three edge midpoints.
-//
-// Convention: the surface encloses the region where field > isovalue (the
-// "inside" of a density cloud), and normals point OUTWARD (down-gradient).
+// RED: marching_cubes isosurface + probability_density bridge.
+// Convention: surface encloses field > isovalue; normals point OUTWARD (down-gradient).
 
 
 #include <gtest/gtest.h>
@@ -51,13 +40,13 @@ std::vector<double> sample(const Grid3D& g, double (*f)(double, double, double))
 }
 
 double sphere_field(double x, double y, double z) {
-    return 1.44 - (x * x + y * y + z * z);  // R = 1.2, positive inside
+    return 1.44 - (x * x + y * y + z * z);  // R = 1.2
 }
 
 double two_blob_field(double x, double y, double z) {
     const double d1 = (x + 1.25) * (x + 1.25) + y * y + z * z;
     const double d2 = (x - 1.25) * (x - 1.25) + (y - 0.3) * (y - 0.3) + z * z;
-    return std::exp(-d1) + std::exp(-d2);  // two separate blobs at iso 0.5
+    return std::exp(-d1) + std::exp(-d2);
 }
 
 double vec_len(const Vec3d& v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
@@ -114,7 +103,7 @@ TEST(MarchingCubes, EmptyAndFullFieldsYieldNoTriangles) {
 }
 
 TEST(MarchingCubes, SingleHotCornerYieldsOneTriangle) {
-    // One cube (2x2x2 points over [0,1]^3 via [0,2) n=2), corner (0,0,0) hot.
+    // Single cube [0,1]^3, corner (0,0,0) hot.
     const Grid3D g = cube_grid(0.0, 2.0, 2);
     std::vector<double> f(8, 0.0);
     f[static_cast<std::size_t>(g.flat(0, 0, 0))] = 1.0;
@@ -179,7 +168,7 @@ TEST(MarchingCubes, NormalsPointOutwardAndAreUnit) {
         EXPECT_NEAR(vec_len(n), 1.0, 1e-9);
         const double r = vec_len(v);
         const double dot = (n.x * v.x + n.y * v.y + n.z * v.z) / r;
-        EXPECT_GT(dot, 0.9);  // radially outward for a sphere
+        EXPECT_GT(dot, 0.9);
     }
 }
 

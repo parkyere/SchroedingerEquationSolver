@@ -1,22 +1,10 @@
-// RED: spontaneous decay via quantum jumps (the Monte-Carlo-wavefunction
-// picture): the Schrodinger
-// equation itself carries no lifetimes, but the decay RATE follows from the
-// computed spectrum through the Einstein A coefficient (atomic units)
-//     A = (4/3) alpha^3 omega^3 |<f|r|i>|^2,
-// and decay events are a Poisson process: p(jump in dt) = 1 - e^{-A P_e dt}
-// weighted by the current excited-state population. Selection rules enter
-// automatically: a forbidden channel has |<f|r|i>|^2 = 0, hence A = 0.
+// RED: spontaneous decay via quantum jumps (Monte-Carlo wavefunction), a.u.
+//   A = (4/3) alpha^3 omega^3 |<f|r|i>|^2   (Einstein A; forbidden => 0)
+//   p(jump in dt) = 1 - e^{-A P_e dt}
 //
-// Randomness stays OUT of core (the measurement-feature pattern): callers
-// inject u in [0,1), so stratified draws give EXACT jump statistics.
+// Randomness injected by caller (u in [0,1)); core stays deterministic.
 //
-// Oracles:
-//  - harmonic analytic matrix element <1_z|z|0> = 1/sqrt(2 w0), other
-//    components zero; same-parity pair -> strength 0 (forbidden);
-//  - Einstein A: exact factor check and the omega^3 scaling law;
-//  - jumps: exact stratified count for p = 1/4, collapse lands on the
-//    ground state, no-jump leaves psi bitwise untouched, and the jump
-//    probability is weighted by the ACTUAL excited population.
+// Oracle: harmonic <1_z|z|0> = 1/sqrt(2 w0), other components zero.
 
 #include <complex>
 
@@ -102,14 +90,13 @@ TEST(QuantumJump, StratifiedStatisticsAreExact) {
     int jumps = 0;
     const int kDraws = 1000;
     for (int k = 0; k < kDraws; ++k) {
-        Field3D psi = s.excited_z;  // P_e = 1
+        Field3D psi = s.excited_z;
         const double u = (k + 0.5) / kDraws;
         const ses::JumpResult r =
             ses::quantum_jump(psi, s.excited_z, s.ground, gamma_dt, 1.0, u);
         EXPECT_NEAR(r.p_jump, 0.25, 1e-9);
         if (r.jumped) {
             ++jumps;
-            // The collapse lands on the ground state.
             EXPECT_NEAR(std::norm(ses::inner_product(s.ground, psi)), 1.0, 1e-9);
             EXPECT_NEAR(ses::norm_sq(psi), 1.0, 1e-12);
         }
@@ -135,7 +122,6 @@ TEST(QuantumJump, ProbabilityIsPopulationWeighted) {
     const Grid3D g = cube(-8.0, 8.0, 16);
     const HarmonicStates s = make_states(g, 1.0);
 
-    // psi = sqrt(0.3) |e> + sqrt(0.7) |g>  ->  P_e = 0.3.
     Field3D psi{g};
     const double ce = std::sqrt(0.3);
     const double cg = std::sqrt(0.7);

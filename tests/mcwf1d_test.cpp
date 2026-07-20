@@ -1,8 +1,5 @@
-// RED: the 1D photon-loss MCWF step. A forced jump on the even cat
-// |a> + |-a> lands on the ODD cat (parity flip -- the fringe inversion
-// per lost photon); the no-jump conditional damping bleeds <n> at
-// exactly kappa (coherent states stay coherent, alpha -> alpha
-// e^{-kappa t/2}).
+// RED: 1D photon-loss MCWF step. Jump: even cat (+) -> odd cat (-); no-jump
+// damping bleeds <n> at kappa (amplitude alpha e^{-kappa t/2}; hence /2 in tau).
 
 #include <gtest/gtest.h>
 
@@ -48,12 +45,12 @@ TEST(Mcwf1d, JumpFlipsTheCatParity) {
     }
     const ses::ImaginaryTimePropagator1D damp{g, v, 1e-4};
     ses::Field1D psi = cat(g, omega, 3.0, +1);
-    // u = 0 forces the jump (<n> ~ alpha^2 = 4.5 > 0).
+    // u = 0 forces the jump (<n> ~ alpha^2 = 4.5).
     const bool jumped =
         ses::photon_loss_step(psi, omega, v, 0.05, 0.01, 0.0, damp);
     EXPECT_TRUE(jumped);
-    EXPECT_GT(overlap2(psi, cat(g, omega, 3.0, -1)), 0.9);   // odd cat
-    EXPECT_LT(overlap2(psi, cat(g, omega, 3.0, +1)), 0.05);  // even gone
+    EXPECT_GT(overlap2(psi, cat(g, omega, 3.0, -1)), 0.9);
+    EXPECT_LT(overlap2(psi, cat(g, omega, 3.0, +1)), 0.05);
 }
 
 TEST(Mcwf1d, NoJumpDampingBleedsNAtKappa) {

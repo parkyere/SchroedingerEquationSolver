@@ -1,15 +1,6 @@
-// RED: the IBM-corral physics the scene had simplified away (user order):
-//  - Cu(111) surface-state effective mass m* = 0.38: spectral relax inside
-//    the adatom fence lands in the leaky-wall band around j01^2/(2 m* R^2),
-//    and E0 scales as 1/m (E0(m*) * m* matches E0(1) to a few %);
-//  - infinite substrate: the outer absorbing mask on the collapsed-z 2D
-//    grid makes leaked flux VANISH -- no periodic wrap-around revival --
-//    while the conditional wavefunction is renormalized back to 1;
-//  - black-dot adatoms: a fence-localized per-step damp factor absorbs a
-//    crossing packet's pre-renormalization norm PARTIALLY (Crommie's ~50%
-//    absorbing scatterers), neither unitary nor a black hole.
-// The corral director copies these exact constructions (CONTRACT comments
-// there point back here); grid-honest tolerances throughout.
+// RED: IBM-corral pieces the scene simplified away; the corral director copies
+// these (its CONTRACT comments point back here). Provenance: m* = 0.38 Cu(111)
+// surface state; black-dot fence ~50% absorbers (Crommie).
 
 #include <gtest/gtest.h>
 
@@ -32,13 +23,8 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Solid annular wall with the corral geometry: V = amp on R <= r < R + w.
-// The mass-scaling contract uses a STRONG non-leaky ring: under imaginary
-// time the disc mode is only metastable, and the m* = 0.38 state tunnels
-// out ~e^{sqrt(m)} FASTER than m = 1 (measured: its plateau all but
-// vanishes at the scene's 1.5-high fence), so the wall here is high enough
-// (amp 4, width 3) that both masses plateau hard. The live leaky-fence
-// 512^2 relax is the selftest-corral arc's job.
+// Strong non-leaky ring: the metastable disc mode tunnels out faster at
+// m* = 0.38, so both masses plateau; the leaky-fence relax is the arc's job.
 std::vector<double> ring_wall(const ses::Grid3D& g, double radius, double amp,
                               double width) {
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
@@ -55,12 +41,9 @@ std::vector<double> ring_wall(const ses::Grid3D& g, double radius, double amp,
     return v;
 }
 
-// The disc mode is only METASTABLE under imaginary time: the barrier-tail
-// seeds the (lower) outside box ground, whose weight grows as e^{2 dE tau},
-// so a convergence gate races the drain and loses for small m*. The honest
-// capture is a FIXED tau on the plateau: excited settling is done by
-// tau ~ 16 (m = 1 gaps) while the crossover sits beyond tau ~ 45 (m*, this
-// wall) -- tau = 20 reads the metastable ground for both masses.
+// Metastable disc mode drains to the outside-box ground, so a convergence
+// gate loses for small m*: use a FIXED tau = 20 on the plateau (settled by
+// ~16, crossover past ~45).
 double relax_ground_energy(const ses::Grid3D& g, const std::vector<double>& v,
                            double mass) {
     ses::Field3D psi = ses::gaussian_wavepacket(
@@ -79,13 +62,12 @@ TEST(Corral2D, EffectiveMassScalesTheGroundToJZeroBand) {
     const double mstar = 0.38;
     const double e_star = relax_ground_energy(g, v, mstar);
     const double e_unit = relax_ground_energy(g, v, 1.0);
-    // Leaky-fence band around the hard-disk J0 ground (same band the arc
-    // uses): j01^2 / (2 m R^2).
+    // Hard-disk J0 ground band, same as the arc.
     const double j01 = 2.405;
     const double hard_star = j01 * j01 / (2.0 * mstar * r * r);
     EXPECT_GT(e_star, 0.6 * hard_star);
     EXPECT_LT(e_star, 2.0 * hard_star);
-    // E0 ~ 1/m: the fence interior is near-free, so E0(m*) m* tracks E0(1).
+    // E0 ~ 1/m (near-free interior).
     EXPECT_NEAR(e_star * mstar / e_unit, 1.0, 0.15);
 }
 
@@ -96,7 +78,7 @@ TEST(Corral2D, OpenBoundaryKillsThePeriodicRevival) {
     const std::vector<double> mask = ses::absorbing_mask(g, 3.0);
     const double k0 = 3.0;
     const double dt = 0.05;
-    const int nsteps = 240;  // t = 12 au: wall at ~5.3, wrap-return ~10.7
+    const int nsteps = 240;  // t = 12 au covers the wrap-return (~10.7)
     auto p_center = [&](const ses::Field3D& f) {
         double inside = 0.0;
         double total = 0.0;
@@ -120,13 +102,12 @@ TEST(Corral2D, OpenBoundaryKillsThePeriodicRevival) {
     };
     const ses::SplitOperator3D prop{g, v, dt};
 
-    // Periodic (no mask): the packet wraps around and revives at the center.
+    // Periodic (no mask): wraps around and revives at center.
     ses::Field3D per = packet();
     prop.step(per, nsteps);
     EXPECT_GT(p_center(per), 0.25);
 
-    // Open boundary: per-step mask -- the leaked flux is GONE (pre-renorm
-    // norm collapses; nothing returns), then the conditional state renorms.
+    // Open boundary (per-step mask): leaked flux gone, then conditional renorm.
     ses::Field3D open = packet();
     for (int s = 0; s < nsteps; ++s) {
         prop.step(open, 1);
@@ -134,17 +115,14 @@ TEST(Corral2D, OpenBoundaryKillsThePeriodicRevival) {
             open.data()[i] *= mask[i];
         }
     }
-    EXPECT_LT(ses::norm_sq(open), 0.05);  // absorbed, never re-entered
+    EXPECT_LT(ses::norm_sq(open), 0.05);
     ses::normalize(open);
     if (ses::norm_sq(open) > 0.0) {
-        EXPECT_NEAR(ses::norm_sq(open), 1.0, 1e-9);  // conditional renorm
+        EXPECT_NEAR(ses::norm_sq(open), 1.0, 1e-9);
     }
 }
 
 TEST(Corral2D, BlackDotFenceAbsorbsPartially) {
-    // 1D crossing of a single fence bump: the damp factor exp(-W(x) dt)
-    // localized on the bump eats a PART of the packet (neither unitary nor
-    // total absorption).
     const ses::Grid3D g{ses::Grid1D{-32.0, 32.0, 256}, ses::Grid1D{0.0, 2.0, 1},
                         ses::Grid1D{0.0, 2.0, 1}};
     const double amp = 1.5;
@@ -171,15 +149,12 @@ TEST(Corral2D, BlackDotFenceAbsorbsPartially) {
         }
     }
     const double survived = ses::norm_sq(psi);
-    EXPECT_LT(survived, 0.90);  // it absorbed
-    EXPECT_GT(survived, 0.05);  // but it is not a black hole
+    EXPECT_LT(survived, 0.90);
+    EXPECT_GT(survived, 0.05);
 }
 
-// The STM look: fermi_wave() prepares the standing wave AT the Fermi
-// energy (k_F R = j0_10 => ~10 radial nodes -- the famous 1993 topograph,
-// which images the E_F local density, NOT the relaxed ground). Contract:
-// it is confined and QUASI-STATIONARY under the real-time fence dynamics
-// (a near-eigenstate only phases; the rings stand still).
+// fermi_wave() = standing wave at E_F (k_F R = j0_10, ~10 nodes): the 1993
+// topograph images E_F LDOS, NOT the ground.
 TEST(Corral2DDirector, FermiWaveIsQuasiStationary) {
     ses_shell::Corral2DDirector d;
     ses_shell::CorralApi* api = d.corral();
@@ -191,8 +166,7 @@ TEST(Corral2DDirector, FermiWaveIsQuasiStationary) {
         d.tick();
         d.run_frame();
     }
-    // ~86% retained over ~5 au (measured): the black-dot fence absorbs by
-    // DESIGN, so the rings stand while slowly feeding the substrate.
+    // measured ~86% over ~5 au; the fence absorbs by design, floor 0.8.
     EXPECT_GT(api->confinement(), 0.8 * conf0);
 }
 

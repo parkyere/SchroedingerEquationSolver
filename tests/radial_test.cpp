@@ -1,25 +1,6 @@
-// RED: the radial engine -- lifetimes for ALL bound orbitals up to a
-// requested principal quantum number. A 3D grid cannot hold Rydberg states
-// (n = 10 reaches ~400 Bohr), but the potential is spherically symmetric,
-// so the eigenproblem reduces EXACTLY to 1D per angular momentum l:
-//     u'' = 2 (V(r) + l(l+1)/(2 r^2) - E) u,   u(0) = u(R) = 0,
-// with psi = (u(r)/r) Y_lm. Finite differences give a symmetric tridiagonal
-// Hamiltonian; eigenvalues come from Sturm-sequence bisection (the k-th
-// state has k radial nodes and n = l + 1 + k), eigenvectors from inverse
-// iteration. Level-averaged E1 decay rates follow from the radial dipole
-// integrals with the standard angular factor:
-//     A(n l -> n' l') = (4/3) alpha^3 w^3 * max(l, l') / (2 l + 1) * Rint^2.
-//
-// Oracles:
-//  - particle in a box: the EXACT discrete FD spectrum (1 - cos(k pi h))/h^2
-//    and the node count;
-//  - isotropic harmonic trap: E = w (2k + l + 3/2);
-//  - hydrogen (-1/r): the Rydberg series -1/(2 n^2), the analytic dipole
-//    integral <u_10|r|u_21> = 128 sqrt(6)/243, and the MEASURED lifetimes
-//    tau(2p) = 1.60 ns, tau(3s) = 158 ns, tau(3p) = 5.4 ns, tau(3d) = 15.6
-//    ns; 1s and 2s are E1-stable;
-//  - the soft-core atom (a = 1): energies must match the 3D solver's ITP
-//    values and the level lifetime tau(2p) must match the 3D GPU pipeline.
+// RED: radial engine -- E1 lifetimes for bound orbitals up to n.
+// 3D grid can't hold Rydberg states (n=10 ~ 400 Bohr); spherical V reduces the
+// eigenproblem exactly to 1D per l.
 
 
 #include <gtest/gtest.h>
@@ -82,8 +63,7 @@ TEST(SturmCount, MatchesTheExactDiscreteBoxSpectrum) {
     const RadialGrid g{1.0, 499};
     const ses::RadialHamiltonian h = ses::radial_hamiltonian(g, zero_potential(g), 0);
     const double dh = g.h();
-    // Exact FD eigenvalues of -(1/2) d2/dr2 with u(0)=u(R)=0:
-    // E_k = (1 - cos(k pi h / R... k pi / (n+1))) / h^2, k = 1..n.
+    // Exact FD box spectrum of -(1/2)d2/dr2, u(0)=u(R)=0.
     auto exact = [&](int k) {
         return (1.0 - std::cos(k * 3.14159265358979323846 / (g.n + 1))) / (dh * dh);
     };
@@ -103,7 +83,6 @@ TEST(RadialEigenstate, BoxEigenvaluesExactAndNodesCounted) {
             (1.0 - std::cos((k + 1) * 3.14159265358979323846 / (g.n + 1))) / (dh * dh);
         EXPECT_NEAR(s.energy, exact, 1e-9 * exact);
         EXPECT_EQ(count_interior_sign_changes(s.u), k);
-        // Normalized: sum u^2 h = 1.
         double norm = 0.0;
         for (const double x : s.u) {
             norm += x * x;
@@ -137,7 +116,7 @@ TEST(RadialEigenstate, HydrogenRydbergSeries) {
                 -0.125, 5e-4);
     EXPECT_NEAR(ses::radial_eigenstate(g, ses::radial_hamiltonian(g, v, 2), 0).energy,
                 -1.0 / 18.0, 5e-4);
-    // n = 5, l = 4 -- a genuinely Rydberg-ish oracle on the same grid.
+    // n=5, l=4: -1/(2*25) = -0.02.
     EXPECT_NEAR(ses::radial_eigenstate(g, ses::radial_hamiltonian(g, v, 4), 0).energy,
                 -0.02, 2e-4);
 }
@@ -150,17 +129,17 @@ TEST(RadialDipole, HydrogenAnalyticIntegral) {
     const ses::RadialState u21 =
         ses::radial_eigenstate(g, ses::radial_hamiltonian(g, v, 1), 0);
     const double rint = ses::radial_dipole_integral(g, u10.u, u21.u);
-    // <u_10| r |u_21> = 128 sqrt(6) / 243 = 1.29027...
+    // <u_10|r|u_21> = 128 sqrt(6)/243.
     EXPECT_NEAR(std::abs(rint), 128.0 * std::sqrt(6.0) / 243.0, 2e-3);
 }
 
 TEST(EinsteinALevel, AngularFactorsAreExact) {
     const double alpha3 = std::pow(ses::kFineStructureConstant, 3.0);
-    // Upper l = 1 -> lower l = 0: factor max(1,0)/(2*1+1) = 1/3.
+    // l=1->0: max(1,0)/(2*1+1) = 1/3.
     EXPECT_DOUBLE_EQ(ses::einstein_a_level(1.0, 1, 0, 1.0), (4.0 / 9.0) * alpha3);
-    // Upper l = 0 -> lower l = 1: factor max(0,1)/(2*0+1) = 1.
+    // l=0->1: max(0,1)/(2*0+1) = 1.
     EXPECT_DOUBLE_EQ(ses::einstein_a_level(1.0, 0, 1, 1.0), (4.0 / 3.0) * alpha3);
-    // Upper l = 2 -> lower l = 1: factor 2/5.
+    // l=2->1: max(2,1)/(2*2+1) = 2/5.
     EXPECT_DOUBLE_EQ(ses::einstein_a_level(1.0, 2, 1, 1.0),
                      (4.0 / 3.0) * alpha3 * (2.0 / 5.0));
 }
@@ -184,7 +163,7 @@ TEST(BoundLevelTable, HydrogenLifetimesMatchTheMeasuredValues) {
 
     EXPECT_EQ(level(1, 0).lifetime, 0.0);  // stable (0 = no open E1 channel)
     EXPECT_EQ(level(2, 0).lifetime, 0.0);  // 2s: E1-stable (two-photon in QED)
-    // Measured hydrogen lifetimes, in au of time (1 s = 4.134e16 au):
+    // Measured hydrogen lifetimes (au).
     EXPECT_NEAR(level(2, 1).lifetime, 1.60e-9 * kAuPerSecond,
                 0.03 * 1.60e-9 * kAuPerSecond);
     EXPECT_NEAR(level(3, 0).lifetime, 158.0e-9 * kAuPerSecond,
@@ -200,7 +179,6 @@ TEST(BoundLevelTable, CountsAllFiftyFiveLevelsUpToNTen) {
     const std::vector<ses::LevelInfo> table =
         ses::bound_level_table(g, coulomb_potential_r(g), 10);
     ASSERT_EQ(table.size(), 55u);
-    // Every excited level except 2s decays; lifetimes grow with n.
     for (const ses::LevelInfo& e : table) {
         if (e.n == 1 || (e.n == 2 && e.l == 0)) {
             EXPECT_EQ(e.lifetime, 0.0);
@@ -216,10 +194,9 @@ TEST(BoundLevelTable, CountsAllFiftyFiveLevelsUpToNTen) {
         }
         return -1.0;
     };
-    // Circular states (l = n-1) have the longest lifetimes in each n and
-    // grow steeply with n: tau(10,9) >> tau(3,2).
+    // circular (l=n-1) lifetimes grow steeply: tau(10,9) >> tau(3,2).
     EXPECT_GT(lifetime(10, 9), 100.0 * lifetime(3, 2));
-    // n = 10 energy sits on the Rydberg series.
+    // n=10 Rydberg: -1/(2*100) = -0.005.
     for (const ses::LevelInfo& e : table) {
         if (e.n == 10) {
             EXPECT_NEAR(e.energy, -0.005, 2e-4);
@@ -239,12 +216,11 @@ TEST(BoundLevelTable, SoftCoreAtomMatchesThe3DSolver) {
         }
         return ses::LevelInfo{};
     };
-    // Reference values: 3D ITP energies from the 128^3 GPU solver.
+    // Reference: 3D ITP energies from the 128^3 GPU solver.
     EXPECT_NEAR(level(1, 0).energy, -0.2749, 2e-3);
     EXPECT_NEAR(level(2, 1).energy, -0.1129, 2e-3);
     EXPECT_NEAR(level(2, 0).energy, -0.0927, 2e-3);
-    // The 3D pipeline found tau(2p_z) = 1.93e8 au; the radial route must
-    // agree (independent discretizations, same physics).
+    // 3D pipeline oracle: tau(2p_z) = 1.93e8 au (independent discretization, same physics).
     EXPECT_NEAR(level(2, 1).lifetime, 1.93e8, 0.05 * 1.93e8);
 }
 

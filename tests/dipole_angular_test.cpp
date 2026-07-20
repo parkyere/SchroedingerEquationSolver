@@ -1,26 +1,6 @@
-// RED: specification for the factorized E1 dipole channel table.
-//
-// Every tracked state is (u_nl(r)/r) Y_lm with a REAL (tesseral) Y_lm, so the
-// 3D dipole integral factorizes exactly:
-//     <f| r_q |i> = R_{n'l',nl} * A_q(l'm'; lm),
-//     R = integral u_{n'l'}(r) r u_{nl}(r) dr   (ses::radial_dipole_integral)
-// and the SQUARED angular factors |A_q|^2 are exact rationals -- computable
-// at compile time (constexpr, integer arithmetic, no sqrt). The channel
-// build then needs ~40 cheap 1D radial integrals instead of ~700 GPU
-// synthesis+reduction passes.
-//
-// Contract for ses.harmonics:
-//   tesseral_e1_axis_sq(axis, l_to, m_to, l_from, m_from) -> |A_q|^2
-//   tesseral_e1_sq(l_to, m_to, l_from, m_from)            -> sum over q
-// Oracles:
-//   (1) hand values: every 2p -> 1s orientation carries angular 1/3;
-//   (2) the sum rule Sum_{m',q} |A_q|^2 = max(l,l')/(2l+1) for all l <= 5
-//       (ties the m-resolved table to the level-averaged einstein_a_level);
-//   (3) exact selection zeros (the analytic dl/dm filter, now provable);
-//   (4) numeric 3D factorization on an artificial radial shell (compact
-//       support: pure angular check, no tail truncation) for l up to 5;
-//   (5) end-to-end: factorized A(2p_z -> 1s) reproduces the textbook
-//       Einstein A = 1.5155e-8 /au from our own radial solve.
+// RED: factorized E1 dipole channel table.
+// Tesseral Y_lm => 3D dipole factorizes: <f|r_q|i> = R * A_q(l'm';lm),
+// R = integral u_{n'l'} r u_{nl} dr. Replaces ~700 GPU passes with ~40 1D integrals.
 
 #include <gtest/gtest.h>
 
@@ -43,22 +23,18 @@ using ses::Grid3D;
 using ses::RadialGrid;
 
 TEST(TesseralE1, TwoPToOneSCarriesOneThirdInEveryOrientation) {
-    // z couples 2p_z, x couples 2p_x, y couples 2p_y -- each with the same
-    // exact angular strength 1/3 (cubic symmetry made exact, not fp-lucky).
+    // Tesseral convention: axis 2=z<->m=0 (p_z), 0=x<->m=+1 (p_x), 1=y<->m=-1 (p_y).
+    // Angular 1/3 is an exact rational, not fp-lucky -> DOUBLE_EQ.
     EXPECT_DOUBLE_EQ(ses::tesseral_e1_axis_sq(2, 0, 0, 1, 0), 1.0 / 3.0);
     EXPECT_DOUBLE_EQ(ses::tesseral_e1_axis_sq(0, 0, 0, 1, 1), 1.0 / 3.0);
     EXPECT_DOUBLE_EQ(ses::tesseral_e1_axis_sq(1, 0, 0, 1, -1), 1.0 / 3.0);
     EXPECT_DOUBLE_EQ(ses::tesseral_e1_sq(0, 0, 1, 0), 1.0 / 3.0);
-    // The wrong axes are EXACT zeros.
     EXPECT_EQ(ses::tesseral_e1_axis_sq(0, 0, 0, 1, 0), 0.0);
     EXPECT_EQ(ses::tesseral_e1_axis_sq(1, 0, 0, 1, 0), 0.0);
 }
 
 TEST(TesseralE1, SumRuleMatchesLevelAveragedFactor) {
-    // Sum over the destination shell (all m') and polarizations of
-    // |A_q|^2 = max(l, l')/(2l+1) -- the factor einstein_a_level uses. Holds
-    // for every tracked (l, m) in both directions; pinned to 1e-14 (exact
-    // rational arithmetic, only the summation rounds).
+    // Sum rule ties the m-resolved table to einstein_a_level; 1e-14 = only summation rounds.
     for (int l = 0; l <= 5; ++l) {
         for (int m = -l; m <= l; ++m) {
             for (const int lp : {l - 1, l + 1}) {
@@ -91,9 +67,7 @@ TEST(TesseralE1, SelectionRulesAreExactZeros) {
                             << "l=" << l << " m=" << m << " l'=" << lp
                             << " m'=" << mp;
                     }
-                    // m' == -m (m != 0) is inside the |dm| rule yet exactly
-                    // forbidden in the tesseral basis -- the subtle case the
-                    // channel filter documents.
+                    // m'=-m (m!=0) passes the |dm| rule yet is exactly forbidden in the tesseral basis.
                     if (dl_ok && m != 0 && mp == -m) {
                         EXPECT_EQ(ses::tesseral_e1_sq(lp, mp, l, m), 0.0);
                     }
@@ -103,9 +77,7 @@ TEST(TesseralE1, SelectionRulesAreExactZeros) {
     }
 }
 
-// Numeric 3D check of the factorization itself, decoupled from hydrogen
-// tails: a compact radial shell u(r) = r exp(-2 (r-3)^2) fits ±8 with room,
-// so the 3D integral differs from R * A only by angular grid error.
+// Compact shell fits the +/-8 box, so residual vs R*A is angular grid error only.
 TEST(TesseralE1, FactorizationMatchesNumeric3DIntegral) {
     const Grid3D g{Grid1D{-8.0, 8.0, 64}, Grid1D{-8.0, 8.0, 64},
                    Grid1D{-8.0, 8.0, 64}};
@@ -164,10 +136,7 @@ TEST(TesseralE1, FactorizationMatchesNumeric3DIntegral) {
 }
 
 TEST(TesseralE1, FactorizedEinsteinAReproducesTextbook2pLifetime) {
-    // Bare -1/r radial solve (the app's table source): A(2p_z -> 1s) =
-    // (4/3) alpha^3 omega^3 R^2 |A_z|^2 with omega = 3/8 Ha must land on the
-    // textbook 1.5155e-8 /au (tau = 1.6 ns) -- the whole factorized pipeline
-    // against literature, computed from OUR solver.
+    // Bare -1/r solve (app's table source) vs textbook A(2p->1s) = 1.5155e-8 /au (tau = 1.6 ns).
     const RadialGrid rg{20.0, 3999};
     std::vector<double> vr(static_cast<std::size_t>(rg.n));
     for (int i = 0; i < rg.n; ++i) {

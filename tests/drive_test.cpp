@@ -1,22 +1,6 @@
-// RED: time-dependent dipole drive -- the laser term
-//     V_drive(r, t) = amplitude * (axis . r) * cos(omega t)
-// entering the Strang step as scalar-coefficient half-kicks around the
-// static factors (diagonal factors commute, so the tested static tables
-// stay untouched):
-//     kick(t) halfV FFT kinetic IFFT halfV kick(t + dt).
-//
-// Oracles:
-//  - amplitude 0 reproduces the static propagator BITWISE (cis(0) = (1,0));
-//  - omega 0 is a constant force: Ehrenfest gives <p_z> = -E0 t exactly and
-//    <z> = -E0 t^2 / 2 (linear potential: no force-gradient error);
-//  - COHERENT LADDER: a resonantly driven harmonic trap is NOT a two-level
-//    Rabi system (all gaps are equal!) -- the exact solution is a coherent
-//    state with |alpha(t)| = E0 t / (2 sqrt(2 w0)):
-//      <z>(t)  = -(E0 / 2 w0) t sin(w0 t)        (Ehrenfest, exact),
-//      P_n     = e^{-|a|^2} |a|^{2n} / n!         (Poisson populations);
-//    (true two-level Rabi needs the ANHARMONIC soft-Coulomb spectrum);
-//  - SELECTION RULE: the z-polarized drive leaves the y-flavored state
-//    empty (<1_y|z|0> = 0 by symmetry) -- exact regardless of the ladder.
+// RED: time-dependent dipole drive V(r, t) = amplitude * (axis . r) * cos(omega t),
+// inserted as scalar half-kicks around the static Strang step; the kicks are
+// diagonal, so amplitude 0 leaves the static tables bitwise-identical.
 
 #include <complex>
 
@@ -74,8 +58,7 @@ TEST(DipoleDrive, ZeroAmplitudeMatchesStaticBitwise) {
 }
 
 TEST(DipoleDrive, ConstantFieldObeysEhrenfest) {
-    // Free particle + V = E0 z (omega = 0): force -E0 along z, so
-    // <p_z>(t) = -E0 t and <z>(t) = -E0 t^2 / 2 (packet far from the wrap).
+    // omega 0 -> constant force; wide grid keeps the packet clear of the wrap.
     const Grid3D g = cube(-16.0, 16.0, 32);
     const std::vector<double> zero_v(static_cast<std::size_t>(g.size()), 0.0);
     const double dt = 0.04;
@@ -83,7 +66,7 @@ TEST(DipoleDrive, ConstantFieldObeysEhrenfest) {
     Field3D psi = ses::gaussian_wavepacket(g, Vec3d{}, Vec3d{1.5, 1.5, 1.5}, Vec3d{});
 
     const double e0 = 0.05;
-    const int steps = 50;  // T = 2
+    const int steps = 50;
     ses::driven_step(psi, prop, DipoleDrive{Vec3d{0.0, 0.0, 1.0}, e0, 0.0}, 0.0, steps);
 
     const double t = steps * dt;
@@ -93,9 +76,7 @@ TEST(DipoleDrive, ConstantFieldObeysEhrenfest) {
 }
 
 TEST(DipoleDrive, ResonantCoherentLadderAndSelectionRule) {
-    // Harmonic trap w0 = 1 driven z-polarized at resonance: the exact result
-    // is a coherent state (equal level spacing means the drive climbs the
-    // whole ladder -- there is NO two-level Rabi here).
+    // Resonant z-drive climbs the whole equal-gap ladder -> coherent state, not two-level Rabi.
     const double w0 = 1.0;
     const Grid3D g = cube(-8.0, 8.0, 32);
     const std::vector<double> v = ses::harmonic_potential(g, w0, Vec3d{});
@@ -123,26 +104,24 @@ TEST(DipoleDrive, ResonantCoherentLadderAndSelectionRule) {
     ses::normalize(excited_y);
 
     const double e0 = 0.2;
-    const int steps = 283;  // t ~= 14.15, near a sin(w0 t) maximum
+    const int steps = 283;  // lands near a sin(w0 t) maximum
     const double t = steps * dt;
 
     Field3D psi = ground;
     ses::driven_step(psi, prop, DipoleDrive{Vec3d{0.0, 0.0, 1.0}, e0, w0}, 0.0, steps);
 
-    // Ehrenfest is EXACT for quadratic + linear potentials:
-    // <z>(t) = -(E0 / 2 w0) t sin(w0 t).
+    // Ehrenfest exact for quadratic+linear V -> this closed form is the exact oracle.
     const double expected_z = -(e0 / (2.0 * w0)) * t * std::sin(w0 * t);
     EXPECT_NEAR(ses::mean_position(psi).z, expected_z, 0.02);
 
-    // Poisson populations of the coherent state, |alpha| = E0 t/(2 sqrt(2 w0)).
+    // coherent-state Poisson populations
     const double alpha_sq = std::pow(e0 * t / (2.0 * std::sqrt(2.0 * w0)), 2.0);
     const double p0_expected = std::exp(-alpha_sq);
     const double p1_expected = alpha_sq * std::exp(-alpha_sq);
     EXPECT_NEAR(population(ground, psi), p0_expected, 0.06);
     EXPECT_NEAR(population(excited_z, psi), p1_expected, 0.06);
 
-    // Selection rule: the z-polarized drive cannot populate the y state --
-    // exact by symmetry, ladder or not.
+    // Selection rule: z-drive cannot populate the y state (<1_y|z|0> = 0 by symmetry).
     EXPECT_LT(population(excited_y, psi), 1e-4);
     EXPECT_NEAR(ses::norm_sq(psi), 1.0, 1e-10);
 }

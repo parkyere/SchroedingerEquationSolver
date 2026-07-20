@@ -1,9 +1,5 @@
-// RED: specification for the 3D FFT over a Field3D (1D transforms applied
-// along each axis; same e^{-} kernel and 1/N-on-inverse convention as 1D).
-//
-// Axis sizes and spike positions are all DISTINCT (8 x 16 x 4, spike at
-// (3,5,1)) so that any axis mix-up or stride bug lands the spike in the
-// wrong bin and fails loudly.
+// RED: 3D FFT = per-axis 1D transform; e^{-} forward, 1/N on inverse.
+// Distinct axis sizes so an axis/stride mix-up misplaces the spike.
 
 #include <complex>
 
@@ -34,7 +30,7 @@ TEST(Fft3, DcConcentratesAtOriginBin) {
         v = std::complex<double>{1.0, 0.0};
     }
     ses::fft(f);
-    EXPECT_NEAR(f(0, 0, 0).real(), 64.0, kTol);  // N = 8*4*2
+    EXPECT_NEAR(f(0, 0, 0).real(), 64.0, kTol);
     EXPECT_NEAR(f(0, 0, 0).imag(), 0.0, kTol);
     EXPECT_NEAR(f(1, 0, 0).real(), 0.0, kTol);
     EXPECT_NEAR(f(0, 1, 0).real(), 0.0, kTol);
@@ -42,8 +38,6 @@ TEST(Fft3, DcConcentratesAtOriginBin) {
 }
 
 TEST(Fft3, PlaneWaveSpikesAtItsBin) {
-    // x = e^{+i 2 pi (3 i/8 + 5 j/16 + 1 k/4)} -> single spike at (3,5,1)
-    // with value N = 8*16*4 = 512.
     const int nx = 8, ny = 16, nz = 4;
     Field3D f{make_grid(nx, ny, nz)};
     for (int k = 0; k < nz; ++k) {

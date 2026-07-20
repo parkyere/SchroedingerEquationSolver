@@ -1,9 +1,5 @@
-// RED: the linear-combination spectra. 1D: an eigenstate is ONE line, a
-// coherent state's weighted mean energy reconstructs <H>. 2D (Fock-
-// Darwin, lattice gauge): the relaxed ground is the single bottom line
-// at Omega, and at B != 0 the gauge-corrected decomposition still
-// reconstructs the lattice <H> -- the chirality assignment w_-+ =
-// Omega -+ B/2 is pinned by that reconstruction.
+// RED: linear-combination spectra. Fock-Darwin gauge: chiral line
+// energies w_-+ = Omega -+ B/2, pinned by the <H> reconstruction.
 
 #include <gtest/gtest.h>
 
@@ -34,9 +30,9 @@ TEST(HoSpectrum, OneDEigenstateIsOneLineAndCoherentReconstructs) {
     }
     EXPECT_NEAR(total, 1.0, 1e-6);
     EXPECT_NEAR(lines[3].first, 3.5 * omega, 1e-12);
-    EXPECT_GT(lines[3].second, 0.999);  // ONE line
+    EXPECT_GT(lines[3].second, 0.999);
 
-    // Coherent state: Poissonian weights whose mean rebuilds <H>.
+    // Coherent state: weighted mean rebuilds <H>.
     const double sig = 1.0 / std::sqrt(2.0 * omega);
     const ses::Field1D coh = ses::gaussian_wavepacket(g, 4.0, sig, 0.0);
     std::vector<double> v(static_cast<std::size_t>(g.n));
@@ -51,7 +47,7 @@ TEST(HoSpectrum, OneDEigenstateIsOneLineAndCoherentReconstructs) {
         mean += e * w;
         tot += w;
     }
-    EXPECT_GT(tot, 0.999);  // the band held the whole state
+    EXPECT_GT(tot, 0.999);
     EXPECT_NEAR(mean / tot, ses::mean_energy(coh, v), 0.01);
 }
 
@@ -62,7 +58,7 @@ TEST(HoSpectrum, FockDarwinGroundIsOneLineAndBReconstructs) {
     const double w0 = 0.5;
     const double b = 0.6;
     const double om = std::sqrt(w0 * w0 + 0.25 * b * b);
-    // Relax the LATTICE ground at B (the qdot boot path).
+    // Lattice ground at B (qdot boot path).
     std::vector<double> v(static_cast<std::size_t>(g.size()));
     for (int j = 0; j < g.y.n; ++j) {
         const double y = g.y.coord(j);
@@ -101,10 +97,10 @@ TEST(HoSpectrum, FockDarwinGroundIsOneLineAndBReconstructs) {
             imax = k;
         }
     }
-    EXPECT_GT(tot, 0.98);                       // basis holds the state
-    EXPECT_GT(wmax, 0.95);                      // ...as ONE line
-    EXPECT_NEAR(lines[imax].first, om, 0.03);   // ...at E = Omega
-    EXPECT_NEAR(mean / tot, e_meas, 0.05);      // <H> reconstruction
+    EXPECT_GT(tot, 0.98);
+    EXPECT_GT(wmax, 0.95);
+    EXPECT_NEAR(lines[imax].first, om, 0.03);
+    EXPECT_NEAR(mean / tot, e_meas, 0.05);
 }
 
 }  // namespace

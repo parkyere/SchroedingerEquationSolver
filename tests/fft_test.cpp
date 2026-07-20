@@ -1,15 +1,7 @@
-// RED: specification for the hand-written radix-2 FFT (the split-operator
-// propagator applies the kinetic factor in k-space with it).
-//
-// Convention pinned here (matches FFTW/NumPy):
+// RED: hand-written radix-2 FFT spec (split-operator propagator applies the kinetic factor in k-space with it).
+// Convention (matches FFTW/NumPy):
 //     forward:  X_k = sum_n x_n e^{-2 pi i k n / N}   (unnormalized)
 //     inverse:  x_n = (1/N) sum_k X_k e^{+2 pi i k n / N}
-// so ifft(fft(x)) == x. Sizes are powers of two (radix-2).
-//
-// Oracles: DC -> bin 0; delta -> flat spectrum; e^{+2 pi i k0 n/N} -> a spike
-// at k0 ONLY (this is the one test that detects a wrong kernel sign -- the
-// spike would land at N-k0); cosine -> conjugate bin pair; round-trip;
-// linearity; Parseval.
 
 #include <complex>
 
@@ -42,7 +34,7 @@ TEST(Fft, SizeOneIsIdentity) {
 TEST(Fft, DcSignalConcentratesAtBinZero) {
     CVec a(8, Cd{1.0, 0.0});
     ses::fft(a);
-    expect_near(a[0], 8.0, 0.0);  // X_0 = N
+    expect_near(a[0], 8.0, 0.0);
     for (std::size_t k = 1; k < a.size(); ++k) {
         expect_near(a[k], 0.0, 0.0);
     }
@@ -58,9 +50,7 @@ TEST(Fft, DeltaHasFlatSpectrum) {
 }
 
 TEST(Fft, ComplexExponentialPinsKernelSign) {
-    // x_n = e^{+2 pi i k0 n / N}, k0 = 3, N = 16.
-    // With the e^{-} forward kernel the spike is at k = 3 with value N.
-    // A wrong (e^{+}) kernel would put it at k = 13 -- this test forbids that.
+    // Kernel-sign contract: wrong e^{+} kernel puts the spike at N-k0=13, not k0=3.
     const std::size_t n = 16;
     const std::size_t k0 = 3;
     CVec a(n);
@@ -79,7 +69,7 @@ TEST(Fft, ComplexExponentialPinsKernelSign) {
 }
 
 TEST(Fft, RealCosineSplitsIntoConjugateBinPair) {
-    // x_n = cos(2 pi k0 n / N), k0 = 3, N = 16  ->  X_3 = X_13 = N/2.
+    // real cosine -> X_3 = X_13 = N/2 = 8 (conjugate bin pair).
     const std::size_t n = 16;
     const std::size_t k0 = 3;
     CVec a(n);
@@ -98,7 +88,7 @@ TEST(Fft, RealCosineSplitsIntoConjugateBinPair) {
 }
 
 CVec deterministic_signal(std::size_t n) {
-    // Non-symmetric, non-sparse, reproducible test data (no RNG per repo rules).
+    // Non-symmetric, non-sparse; no RNG per repo rules.
     CVec a(n);
     for (std::size_t i = 0; i < n; ++i) {
         const double x = static_cast<double>(i);
@@ -118,7 +108,6 @@ TEST(Fft, InverseRestoresInput) {
 }
 
 TEST(Fft, IsLinear) {
-    // fft(2x + y) == 2 fft(x) + fft(y)
     const std::size_t n = 8;
     CVec x = deterministic_signal(n);
     CVec y(n);
@@ -139,7 +128,6 @@ TEST(Fft, IsLinear) {
 }
 
 TEST(Fft, ParsevalEnergyIdentity) {
-    // sum |x_n|^2 == (1/N) sum |X_k|^2
     CVec a = deterministic_signal(16);
     double time_energy = 0.0;
     for (const Cd& z : a) {

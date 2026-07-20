@@ -1,9 +1,3 @@
-// RED: the mean-field spin lattice. Damped J > 0 orders a random boot
-// into a ferromagnet (|M| -> 1); damped J < 0 staggers it into Neel
-// (staggered -> 1, |M| stays small); the UNDAMPED lattice conserves the
-// mean-field energy; and a fully aligned lattice in a transverse B
-// precesses RIGIDLY at omega_L (parallel exchange exerts no torque).
-
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -48,7 +42,7 @@ TEST(SpinLattice, SpinorFromBlochRoundTrips) {
 
 TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
     ses::SpinLattice l = random_lattice(5, 11);
-    for (int k = 0; k < 6000; ++k) {  // J = +0.5, alpha = 0.1, no B
+    for (int k = 0; k < 6000; ++k) {
         ses::spinlattice_step(l, 0.0, 0.0, 0.0, 0.5, 0.1, 0.05);
     }
     double mx = 0.0;
@@ -58,7 +52,7 @@ TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
     EXPECT_GT(std::sqrt(mx * mx + my * my + mz * mz), 0.95);
 
     ses::SpinLattice a = random_lattice(5, 12);
-    for (int k = 0; k < 12000; ++k) {  // J = -0.5: Neel
+    for (int k = 0; k < 12000; ++k) {
         ses::spinlattice_step(a, 0.0, 0.0, 0.0, -0.5, 0.1, 0.05);
     }
     ses::lattice_magnetization(a, &mx, &my, &mz);
@@ -67,11 +61,7 @@ TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
 }
 
 TEST(SpinLattice, UndampedEnergyDriftConvergesFirstOrder) {
-    // The staggered projected-axis scheme is FIRST order in the fixed-
-    // horizon energy drift (measured 0.419/0.193/0.086/0.045 across
-    // dt = .01/.005/.002/.001 -- clean h-proportional): the contract is
-    // that order (5x refinement shrinks the drift > 3.5x) plus an
-    // absolute bound at the fine step.
+    // FIRST-order energy drift, measured 0.419/0.193/0.086/0.045 at dt .01/.005/.002/.001.
     auto drift = [](double dt, int steps) {
         ses::SpinLattice l = random_lattice(5, 13);
         const double e0 = ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4);
@@ -81,7 +71,7 @@ TEST(SpinLattice, UndampedEnergyDriftConvergesFirstOrder) {
         return std::abs(ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4) -
                         e0);
     };
-    const double coarse = drift(0.01, 2000);   // t = 20
+    const double coarse = drift(0.01, 2000);
     const double fine = drift(0.002, 10000);   // same horizon
     std::printf("spinlattice drift: dt .01 %.4f / .002 %.4f\n", coarse,
                 fine);
@@ -93,18 +83,14 @@ TEST(SpinLattice, AlignedLatticePrecessesRigidly) {
     ses::SpinLattice l;
     l.nx = 5;
     l.ny = 5;
-    l.s.assign(25, ses::spinor_from_bloch(1.0, 0.0, 0.0));  // all +x
+    l.s.assign(25, ses::spinor_from_bloch(1.0, 0.0, 0.0));
     const double b = 0.5;
     const double dt = 0.01;
-    const int n = 400;  // phase 2 rad about +z
+    const int n = 400;
     for (int k = 0; k < n; ++k) {
         ses::spinlattice_step(l, 0.0, 0.0, b, 0.7, 0.0, dt);
     }
-    // Every site stays coherent with the mean at the Larmor phase:
-    // parallel exchange exerts no torque (the field projection), so the
-    // fan never opens; the staggered sweep leaves only a small residual
-    // tilt (measured mz ~ 0.034 at J dt = 0.007 -- windowed with
-    // headroom, the CONTRACT is no fan-out and the exact phase).
+    // Parallel exchange = no torque -> no fan-out; staggered residual mz ~ 0.034.
     double mx = 0.0;
     double my = 0.0;
     double mz = 0.0;

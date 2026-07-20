@@ -1,22 +1,9 @@
-// RED: soft position measurement -- the user-facing "observe the electron"
-// feature. NOT a Dirac-delta collapse: the post-measurement state is the old
-// psi multiplied by a Gaussian mask of width sigma_m (a Gaussian POVM),
-// renormalized, and then handed back to the TDSE.
-//
-// Design: randomness stays OUT of core. sample_collapse_index takes a
-// uniform draw u in [0,1) and inverts the discrete CDF of |psi|^2 (flat-index
-// order), so every test is deterministic.
-//
-// Sharp oracles:
-//  - CDF inversion on hand-built two-cell densities (exact indices);
-//  - stratified draws u_k=(k+1/2)/K reproduce cell probabilities EXACTLY;
-//  - Gaussian x Gaussian is analytic: with our amplitude convention
-//    e^{-(x-c)^2/(4 s^2)}, collapsing a packet of width s_pre centered at r0
-//    with a mask of width s_m at r_m gives
-//        center = (r_m/s_m^2 + r0/s_pre^2) / (1/s_m^2 + 1/s_pre^2)
-//        1/s_post^2 = 1/s_m^2 + 1/s_pre^2;
-//  - the uncertainty principle on screen: a SHARPER measurement re-spreads
-//    FASTER under subsequent free evolution.
+// RED: soft position measurement -- Gaussian POVM, not Dirac-delta collapse.
+// Post-state = psi * e^{-(r-c)^2/(4 s_m^2)}, renormalized.
+// Determinism: randomness stays out of core; sample_* invert a discrete CDF
+// from a uniform draw u in [0,1) (flat order).
+// Gaussian x Gaussian oracle (amplitude conv e^{-(x-c)^2/(4 s^2)}):
+//   center = (r_m/s_m^2 + r0/s_pre^2)/(1/s_m^2 + 1/s_pre^2), 1/s_post^2 = 1/s_m^2 + 1/s_pre^2
 
 
 #include <gtest/gtest.h>
@@ -42,8 +29,7 @@ using ses::Grid3D;
 using ses::Vec3d;
 
 TEST(SampleCollapseIndex, InvertsTheDiscreteCdf) {
-    // Two occupied cells in flat order: flat(3,0,2)=35 carries 3/4 of the
-    // probability, flat(1,2,3)=57 carries 1/4.
+    // flat(3,0,2)=35 carries p=3/4, flat(1,2,3)=57 carries p=1/4.
     const Grid1D axis{0.0, 4.0, 4};
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
@@ -76,21 +62,17 @@ TEST(SampleCollapseIndex, StratifiedDrawsReproduceProbabilitiesExactly) {
 }
 
 TEST(SampleEnergyEigenstate, InvertsThePopulationCdfWithIncompleteManifold) {
-    // Projective energy measurement over eigenstate populations that do NOT
-    // sum to 1: the tracked bound manifold is incomplete, so the deficit
-    // 1 - sum(P) is the "outside the manifold" (continuum) outcome, index -1.
-    const std::vector<double> pops = {0.5, 0.3};  // sum 0.8, deficit 0.2
+    // Deficit 1 - sum(P) is the continuum outcome, index -1.
+    const std::vector<double> pops = {0.5, 0.3};
     EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.0), 0);
     EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.4999), 0);
     EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.5), 1);
     EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.7999), 1);
-    EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.8), -1);  // into the deficit
+    EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.8), -1);
     EXPECT_EQ(ses::sample_energy_eigenstate(pops, 0.9999), -1);
 }
 
 TEST(SampleEnergyEigenstate, CompleteManifoldNeverEscapesAndIsExactStratified) {
-    // Sum = 1: every draw lands on an eigenstate, and stratified draws
-    // u_k = (k + 1/2)/K reproduce the populations exactly.
     const std::vector<double> pops = {0.25, 0.25, 0.5};
     const int kDraws = 1000;
     int counts[3] = {0, 0, 0};
@@ -106,9 +88,6 @@ TEST(SampleEnergyEigenstate, CompleteManifoldNeverEscapesAndIsExactStratified) {
 }
 
 TEST(CollapseWavepacket, MatchesAnalyticGaussianPosterior) {
-    // Broad packet (s_pre = 2, r0 = 0) collapsed at r_m with s_m = 0.5:
-    // per-axis center r_m * (1/s_m^2)/(1/s_m^2 + 1/s_pre^2) = r_m * 16/17,
-    // width s_post = 1/sqrt(4.25).
     const Grid1D axis{-8.0, 8.0, 64};
     const Grid3D g{axis, axis, axis};
     Field3D psi = ses::gaussian_wavepacket(g, Vec3d{}, Vec3d{2.0, 2.0, 2.0}, Vec3d{});
@@ -132,8 +111,7 @@ TEST(CollapseWavepacket, MatchesAnalyticGaussianPosterior) {
 }
 
 TEST(CollapseWavepacket, SharperMeasurementRespreadsFaster) {
-    // Uncertainty principle: post-collapse width s_m implies momentum spread
-    // ~1/(2 s_m), so the sharper collapse disperses faster under V = 0.
+    // dp ~ 1/(2 s_m): sharper collapse disperses faster under V = 0.
     const Grid1D axis{-8.0, 8.0, 32};
     const Grid3D g{axis, axis, axis};
     const std::vector<double> free_v(static_cast<std::size_t>(g.size()), 0.0);
@@ -154,16 +132,14 @@ TEST(CollapseWavepacket, SharperMeasurementRespreadsFaster) {
 }
 
 TEST(SignedMAmplitudes, PxSplitsEquallyAndKeptOutcomesReconstruct) {
-    // L_z measurement bookkeeping on a real-harmonic (cos, sin) pair.
-    // A pure cos-type state (p_x): a_+ and a_- each carry probability 1/2.
+    // L_z on real-harmonic (cos, sin); pure cos (p_x) splits a_+/a_- = 1/2.
     const std::complex<double> c_cos{1.0, 0.0};
     const std::complex<double> c_sin{0.0, 0.0};
     const ses::SignedM a = ses::signed_m_amplitudes(c_cos, c_sin);
     EXPECT_NEAR(std::norm(a.plus), 0.5, 1e-15);
     EXPECT_NEAR(std::norm(a.minus), 0.5, 1e-15);
 
-    // Keeping ONE signed-m outcome rebuilds a ring state: equal cos/sin
-    // populations regardless of the input pair.
+    // Keeping ONE signed-m outcome -> ring state: equal cos/sin populations.
     const ses::RealPair kept = ses::pair_from_signed_m(a.plus, +1);
     EXPECT_NEAR(std::norm(kept.c_cos), std::norm(kept.c_sin), 1e-15);
 
@@ -196,10 +172,8 @@ TEST(SignedMAmplitudes, GenericPairRoundTripsAndConservesProbability) {
 }
 
 TEST(PovmOutcomeDensity, IsRawDensityBlurredByTheKrausWidth) {
-    // POVM consistency: E_c = M_c^dag M_c with M_c = e^{-(r-c)^2/(4 s^2)}
-    // means P(c) ~ |psi|^2 convolved with e^{-(r-c)^2/(2 s^2)} -- a Gaussian
-    // of std sigma_m. A single occupied cell gives the separable kernel
-    // itself: exact per-cell oracles.
+    // P(c) ~ |psi|^2 convolved with e^{-(r-c)^2/(2 s^2)} (std sigma_m).
+    // Single occupied cell = the separable kernel itself: exact per-cell oracle.
     const Grid1D axis{0.0, 16.0, 16};
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
@@ -227,9 +201,8 @@ TEST(PovmOutcomeDensity, IsRawDensityBlurredByTheKrausWidth) {
 }
 
 TEST(SamplePovmIndex, CanLandWhereRawDensityHasANode) {
-    // Two occupied cells straddle an empty one. Raw CDF sampling can never
-    // return the node cell; a detector of resolution sigma_m ~ h must be
-    // able to (its outcome density there is nonzero).
+    // Two occupied cells straddle an empty node: raw |psi|^2 sampling can never
+    // hit it; a POVM detector of width sigma_m ~ h can (density there > 0).
     const Grid1D axis{0.0, 16.0, 16};
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
@@ -266,9 +239,8 @@ TEST(SimulationMeasure, CollapsesAtTheSampledCellAndKeepsTime) {
     sim.advance(3);
     const double t_before = sim.time();
 
-    // The center the sim reports must be the coordinate of exactly the cell
-    // the POVM-consistent inversion picks for the same draw and detector
-    // width (outcomes sample the sigma_m-blurred density, not raw |psi|^2).
+    // measure() reports the coord of the cell sample_povm_index picks for the
+    // same draw/width (blurred density, not raw |psi|^2).
     const int expected_idx = ses::sample_povm_index(sim.psi(), 0.6, 0.37);
     const Vec3d c = sim.measure(0.37, 0.6);
 
@@ -281,10 +253,10 @@ TEST(SimulationMeasure, CollapsesAtTheSampledCellAndKeepsTime) {
     EXPECT_DOUBLE_EQ(c.y, g.y.coord(j));
     EXPECT_DOUBLE_EQ(c.z, g.z.coord(k));
 
-    EXPECT_EQ(sim.time(), t_before);  // measurement is instantaneous
+    EXPECT_EQ(sim.time(), t_before);
     EXPECT_NEAR(ses::norm_sq(sim.psi()), 1.0, 1e-12);
 
-    // The cloud actually moved toward the collapse center.
+    // Cloud pulled toward the collapse center.
     const Vec3d r = ses::mean_position(sim.psi());
     EXPECT_LT(std::abs(r.x - c.x), 1.0);
     EXPECT_LT(std::abs(r.y - c.y), 1.0);

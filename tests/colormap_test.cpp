@@ -1,13 +1,3 @@
-// RED: colormaps for wavefunction visualization.
-//
-//  - phase_color(theta): CYCLIC map for arg(psi) in [-pi, pi]. The load-
-//    bearing property is periodicity -- color(-pi) == color(+pi) -- so the
-//    phase shows no artificial seam (a non-cyclic map like viridis would
-//    manufacture a discontinuity there).
-//  - magnitude_color(t): sequential dark -> bright map for |psi|^2 in [0,1],
-//    monotone in brightness so density reads correctly.
-
-
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -21,6 +11,7 @@ using ses::Rgb;
 
 constexpr double kPi = std::numbers::pi;
 
+// Cyclic contract: color(-pi)==color(+pi) so the arg() wrap shows no false phase seam (a non-cyclic map like viridis manufactures one).
 TEST(PhaseColormap, IsCyclicAtPlusMinusPi) {
     const Rgb a = ses::phase_color(-kPi);
     const Rgb b = ses::phase_color(kPi);
@@ -50,7 +41,6 @@ TEST(PhaseColormap, DistinguishesOppositePhases) {
 }
 
 TEST(PhaseColormap, IsContinuousIncludingWrap) {
-    // Small phase steps produce small color steps everywhere, wrap included.
     const double dtheta = 1e-3;
     for (int i = -300; i <= 300; ++i) {
         const double th = kPi * i / 300.0;

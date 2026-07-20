@@ -1,21 +1,5 @@
-// RED: the magnetic split-operator propagator. The
-// minimal-coupling Hamiltonian for an electron in B = B z^ (symmetric gauge,
-// atomic units) is
-//     H = 1/2 p^2 + V + (B/2) L_z + (B^2/8) rho^2,
-// paramagnetic + diamagnetic. This solves it PROPERLY (psi actually evolves),
-// not as a display rotation:
-//   - the diamagnetic (B^2/8) rho^2 is diagonal in position -> folded into
-//     the potential of an internal SplitOperator3D;
-//   - the paramagnetic (B/2) L_z is the z-rotation generator -> applied to
-//     psi via the exact three-shear rotate_z, Strang-split around the core.
-//
-// Oracles:
-//  - effective_potential = V + (B^2/8) rho^2 exactly (diamagnetic present);
-//  - B = 0 reduces to the plain SplitOperator3D;
-//  - FACTORIZATION (the key one): for a z-symmetric V, L_z commutes with the
-//    rest, so the magnetic evolution equals [H0' evolution] then a rigid
-//    rotation by omega_L * t, omega_L = B/2 -- an exact identity;
-//  - norm is conserved.
+// RED: magnetic split-operator propagator. Atomic units, symmetric gauge:
+//     H = 1/2 p^2 + V + (B/2) L_z + (B^2/8) rho^2.
 
 
 #include <gtest/gtest.h>
@@ -99,17 +83,12 @@ TEST(MagneticPropagator, EvolutionFactorsIntoCorePlusLarmorRotation) {
     Field3D mag = psi0;
     prop.step(mag, n);
 
-    // Reference: evolve under the SAME diamagnetic-augmented core, then rotate
-    // rigidly by omega_L * t = (B/2)(n dt). For a z-symmetric V the two are
-    // an exact operator identity.
+    // exact operator identity for z-symmetric V: L_z commutes with the core.
     Field3D ref = psi0;
     ses::SplitOperator3D{g, prop.effective_potential(), dt}.step(ref, n);
     ses::rotate_z(ref, 0.5 * b * (n * dt));
 
-    // The factorization is EXACT in the continuum; on the discrete grid the
-    // three-shear rotation does not perfectly commute with the core step
-    // (band-limited resampling), so it holds to ~1e-5 at 32^3 -- the physical
-    // identity confirmed to 5 figures, not a defect.
+    // discrete three-shear rotation doesn't exactly commute with the core: ~1e-5, not a defect.
     EXPECT_LT(max_abs_diff(mag, ref), 1e-4);
 }
 
@@ -122,7 +101,7 @@ TEST(MagneticPropagator, AboutXCarriesThePerpendicularDiamagneticTerm) {
     for (int k = 0; k < g.z.n; k += 7) {
         for (int j = 0; j < g.y.n; j += 5) {
             for (int i = 0; i < g.x.n; i += 5) {
-                const double perp2 =  // (B/2)L_x -> diamagnetic in y,z
+                const double perp2 =
                     g.y.coord(j) * g.y.coord(j) + g.z.coord(k) * g.z.coord(k);
                 const double expected =
                     v[static_cast<std::size_t>(g.flat(i, j, k))] + b * b / 8.0 * perp2;

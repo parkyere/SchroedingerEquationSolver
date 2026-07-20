@@ -1,9 +1,5 @@
-// RED: read access to the imaginary-time weight tables, so the GPU relax
-// path consumes the TESTED tables instead of
-// re-deriving them -- the same pattern as the real-time phase tables.
-//
-// Oracles: entries equal the defining formulas evaluated through the same
-// public building blocks (wavenumbers, potential), bitwise.
+// RED: relax weight tables must equal their defining formulas bitwise --
+// so the GPU relax path consumes these TESTED tables instead of re-deriving.
 
 
 #include <gtest/gtest.h>

@@ -1,15 +1,4 @@
-// RED: the 3D isotropic harmonic trap is a CENTRAL potential, so the whole
-// tracked-manifold pipeline (1D radial solve x constexpr tesseral E1 factors
-// x Einstein A) must apply to it UNCHANGED -- this is the physics license
-// for giving the trap scene the same measurement/decay machinery as the
-// atom. The oracles are the HO ladder algebra (exact, not fitted):
-//  - E_{k,l} = (2k + l + 3/2) w from the radial solver;
-//  - r is a ladder operator: it connects N' = N +- 1 ONLY, so the radial
-//    dipole integral for any |dN| != 1 pair vanishes;
-//  - |<0s| z |1p_z>|^2 = 1/(2w)  =>  R^2 = 3/(2w), and the factorized
-//    A(1p -> 0s) = (2/3) alpha^3 w^2;
-//  - every N = 2 state decays at exactly 2 A10 (SU(3): the shell shares one
-//    rate), pinning the radial x angular composition across l.
+// 3D isotropic HO trap is central: reuses 1D radial x tesseral E1 x Einstein A.
 
 #include <gtest/gtest.h>
 
@@ -43,7 +32,6 @@ RadialState solve(int l, int k) {
 }
 
 TEST(TrapLadder, RadialSolverReproducesTheEquallySpacedSpectrum) {
-    // E = (2k + l + 3/2) w for every level the trap manifold tracks.
     struct Level {
         int l, k;
     };
@@ -56,10 +44,8 @@ TEST(TrapLadder, RadialSolverReproducesTheEquallySpacedSpectrum) {
 }
 
 TEST(TrapLadder, DipoleIsALadderOperatorAcrossN) {
-    // Allowed: N=0 (0s) <-> N=1 (1p): R^2 = 3/(2w) (so that the z channel
-    // carries the textbook 1/(2w)). Forbidden despite dl = 1: N=1 (1p) <->
-    // N=0's partner across TWO rungs, e.g. 0s <-> 2p (N=3) -- the ladder
-    // algebra zeroes it, and the FD solver must reproduce that.
+    // allowed 0s<->1p: R^2=3/(2w) (z channel = textbook 1/(2w)). forbidden
+    // despite dl=1: |dN|!=1 zeroes 0s<->2p (ladder algebra, FD too).
     const RadialState s0 = solve(0, 0);   // N=0
     const RadialState p1 = solve(1, 0);   // N=1
     const RadialState p3 = solve(1, 1);   // N=3 (2k+l=3)
@@ -70,8 +56,8 @@ TEST(TrapLadder, DipoleIsALadderOperatorAcrossN) {
 }
 
 TEST(TrapLadder, FactorizedEinsteinAReproducesTheTextbookLadderRate) {
-    // A(1p_z -> 0s) = (4/3) alpha^3 w^3 * R^2 * |A_z|^2 with |A_z|^2 = 1/3
-    // collapses to the closed form (2/3) alpha^3 w^2.
+    // factorized (4/3)alpha^3 w^3 R^2 |A_z|^2, |A_z|^2=1/3 -> textbook
+    // closed form (2/3)alpha^3 w^2.
     const RadialState s0 = solve(0, 0);
     const RadialState p1 = solve(1, 0);
     const double r = ses::radial_dipole_integral(rg(), s0.u, p1.u);
@@ -83,9 +69,7 @@ TEST(TrapLadder, FactorizedEinsteinAReproducesTheTextbookLadderRate) {
 }
 
 TEST(TrapLadder, WholeN2ShellDecaysAtTwiceTheLadderRate) {
-    // SU(3): every N = 2 state (2s AND each 1d_m) carries total rate 2 A10 --
-    // summed over all N = 1 destinations and polarizations. Pins the radial
-    // x tesseral composition across different l with one exact number.
+    // SU(3): whole N=2 shell shares one total decay rate.
     const RadialState s0 = solve(0, 0);
     const RadialState p1 = solve(1, 0);
     const RadialState s2 = solve(0, 1);  // N=2, l=0
@@ -104,7 +88,7 @@ TEST(TrapLadder, WholeN2ShellDecaysAtTwiceTheLadderRate) {
 
     const double r_d2p = ses::radial_dipole_integral(rg(), p1.u, d2.u);
     const double gap_d2p = d2.energy - p1.energy;
-    for (int md : {0, 1, -2}) {  // spot-check three 1d orientations
+    for (int md : {0, 1, -2}) {  // spot-check 3 of the 5 1d_m
         double total_d = 0.0;
         for (int m = -1; m <= 1; ++m) {
             total_d += ses::einstein_a(

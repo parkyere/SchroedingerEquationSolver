@@ -1,20 +1,8 @@
-// RED: semiclassical emission from the oscillating dipole.
-// A superposition of energy levels has an oscillating charge density, hence a
-// time-varying dipole d = -<r> that radiates. By Ehrenfest the dipole
-// acceleration is the mean force,
-//     d_ddot = -<r_ddot> = <grad V>,
-// and the Larmor formula gives the radiated power (atomic units, 1/c^3 =
-// alpha^3):
-//     P = (2/3) alpha^3 |d_ddot|^2.
-// This captures the COHERENT emission of superpositions (it is 0 for a pure
-// eigenstate, whose density is static -- spontaneous decay of an eigenstate is
-// QED, handled separately by the Einstein-A jumps).
-//
-// Oracles:
-//  - <grad V> = w^2 <r> exactly for a harmonic V = 1/2 w^2 r^2 (grad V = w^2 r);
-//  - <grad V> = 0 for a free particle and for a symmetric cloud in a central V;
-//  - Larmor power: exact (2/3) alpha^3 factor and quadratic scaling.
-
+// RED: semiclassical emission (Ehrenfest + Larmor).
+// Ehrenfest: dipole accel a = <grad V> = -<r_ddot>, fed to larmor_power.
+// Larmor P = (2/3) alpha^3 |a|^2 with alpha^3 = 1/c^3 (a.u.).
+// Coherent superposition emission, =0 for an eigenstate (static density);
+// eigenstate spontaneous decay is QED, handled by the Einstein-A jumps.
 
 #include <gtest/gtest.h>
 
@@ -82,7 +70,6 @@ TEST(LarmorPower, ExactFactorAndQuadraticScaling) {
     // isotropic: only |a|^2 matters.
     EXPECT_DOUBLE_EQ(ses::larmor_power(Vec3d{1.0, 2.0, 2.0}),
                      (2.0 / 3.0) * a3 * 9.0);
-    // quadratic: doubling the acceleration quadruples the power.
     EXPECT_DOUBLE_EQ(ses::larmor_power(Vec3d{2.0, 0.0, 0.0}),
                      4.0 * ses::larmor_power(Vec3d{1.0, 0.0, 0.0}));
 }

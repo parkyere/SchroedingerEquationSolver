@@ -1,7 +1,4 @@
-// RED: the z = 0 stage-plane pick. The screen center of the orbit camera
-// looks at the origin, and any world point on the plane must ROUND-TRIP:
-// project through the renderer's exact perspective * look_at, feed the
-// NDC back, land on the same (x, y).
+// RED: z = 0 stage-plane pick must round-trip through perspective * look_at.
 
 #include <gtest/gtest.h>
 
@@ -12,7 +9,7 @@ import ses.vec;
 
 namespace {
 
-// v' = M v, column-major m[c*4 + r] (the pinned Mat4 convention).
+// column-major m[c*4 + r] -- the pinned Mat4 convention.
 void mul4(const ses::Mat4& m, const double v[4], double out[4]) {
     for (int r = 0; r < 4; ++r) {
         out[r] = 0.0;
@@ -34,10 +31,9 @@ TEST(PickPlane, CenterHitsTheOriginAndPointsRoundTrip) {
     double y = 1e9;
     ASSERT_TRUE(ses::unproject_to_z0(az, el, dist, fovy, aspect, 0.0, 0.0,
                                      &x, &y));
-    EXPECT_NEAR(x, 0.0, 1e-9);  // the orbit camera looks AT the origin
+    EXPECT_NEAR(x, 0.0, 1e-9);  // orbit camera looks at the origin
     EXPECT_NEAR(y, 0.0, 1e-9);
 
-    // Round-trip: world (7, -4, 0) -> clip -> NDC -> unproject -> same.
     const ses::Mat4 proj = ses::perspective(fovy, aspect, 0.1, 500.0);
     const ses::Vec3d eye = ses::orbit_eye(az, el, dist, ses::Vec3d{});
     const ses::Mat4 view =
@@ -54,8 +50,7 @@ TEST(PickPlane, CenterHitsTheOriginAndPointsRoundTrip) {
     EXPECT_NEAR(x, 7.0, 1e-6);
     EXPECT_NEAR(y, -4.0, 1e-6);
 
-    // Degenerate: looking along the plane (elevation pi/2, the ray runs
-    // INSIDE z = 0 for the center pixel) must refuse, not divide by zero.
+    // Degenerate: elevation pi/2 => ray lies in z = 0; must refuse, not divide by zero.
     EXPECT_FALSE(ses::unproject_to_z0(0.0, 0.5 * kPi, dist, fovy, aspect,
                                       0.0, 0.0, &x, &y));
 }

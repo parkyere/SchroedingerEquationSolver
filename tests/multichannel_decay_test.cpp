@@ -1,24 +1,6 @@
-// RED: multi-channel quantum jumps -- ALL tracked
-// orbitals get their lifetimes, not just one. Decay channels compete as
-// independent Poisson processes: channel m fires at rate gamma_m * P_m with
-// P_m = |<from_m|psi>|^2, the total escape probability over dt is
-//     p = 1 - exp(-sum_m gamma_m P_m dt),
-// and WHICH channel fires is distributed proportionally to its rate. On a
-// jump the MCWF jump operator |to><from| collapses psi onto the channel's
-// destination eigenstate.
-//
-// Randomness stays OUT of core: callers inject u1 (does a jump happen?) and
-// u2 (which channel?), so stratified draws give EXACT statistics.
-//
-// Oracles:
-//  - no-jump is a bitwise no-op and reports channel -1;
-//  - p_total matches the closed form and the single-channel quantum_jump;
-//  - exact stratified jump count for p = 1/4;
-//  - channel selection counts match the exact strata arithmetic (rates
-//    weighted by the CURRENT populations);
-//  - a zero-rate (forbidden) channel is never selected, even when u2 lands
-//    on its (empty) slot;
-//  - all-forbidden channel lists never jump, even with u1 = 0.
+// RED: multi-channel MCWF quantum jumps.
+// p = 1 - exp(-sum_m gamma_m P_m dt), P_m = |<from_m|psi>|^2; jump op |to><from|.
+// RNG out of core: callers inject u1 (jump?), u2 (which?) for stratified stats.
 
 #include <complex>
 
@@ -41,8 +23,7 @@ Grid3D cube(double lo, double hi, int n) {
     return Grid3D{Grid1D{lo, hi, n}, Grid1D{lo, hi, n}, Grid1D{lo, hi, n}};
 }
 
-// Orthonormal manifold on the centered grid: parity makes the overlaps
-// vanish to machine precision -- even "ground", x-odd, y-odd "excited".
+// Parity-orthonormal manifold: even ground, x-odd/y-odd excited overlap to ~0.
 struct Manifold {
     Field3D ground;
     Field3D ex;
@@ -70,7 +51,7 @@ Manifold make_manifold(const Grid3D& g) {
     return m;
 }
 
-// psi = 0.6 |ex> + 0.8 |ey>  ->  P_x = 0.36, P_y = 0.64.
+// P_x = 0.36, P_y = 0.64.
 Field3D make_superposition(const Manifold& m) {
     Field3D psi{m.ground.grid()};
     for (std::size_t i = 0; i < psi.data().size(); ++i) {
@@ -124,7 +105,6 @@ TEST(MultiQuantumJump, JumpCollapsesOntoTheSelectedDestination) {
     const Grid3D g = cube(-8.0, 8.0, 16);
     const Manifold m = make_manifold(g);
 
-    // u2 = 0 -> first channel; destination is ground, bitwise.
     {
         Field3D psi = make_superposition(m);
         const std::vector<ses::DecayChannel> channels{
@@ -139,7 +119,6 @@ TEST(MultiQuantumJump, JumpCollapsesOntoTheSelectedDestination) {
             EXPECT_EQ(psi.data()[i].imag(), m.ground.data()[i].imag());
         }
     }
-    // u2 -> 1 lands in the last channel; destination ex, bitwise.
     {
         Field3D psi = make_superposition(m);
         const std::vector<ses::DecayChannel> channels{
@@ -190,7 +169,6 @@ TEST(MultiQuantumJump, ChannelSelectionFollowsPopulationWeightedRates) {
     const double frac1 = (g1 * p1) / (g1 * p1 + g2 * p2);
 
     const int kDraws = 1000;
-    // Strata arithmetic: u2 = (k+0.5)/N picks channel 0 iff u2 < frac1.
     int expected0 = 0;
     for (int k = 0; k < kDraws; ++k) {
         if ((k + 0.5) / kDraws < frac1) {
@@ -218,8 +196,7 @@ TEST(MultiQuantumJump, ForbiddenChannelIsNeverSelected) {
     const Manifold m = make_manifold(g);
     Field3D psi = make_superposition(m);
 
-    // Channel 0 is forbidden (gamma = 0): even u2 = 0 must fall through to
-    // the allowed channel.
+    // gamma = 0: u2 = 0 must skip channel 0 and fall through to the allowed one.
     const ses::MultiJumpResult r = ses::multi_quantum_jump(
         psi,
         {{&m.ex, &m.ground, 0.0}, {&m.ey, &m.ground, 1.0}},
@@ -231,10 +208,8 @@ TEST(MultiQuantumJump, ForbiddenChannelIsNeverSelected) {
     }
 }
 
-// RED: pick_decay_channel -- the pure selection arithmetic, factored out so
-// the GPU shell can reuse it on GPU-reduced populations without duplicating
-// domain logic (Humble Object rule). Same semantics as multi_quantum_jump
-// with the rates precomputed.
+// RED: pick_decay_channel -- pure selection arithmetic factored out so the GPU
+// shell reuses it on reduced populations (Humble Object); rates precomputed.
 
 TEST(PickDecayChannel, NoJumpReportsClosedFormP) {
     const std::vector<double> rates{0.3, 0.1};

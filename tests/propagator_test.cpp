@@ -1,18 +1,7 @@
-// RED: specification for the split-operator (Fourier) TDSE propagator.
-//
-// One step of exp(-i H dt), H = -1/2 d^2/dx^2 + V(x), via Strang splitting:
-//     psi <- e^{-i V dt/2} . IFFT . e^{-i k^2 dt / 2} . FFT . e^{-i V dt/2} psi
-// (atomic units; docs/ARCHITECTURE.md).
-//
-// Free particle (V = 0) is the perfect first oracle: the kinetic factor is
-// applied EXACTLY in k-space, so there is no time-splitting error at all and
-// the analytic Gaussian dispersion must be reproduced to spectral accuracy:
-//     <x>(t)    = x0 + k0 t
-//     sigma(t)  = sigma0 sqrt(1 + (t / (2 sigma0^2))^2)
-//     <p>(t)    = k0
-//     ||psi||   = 1
-// The potential path (e^{-i V dt/2}) is pinned by the harmonic-oscillator
-// coherent-state spec (harmonic_dynamics_test).
+// Split-operator (Strang) TDSE propagator, atomic units. Free-particle oracle:
+// kinetic factor is exact in k-space (no splitting error), so Gaussian
+// dispersion holds to spectral accuracy -- hence the tight tolerances below.
+// HO potential path: harmonic_dynamics_test.
 
 
 #include <gtest/gtest.h>
@@ -41,7 +30,7 @@ constexpr double kX0 = -15.0;
 constexpr double kSigma0 = 1.0;
 constexpr double kK0 = 2.0;
 constexpr double kDt = 0.05;
-constexpr int kSteps = 200;  // T = 10
+constexpr int kSteps = 200;
 
 std::vector<double> free_potential() {
     return std::vector<double>(static_cast<std::size_t>(kGrid.n), 0.0);
@@ -89,12 +78,9 @@ TEST(SplitOperator, ConservesMeanMomentum) {
 
 }  // namespace
 
-// RED: the mass parameter -- the Cu(111) surface-state electron (corral
-// scene) propagates with m* != 1, so the split-operator pair and the energy
-// readout take a trailing mass (default 1 = every existing caller, bitwise).
-//   - kinetic phase: exp(-i k^2/(2 m) dt)  ->  free packet drifts at k0/m
-//   - ITP weight:    exp(-k^2/(2 m) dtau)  ->  harmonic ground E0 = w/(2 sqrt(m))
-//   - mean_energy(psi, v, m): kinetic term <k^2>/(2 m)
+// Mass parameter: the Cu(111) surface-state electron (corral scene) has m* != 1,
+// so the split-operator/ITP pair and the energy readout take a trailing mass
+// (default 1 == every existing caller, bitwise).
 TEST(MassParameter, FreePacketDriftsAtK0OverM) {
     const ses::Grid3D g{ses::Grid1D{-32.0, 32.0, 128}, ses::Grid1D{-1.0, 1.0, 1},
                         ses::Grid1D{-1.0, 1.0, 1}};
@@ -108,7 +94,6 @@ TEST(MassParameter, FreePacketDriftsAtK0OverM) {
         ses::Vec3d{k0, 0.0, 0.0});
     const ses::SplitOperator3D prop{g, v, t_total / nsteps, mass};
     prop.step(psi, nsteps);
-    // Half the mass-1 group velocity: <x> = -8 + (k0/m) t = -6.
     EXPECT_NEAR(ses::mean_position(psi).x, -8.0 + (k0 / mass) * t_total, 0.05);
 }
 
@@ -132,8 +117,7 @@ TEST(MassParameter, DefaultMassIsBitwiseTheLegacyTables) {
 }
 
 TEST(MassParameter, HarmonicGroundUnderMassRelaxesToOmegaOverTwoRootM) {
-    // Flat axes pinned AT the origin (coord(0) = xmin), so the isotropic
-    // well contributes no constant y^2/z^2 offset.
+    // Flat y/z axes at origin (coord(0)=xmin) so the well adds no y^2/z^2 offset.
     const ses::Grid3D g{ses::Grid1D{-12.0, 12.0, 64}, ses::Grid1D{0.0, 2.0, 1},
                         ses::Grid1D{0.0, 2.0, 1}};
     const double w = 1.0;
@@ -146,6 +130,6 @@ TEST(MassParameter, HarmonicGroundUnderMassRelaxesToOmegaOverTwoRootM) {
     const ses::ImaginaryTimePropagator3D itp{g, v, 0.02, mass};
     itp.relax(psi, 4000);
     EXPECT_NEAR(ses::mean_energy(psi, v, mass), 0.5 * w / std::sqrt(mass), 2e-3);
-    // The mass-aware readout differs from the m = 1 readout (kinetic /m).
+    // m=1 readout counts full kinetic; mass readout is /m, hence smaller.
     EXPECT_GT(ses::mean_energy(psi, v), ses::mean_energy(psi, v, mass));
 }

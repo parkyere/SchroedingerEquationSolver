@@ -1,27 +1,8 @@
-// RED: the 2D Peierls lattice propagator -- the honest engine for the REAL
-// double-slit + Aharonov-Bohm experiment (electron flying +x, a pierced
-// wall, a solenoid hidden inside the wall between the slits, a screen).
-//
-// WHY a lattice propagator: the FFT split-operator cannot Trotterize
-// (p - A)^2/2 for a LOCALIZED flux (A depends on both coordinates in every
-// gauge, so no factor is diagonal in any FFT basis), and approximate A.p
-// splittings drift the norm. On the lattice the flux enters EXACTLY as
-// Peierls phases on the hopping links: kinetic = 4 bond groups (x-even,
-// x-odd, y-even, y-odd), each a direct sum of independent 2-site bonds
-// exponentiated EXACTLY as 2x2 rotations -- unitary to round-off by
-// construction, Trotter error only in the ordering.
-//
-// The solenoid's string gauge: the cut runs from the solenoid center
-// (buried mid-wall) STRAIGHT UP (+y) to the boundary; only x-links
-// crossing the cut carry e^{+-i Phi}. Everywhere the field is zero the
-// plaquette phase-product is 1; the single plaquette at the solenoid
-// carries Phi -- topology on the link table itself, testable without
-// evolving anything. The physical beam picks the phase up ONLY through
-// the upper slit opening: exactly the AB double-slit.
-//
-// Honesty note: the lattice dispersion is E(k) = (1 - cos kh)/h^2 per
-// axis, group velocity sin(k h)/h -- the contracts below test against the
-// DISCRETE formulas, not the continuum ones.
+// The 2D Peierls lattice propagator: engine for the double-slit + Aharonov-Bohm
+// scene. WHY a lattice not FFT: split-operator cannot Trotterize (p - A)^2/2 for
+// a LOCALIZED flux; on the lattice the flux rides the hopping links as exact
+// Peierls phases (unitary to round-off). Gauge: string cut runs +y from the
+// solenoid, only crossed x-links carry e^{+-i Phi}.
 
 #include <gtest/gtest.h>
 
@@ -43,13 +24,11 @@ using ses::Field3D;
 using ses::Grid1D;
 using ses::Grid3D;
 
-// A single-plane (nz = 1) 3D grid: the 2D stage.
 Grid3D plane_grid(double lx, int nx, double ly, int ny) {
     return Grid3D{Grid1D{-lx, lx, nx}, Grid1D{-ly, ly, ny},
                   Grid1D{-1.0, 1.0, 1}};
 }
 
-// Gaussian packet on the plane, momentum k0 along +x.
 Field3D plane_packet(const Grid3D& g, double x0, double y0, double sigma,
                      double k0) {
     Field3D psi{g};
@@ -92,7 +71,6 @@ TEST(PeierlsLattice2D, IsUnitaryToRoundOff) {
 }
 
 TEST(PeierlsLattice2D, FreePacketMovesAtTheLatticeGroupVelocity) {
-    // v_g = sin(k0 h)/h, the DISCRETE dispersion -- not k0.
     const Grid3D g = plane_grid(30.0, 256, 10.0, 32);
     const std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     const double dt = 0.01;
@@ -109,10 +87,6 @@ TEST(PeierlsLattice2D, FreePacketMovesAtTheLatticeGroupVelocity) {
 }
 
 TEST(PeierlsLattice2D, SolenoidLinksCarryPureTopology) {
-    // Phase-product around every elementary plaquette: 1 everywhere the
-    // field vanishes, e^{i Phi} at the solenoid's plaquette ONLY. This is
-    // the whole Aharonov-Bohm setup verified on the link table, before
-    // any dynamics.
     const Grid3D g = plane_grid(8.0, 32, 8.0, 32);
     const std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     ses::PeierlsLattice2D prop{g, v, 0.02};
@@ -145,15 +119,9 @@ TEST(PeierlsLattice2D, SolenoidLinksCarryPureTopology) {
 }
 
 TEST(PeierlsLattice2D, GaugeCutDirectionIsInvisible) {
-    // The SAME flux with the string cut running down instead of up is a
-    // gauge transformation G = diag(e^{i chi}): the link algebra
-    // (u_dn = u_up e^{i(chi_i - chi_{i+1})}, y-links force chi to be
-    // j-independent) gives chi = -phi on every site RIGHT of the solenoid
-    // column. U_down = G U_up G^dag, and gauge equivalence transforms the
-    // STATE too -- evolve G psi0 under the down cut and psi0 under the up
-    // cut, and every density matches to round-off. (Evolving the SAME
-    // psi0 under both differs at the packet-tail level: physically
-    // distinct preparations.)
+    // Down vs up string cut = gauge transform G = diag(e^{-i phi}) on every site
+    // RIGHT of the solenoid column; evolve G psi0 (down) and psi0 (up) and every
+    // density must match to round-off.
     const Grid3D g = plane_grid(10.0, 64, 10.0, 64);
     const std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     const double phi = 2.4;
@@ -188,13 +156,6 @@ TEST(PeierlsLattice2D, GaugeCutDirectionIsInvisible) {
     }
 }
 
-// RED: UNIFORM field (Landau levels / cyclotron motion). In the Landau
-// gauge the x-links of row j carry e^{-i B hx hy j}: EVERY plaquette then
-// holds the same flux B hx hy -- a uniform B along z, checkable on the
-// link table. Dynamics: a packet with mechanical momentum k0 rides a
-// cyclotron orbit of radius k0/B at omega_c = B; and because the Landau
-// spectrum is EQUALLY spaced (E_n = B(n + 1/2)), the state REVIVES at
-// T = 2 pi / B -- the orbit closes and the wavefunction re-coheres.
 TEST(PeierlsLattice2D, UniformFieldFillsEveryPlaquetteEqually) {
     const Grid3D g = plane_grid(8.0, 32, 8.0, 32);
     const std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
@@ -217,15 +178,9 @@ TEST(PeierlsLattice2D, UniformFieldFillsEveryPlaquetteEqually) {
 }
 
 TEST(PeierlsLattice2D, CyclotronOrbitAndLandauRevival) {
-    // B = 0.5, k0 = 1: radius k0/B = 2, period T = 2 pi / B ~ 12.57.
-    // Link phase theta_x = -B hx y_j is (by the plane-wave band
-    // E ~ (k + theta/h)^2/2) the Peierls form of A_x = +B y, so v rotates
-    // COUNTERCLOCKWISE at omega_c = B and a tangential launch at (x0, 0)
-    // with v = (0, k0) orbits the center (x0 - k0/B, 0). Launch at
-    // (2, 0): the orbit circles the ORIGIN -- antipode (-2, 0) at T/2,
-    // back at T. And not just in position: the equally spaced Landau
-    // ladder re-coheres the whole state (revival overlap), up to small
-    // lattice-band corrections.
+    // B = 0.5, k0 = 1: cyclotron radius k0/B = 2, period T = 2 pi / B ~ 12.57;
+    // launch at (2, 0) with v = (0, k0) circles the origin -- antipode (-2, 0)
+    // at T/2, back at T. The Landau ladder also re-coheres the whole state.
     const Grid3D g = plane_grid(12.0, 96, 12.0, 96);
     const std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     const double b = 0.5;
@@ -233,8 +188,8 @@ TEST(PeierlsLattice2D, CyclotronOrbitAndLandauRevival) {
     const double dt = 0.01;
     ses::PeierlsLattice2D prop{g, v, dt};
     prop.set_uniform_field(b);
-    // Packet with mechanical momentum +k0 in y: A_y = 0, and A_x = 0 on
-    // the launch row y = 0, so the plain plane-wave factor IS mechanical.
+    // On the launch row y = 0, A = 0, so the plain plane-wave factor IS the
+    // mechanical momentum +k0 in y.
     Field3D psi{g};
     for (int j = 0; j < g.y.n; ++j) {
         for (int i = 0; i < g.x.n; ++i) {
@@ -281,19 +236,17 @@ TEST(PeierlsLattice2D, CyclotronOrbitAndLandauRevival) {
         }
     }
     ov *= g.x.spacing() * g.y.spacing() * g.z.spacing();
-    EXPECT_GT(std::norm(ov), 0.8);  // the Landau ladder re-coheres
+    EXPECT_GT(std::norm(ov), 0.8);
 }
 
 TEST(PeierlsLattice2D, DoubleSlitCarriesTheSolenoidFlux) {
-    // The REAL experiment in miniature: packet flying +x, a high wall with
-    // two slits, the solenoid buried mid-wall between them. Phi = 0 gives
-    // a bright central fringe on the axis downstream; Phi = pi kills it;
-    // Phi = 2 pi restores it exactly (one flux quantum).
+    // Solenoid buried mid-wall: Phi = 0 gives a bright central fringe, Phi = pi
+    // kills it, Phi = 2 pi restores it (one flux quantum) -- the AB shift.
     const Grid3D g = plane_grid(24.0, 192, 16.0, 128);
     const double h = g.x.spacing();
     const double wall_lo = 0.0;
     const double wall_hi = 1.5;
-    const double sep = 4.0;    // slit centers at y = +-2
+    const double sep = 4.0;
     const double width = 1.2;
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     for (int j = 0; j < g.y.n; ++j) {
@@ -315,8 +268,7 @@ TEST(PeierlsLattice2D, DoubleSlitCarriesTheSolenoidFlux) {
         ses::PeierlsLattice2D prop{g, v, 0.01};
         prop.set_solenoid(phi, 0.5 * (wall_lo + wall_hi) + 0.25 * h, 0.0);
         Field3D psi = plane_packet(g, -12.0, 0.0, 4.0, 2.0);
-        prop.step(psi, 1200);  // t = 12: transit + downstream flight
-        // Average density in a small axis window well past the wall.
+        prop.step(psi, 1200);
         double sum = 0.0;
         int cnt = 0;
         for (int j = 0; j < g.y.n; ++j) {
@@ -343,13 +295,9 @@ TEST(PeierlsLattice2D, DoubleSlitCarriesTheSolenoidFlux) {
     EXPECT_NEAR(again, bright, 1e-6 * bright);
 }
 
-// RED: imaginary-time relaxation ON the lattice (same bond splitting with
-// cosh/sinh mixing, renormalized) plus the energy readout <H> -- the
-// ground-state preparers for the quantum-dot and quantum-corral scenes.
-// The killer feature over the FFT imaginary-time propagator: the LINK
-// PHASES ride along, so it can relax the ground state of a dot IN a
-// magnetic field -- the Fock-Darwin ground, E = Omega = sqrt(w0^2 + B^2/4)
-// (a.u.), which no B = 0 machinery can reach.
+// Imaginary-time relaxation on the lattice, whose LINK PHASES ride along, so it
+// finds a dot ground state IN a magnetic field: Fock-Darwin
+// E = Omega = sqrt(w0^2 + B^2/4), unreachable by B = 0 machinery.
 TEST(PeierlsLattice2D, RelaxFindsTheFockDarwinGround) {
     const Grid3D g = plane_grid(20.0, 128, 20.0, 128);
     const double w0 = 0.5;
@@ -365,7 +313,7 @@ TEST(PeierlsLattice2D, RelaxFindsTheFockDarwinGround) {
     }
     ses::PeierlsLattice2D prop{g, v, 0.02};
     prop.set_uniform_field(b);
-    Field3D psi = plane_packet(g, 1.0, -2.0, 3.0, 0.0);  // crooked seed
+    Field3D psi = plane_packet(g, 1.0, -2.0, 3.0, 0.0);
     prop.relax(psi, 3000);
     const double omega = std::sqrt(w0 * w0 + 0.25 * b * b);
     EXPECT_NEAR(prop.energy(psi), omega, 0.03 * omega);
@@ -373,11 +321,9 @@ TEST(PeierlsLattice2D, RelaxFindsTheFockDarwinGround) {
 }
 
 TEST(PeierlsLattice2D, RelaxConfinesTheCorralGround) {
-    // The 1993 IBM quantum corral: 48 atoms on a ring of radius 10 (each a
-    // Gaussian bump), B = 0. The relaxed ground state lives INSIDE the
-    // ring (a leaky circular box) with energy near the hard-wall J0 mode
-    // j01^2 / (2 R^2) -- generously bracketed, the fence is soft and the
-    // atoms are discrete.
+    // 1993 IBM quantum corral: 48 atoms on a ring of radius 10, B = 0. Ground
+    // state lives INSIDE the ring, energy near the hard-wall J0 mode
+    // j01^2 / (2 R^2) (j01 = 2.405); bracketed loosely (soft fence).
     const Grid3D g = plane_grid(16.0, 160, 16.0, 160);
     const double ring_r = 10.0;
     const double pi = std::numbers::pi;
@@ -416,13 +362,8 @@ TEST(PeierlsLattice2D, RelaxConfinesTheCorralGround) {
     EXPECT_LT(e, 2.0 * e_hard);
 }
 
-// RED: the Landau-level ladder operator, in the SAME Landau gauge as
-// set_uniform_field (A = (-B y, 0), anchored at y = 0):
-//     a(+-) = (pi_x -+ i pi_y) / sqrt(2 B),   pi = -i grad - A.
-// Contracts: a annihilates the relaxed lowest level (residual norm ~ 0);
-// a-dag climbs one rung, raising the lattice <H> by omega_c = B within the
-// O((kh)^2) lattice-band tolerance. Result is unnormalized (a|n> =
-// sqrt(n)|n-1>); the scene renormalizes for display.
+// Landau-level ladder operator in the set_uniform_field gauge A = (-B y, 0):
+//   a(+-) = (pi_x -+ i pi_y) / sqrt(2 B),  pi = -i grad - A;  a|n> = sqrt(n)|n-1>.
 TEST(PeierlsLattice2D, LandauLadderClimbsOneCyclotronQuantum) {
     const ses::Grid3D g{ses::Grid1D{-20.0, 20.0, 128},
                         ses::Grid1D{-20.0, 20.0, 128}, ses::Grid1D{0.0, 2.0, 1}};
@@ -431,7 +372,7 @@ TEST(PeierlsLattice2D, LandauLadderClimbsOneCyclotronQuantum) {
     ses::PeierlsLattice2D prop{g, zero, 0.01};
     prop.set_uniform_field(b);
 
-    // Relax to the lowest Landau level (magnetic length 1/sqrt(b) ~ 1.41).
+    // seed near the magnetic length 1/sqrt(b) ~ 1.41
     ses::Field3D psi{g};
     for (int j = 0; j < g.y.n; ++j) {
         const double y = g.y.coord(j);
@@ -445,41 +386,34 @@ TEST(PeierlsLattice2D, LandauLadderClimbsOneCyclotronQuantum) {
     ses::normalize(psi);
     const double e0 = prop.energy(psi);
 
-    // a annihilates the LLL: the residual is a small lattice artifact.
+    // a annihilates the LLL (residual = lattice artifact).
     ses::Field3D down = ses::landau_ladder(psi, b, false);
     EXPECT_LT(ses::norm_sq(down), 0.05);
 
-    // a-dag climbs to n = 1: <H> rises by omega_c = B (lattice-honest band).
+    // a-dag climbs to n = 1: <H> rises by omega_c = B (lattice band tol).
     ses::Field3D up = ses::landau_ladder(psi, b, true);
     ses::normalize(up);
     const double e1 = prop.energy(up);
     EXPECT_NEAR((e1 - e0) / b, 1.0, 0.15);
 
-    // Second rung: another +B.
     ses::Field3D up2 = ses::landau_ladder(up, b, true);
     ses::normalize(up2);
     const double e2 = prop.energy(up2);
     EXPECT_NEAR((e2 - e1) / b, 1.0, 0.2);
 }
 
-// RED: the continuous-beam mechanism of the double-slit scene: a coherent
-// on-shell source (psi += A src e^{-i w t} dt per step, w = the lattice
-// band energy of k0) feeding an OPEN box (absorber frame each step, no
-// renormalization) must reach a STEADY state -- injected flux balances
-// absorbed flux; the norm saturates instead of growing without bound.
-// The double-slit stage fires ONE electron per shot (user order): a
-// normalized packet, per-step edge absorbers, NO injection and NO
-// renormalization -- the norm can only fall (leaked flux = the electron
-// leaving), and the screen column integrates the arrivals of the shot.
+// Single-shot drain: a normalized packet, edge absorbers, NO injection, NO
+// renorm -- the norm can only fall (the electron leaving) and the screen column
+// integrates the arrivals. (The scene runs the continuous-beam version.)
 TEST(PeierlsLattice2D, SinglePacketDrainsThroughTheOpenBoundary) {
     const ses::Grid3D g{ses::Grid1D{-30.0, 30.0, 128},
                         ses::Grid1D{-15.0, 15.0, 64}, ses::Grid1D{0.0, 2.0, 1}};
     const std::vector<double> zero(static_cast<std::size_t>(g.size()), 0.0);
     const double dt = 0.01;
     ses::PeierlsLattice2D prop{g, zero, dt};
-    // Gentle quadratic CAP, exp(-W dt) per step with W = W0 (1 - d/width)^2:
-    // the cos^2 display mask is FAR too stiff here (-ln m / dt is Ha-scale
-    // at the ramp head) and reflects ~30% of a slow k0 = 1 packet back in.
+    // Quadratic CAP W = W0 (1 - d/width)^2, absorb exp(-W dt) per step: the
+    // cos^2 display mask is too stiff here (reflects ~30% of a slow k0 = 1
+    // packet back in).
     const double w0 = 4.0;
     const double width = 6.0;
     std::vector<double> mask(static_cast<std::size_t>(g.size()));
@@ -502,7 +436,7 @@ TEST(PeierlsLattice2D, SinglePacketDrainsThroughTheOpenBoundary) {
                 std::exp(-w * dt);
         }
     }
-    const double k0 = 1.0;  // the scene's long-wavelength shot
+    const double k0 = 1.0;
     ses::Field3D psi{g};
     for (int j = 0; j < g.y.n; ++j) {
         const double y = g.y.coord(j);
@@ -519,7 +453,7 @@ TEST(PeierlsLattice2D, SinglePacketDrainsThroughTheOpenBoundary) {
     for (auto& c : psi.data()) {
         c /= std::sqrt(n0);
     }
-    const int i_scr = 102;  // x ~ +18 (the screen column)
+    const int i_scr = 102;  // x ~ +18, the screen column
     double arrivals = 0.0;
     double arrivals_early = 0.0;
     auto run = [&](int nsteps) {
@@ -533,28 +467,22 @@ TEST(PeierlsLattice2D, SinglePacketDrainsThroughTheOpenBoundary) {
             }
         }
     };
-    // Launch -18 -> screen +18 -> +x absorber at v_g = sin(k0 h)/h ~ 0.96.
+    // v_g = sin(k0 h)/h ~ 0.96: launch -18 -> screen +18 -> +x absorber.
     run(1000);
     arrivals_early = arrivals;
     const double n_mid = ses::norm_sq(psi);
     run(5000);
     const double n_late = ses::norm_sq(psi);
-    EXPECT_LE(n_mid, 1.0 + 1e-9);    // no injection: the norm only falls...
+    EXPECT_LE(n_mid, 1.0 + 1e-9);
     EXPECT_LE(n_late, n_mid + 1e-9);
-    EXPECT_LT(n_late, 0.1);          // ...and the electron LEFT the stage
-    // The screen integrated the shot (vs the pre-arrival tail).
+    EXPECT_LT(n_late, 0.1);
     EXPECT_GT(arrivals, 100.0 * std::max(arrivals_early, 1e-30));
     EXPECT_GT(arrivals, 1e-4);
 }
 
-// Measured on the scene grid (B = 0.4, 256^2, +-30): rungs hold +B within
-// ~5% up to n ~ 13, then the central-difference ladder pushes the state
-// into the lattice band top and the "rung" explodes (12x by n = 21, then
-// NEGATIVE past the band fold at n ~ 27); the box never matters (edge
-// weight < 1e-25 throughout). The scene therefore guards each jump with a
-// measurement-based rung check (the 1D ladder_cap rule): <H> must move by
-// omega_c = B within 15%, else the jump is REFUSED. This contract climbs
-// through the director and pins the refusal into the lattice-band window.
+// The central-difference ladder explodes near the lattice band top, so the
+// scene guards each jump with a measurement-based rung check (the 1D ladder_cap
+// rule): <H> must move by omega_c = B within 15%, else REFUSED.
 TEST(Landau2DDirector, LadderRefusesPastTheLatticeBand) {
     ses_shell::Landau2DDirector d;
     ses_shell::LandauApi* api = d.landau();
@@ -563,21 +491,16 @@ TEST(Landau2DDirector, LadderRefusesPastTheLatticeBand) {
     while (climbed < 40 && api->ladder(true)) {
         ++climbed;
     }
-    // The measured band ceiling (E ~ 0.30/h^2) scales as h^-2, so the cap
-    // tracks the scene grid: 512^2 measures 25 rungs from the coherent
-    // boot (each a-dag adds ~2B there) -- never immediately, never
-    // unbounded.
+    // The band ceiling scales as h^-2, so the rung count tracks the grid:
+    // never immediately, never unbounded.
     EXPECT_GE(climbed, 15);
     EXPECT_LE(climbed, 35);
-    // And the climb was real: the Landau index followed the rungs.
+    // the Landau index followed the rungs
     const double top_n = api->mean_n();
     EXPECT_GT(top_n, 0.6 * climbed);
-    // Down on THIS scene's states is honestly refused (measured): the
-    // coherent displacement (|alpha|^2 ~ 3) dominates the few added
-    // quanta, so `a` acts near-diagonally (a|alpha> = alpha|alpha>) and
-    // removes no clean quantum -- the energy drop is ~0 and the floor
-    // guard strikes at once. The contract is TERMINATION + monotonicity,
-    // not unwinding.
+    // Descending is refused on these coherent-displaced states: a|alpha> ~
+    // alpha|alpha> removes no clean quantum, the energy drop is ~0, the floor
+    // guard strikes at once. Contract = TERMINATION + monotonicity, not unwinding.
     int descended = 0;
     while (descended < 40 && api->ladder(false)) {
         ++descended;

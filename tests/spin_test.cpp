@@ -1,9 +1,4 @@
-// RED: the pinned-spin contracts. Larmor: +x under B_z precesses at
-// EXACTLY omega = B (z frozen, norm round-off). Rabi: resonant circular
-// drive flips z fully at Omega_R = b1. Measurement: Born collapse onto
-// +-n with complementary probabilities and an EIGENSTATE afterward.
-// Echo: a detuned ensemble fans out, the pi pulse time-reverses the fan,
-// the mean transverse spin refocuses at 2 tau.
+// RED: pinned-spin contracts.
 
 #include <gtest/gtest.h>
 
@@ -31,7 +26,7 @@ TEST(Spin, LarmorPrecessesAtExactlyB) {
     ses::Spinor s = plus_x();
     const double b = 0.8;
     const double dt = 0.01;
-    const int n = 500;  // t = 5: phase = 4 rad
+    const int n = 500;
     for (int k = 0; k < n; ++k) {
         ses::spin_step(s, 0.0, 0.0, b, dt);
     }
@@ -39,8 +34,7 @@ TEST(Spin, LarmorPrecessesAtExactlyB) {
     double y = 0.0;
     double z = 0.0;
     ses::bloch_vector(s, &x, &y, &z);
-    // <sigma_z> frozen, the transverse pair rotates by +b t CCW about
-    // +B (the U = e^{-i theta sigma/2} convention, pinned HERE).
+    // sign convention: U = e^{-i theta sigma/2}, phase +b t CCW about +B.
     EXPECT_NEAR(z, 0.0, 1e-12);
     EXPECT_NEAR(std::hypot(x, y), 1.0, 1e-12);
     const double phase = std::atan2(y, x);
@@ -60,7 +54,7 @@ TEST(Spin, ResonantCircularDriveRabiFlips) {
     const int n = static_cast<int>(kPi / b1 / dt + 0.5);  // half Rabi cycle
     for (int k = 0; k < n; ++k) {
         const double t = k * dt;
-        // Lab-frame circular drive co-rotating with the +B CCW sense.
+        // lab-frame circular drive co-rotating with +B (CCW).
         const double bx = b1 * std::cos(b0 * t);
         const double by = b1 * std::sin(b0 * t);
         ses::spin_step(s, bx, by, b0, dt);
@@ -75,15 +69,13 @@ TEST(Spin, ResonantCircularDriveRabiFlips) {
 TEST(Spin, MeasurementCollapsesOntoTheAxis) {
     const double r = 1.0 / std::sqrt(3.0);
     ses::Spinor s = plus_x();
-    // Along +x the state IS |+x>: certainty.
     EXPECT_EQ(ses::spin_measure(s, 1.0, 0.0, 0.0, 0.5), +1);
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
     ses::bloch_vector(s, &x, &y, &z);
     EXPECT_NEAR(x, 1.0, 1e-12);
-    // Along a tilted axis both outcomes fire per Born; the collapsed
-    // state is the EIGENSTATE (<sigma . n> = +-1).
+    // tilted axis: Born picks +-, collapsed state = eigenstate (<sigma.n> = +-1)
     ses::Spinor a = plus_x();
     const int oa = ses::spin_measure(a, r, r, r, 0.0);   // u=0 -> plus
     EXPECT_EQ(oa, +1);
@@ -105,7 +97,7 @@ TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
     std::vector<ses::Spinor> ens(kSpins);
     std::vector<double> dw(kSpins);
     for (int i = 0; i < kSpins; ++i) {
-        ens[static_cast<std::size_t>(i)] = plus_x();  // after a pi/2
+        ens[static_cast<std::size_t>(i)] = plus_x();
         dw[static_cast<std::size_t>(i)] = det(rng);
     }
     auto mxy = [&] {
@@ -129,9 +121,9 @@ TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
         }
     }
     const double fanned = mxy();
-    EXPECT_LT(fanned, 0.4);  // the fan opened (dephased)
+    EXPECT_LT(fanned, 0.4);
     for (ses::Spinor& s : ens) {
-        ses::spin_rotate(s, 1.0, 0.0, 0.0, kPi);  // the echo pi pulse
+        ses::spin_rotate(s, 1.0, 0.0, 0.0, kPi);  // echo pi pulse
     }
     for (int k = 0; k < n_tau; ++k) {
         for (int i = 0; i < kSpins; ++i) {
@@ -139,7 +131,7 @@ TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
                            dw[static_cast<std::size_t>(i)], dt);
         }
     }
-    EXPECT_GT(mxy(), 0.999);  // the echo: perfect refocus at 2 tau
+    EXPECT_GT(mxy(), 0.999);  // refocus at 2 tau
 }
 
 }  // namespace

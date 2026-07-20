@@ -1,14 +1,5 @@
-// RED: 3D dynamics -- the split-operator propagator and imaginary-time
-// relaxation lifted to Field3D.
-//
-// Oracles:
-//  - free ANISOTROPIC packet: per-axis center drift r0 + k0 t and per-axis
-//    dispersion sigma_i(t) = sigma_i sqrt(1 + (t/(2 sigma_i^2))^2). V = 0
-//    makes Fourier propagation time-exact, so dt can be large (2 steps).
-//    Distinct per-axis sigma/k0 catch any axis transposition.
-//  - 3D isotropic harmonic ground state via imaginary time:
-//    E0 = 3 omega / 2, per-axis sigma = 1/sqrt(2 omega), from a deliberately
-//    wrong (offset, isotropic-width) initial packet.
+// RED: split-operator propagator + imaginary-time relaxation on Field3D.
+// Distinct per-axis sigma0/k0 in the free-packet test catch axis transposition.
 
 
 #include <gtest/gtest.h>
@@ -45,7 +36,7 @@ TEST(SplitOperator3, FreePacketDispersesAnisotropically) {
     const std::vector<double> v(static_cast<std::size_t>(grid.size()), 0.0);
     const double dt = 1.0;  // large: V=0 is time-exact
     ses::SplitOperator3D prop{grid, v, dt};
-    prop.step(psi, 2);  // T = 2
+    prop.step(psi, 2);
 
     EXPECT_NEAR(ses::norm_sq(psi), 1.0, 1e-12);
 
@@ -71,7 +62,6 @@ TEST(SplitOperator3, FreePacketDispersesAnisotropically) {
 }
 
 TEST(ImaginaryTime3, FindsIsotropicHarmonicGroundState) {
-    // omega = 2: E0 = 3 omega/2 = 3.0, per-axis sigma = 1/sqrt(2 omega) = 0.5.
     const double omega = 2.0;
     const Grid3D grid = cube(-4.0, 4.0, 32);
     const std::vector<double> v = ses::harmonic_potential(grid, omega, Vec3d{});

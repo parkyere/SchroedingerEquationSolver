@@ -1,29 +1,11 @@
-// RED: the 1D periodic lattice (solid-state) core.
+// RED: 1D periodic lattice (Bloch) core.
 //
-// Potential: V(x) = V0 sin^2(kL x) -- SMOOTH, so the FFT split-operator
-// keeps spectral accuracy (the user's own call: Kronig-Penney's kinks
-// would Gibbs-ring in the plane-wave basis). This is exactly the optical-
-// lattice / Mathieu problem, lattice constant a = pi / kL, reciprocal
-// vector G = 2 kL.
+// V(x) = V0 sin^2(kL x): smooth keeps the FFT split-operator spectral
+// (user's numerics call; Kronig-Penney kinks would Gibbs-ring). a = pi/kL,
+// reciprocal G = 2 kL.
 //
-// Band structure: V0 sin^2 = V0/2 - (V0/4)(e^{i2kLx} + e^{-i2kLx}) has a
-// SINGLE harmonic, so the central equation in the plane-wave basis
-// {q + m G} is symmetric TRIDIAGONAL: diagonal (q + m G)^2/2 + V0/2,
-// off-diagonal -V0/4. lattice_bands diagonalizes it exactly.
-//   - V0 = 0: the folded free parabola.
-//   - small V0: first gap at the zone edge = V0/2 (first-order PT: twice
-//     the |G| Fourier amplitude V0/4).
-//
-// Bloch oscillations: a uniform force F breaks the periodic box as a
-// potential -F x, but enters EXACTLY as the comoving gauge A(t) = -F t:
-// the kinetic phase e^{-i (k - A)^2 dt / 2} is rebuilt each step with the
-// MIDPOINT A (midpoint is exact for linear A). Contracts:
-//   - V = 0: <x>(t) = x0 + k0 t + F t^2/2 EXACTLY (Ehrenfest for a linear
-//     potential; validates the gauge to round-off).
-//   - V = lattice: the packet does NOT run away -- quasimomentum sweeps
-//     the zone, q(t) = q0 + F t, and <x> oscillates with the Bloch period
-//     T_B = G / F, returning near its start while a free particle would
-//     have fallen F T_B^2 / 2 away.
+// Tilted propagator: force F enters as comoving gauge A(t) = -F t, kinetic
+// phase rebuilt each step with the midpoint A (exact for linear A -> round-off).
 
 #include <gtest/gtest.h>
 
@@ -42,11 +24,10 @@ namespace {
 
 TEST(LatticeBands, FreeLimitFoldsTheParabola) {
     const double kl = 1.0;
-    const double g2 = 2.0 * kl;  // reciprocal vector
+    const double g2 = 2.0 * kl;
     for (const double q : {0.0, 0.3, 0.9}) {
         const std::vector<double> e = ses::lattice_bands(0.0, kl, q, 4);
         ASSERT_EQ(e.size(), 4u);
-        // Expected: (q + m G)^2 / 2 over m = ..., sorted ascending.
         std::vector<double> want;
         for (int m = -3; m <= 3; ++m) {
             const double k = q + m * g2;
@@ -66,7 +47,7 @@ TEST(LatticeBands, FirstGapAtTheZoneEdgeIsHalfV0) {
     const double v0 = 0.1;  // weak lattice: first-order PT regime
     const std::vector<double> e = ses::lattice_bands(v0, kl, kl, 2);
     EXPECT_NEAR(e[1] - e[0], 0.5 * v0, 0.1 * 0.5 * v0);
-    // And the bands are monotone across the half zone (no crossing).
+    // bands stay monotone across the half zone (no crossing)
     const std::vector<double> mid = ses::lattice_bands(v0, kl, 0.5 * kl, 2);
     EXPECT_LT(mid[0], e[0]);
     EXPECT_GT(mid[1], e[1]);
@@ -81,7 +62,7 @@ TEST(TiltedSplitOperator1D, FreeTiltIsExactlyUniformAcceleration) {
     const double k0 = 1.0;
     const double x0 = -20.0;
     ses::Field1D psi = ses::gaussian_wavepacket(g, x0, 3.0, k0);
-    const int steps = 1600;  // T = 8
+    const int steps = 1600;
     prop.step(psi, steps);
     double num = 0.0;
     double den = 0.0;
@@ -96,8 +77,7 @@ TEST(TiltedSplitOperator1D, FreeTiltIsExactlyUniformAcceleration) {
 }
 
 TEST(TiltedSplitOperator1D, BlochOscillationReturnsInsteadOfRunningAway) {
-    // 26 lattice periods (a = pi) in the periodic box; s = V0/E_R = 3
-    // (open gaps, negligible Zener at F a << gap^2 / bandwidth).
+    // depth s = V0/E_R = 3: open gaps, negligible Zener (F a << gap^2/bandwidth)
     const double kl = 1.0;
     const double a = std::numbers::pi / kl;
     const ses::Grid1D g{-13.0 * a, 13.0 * a, 2048};
@@ -108,10 +88,10 @@ TEST(TiltedSplitOperator1D, BlochOscillationReturnsInsteadOfRunningAway) {
         v[static_cast<std::size_t>(i)] = v0 * s * s;
     }
     const double f = 0.05;
-    const double t_b = 2.0 * kl / f;  // Bloch period G / F = 40
+    const double t_b = 2.0 * kl / f;  // Bloch period G/F
     const double dt = 0.01;
     ses::TiltedSplitOperator1D prop{g, v, dt, f};
-    // Broad packet at rest on a well minimum: ground band, q ~ 0.
+    // broad packet at a well minimum: ground band, q ~ 0
     ses::Field1D psi = ses::gaussian_wavepacket(g, 0.0, 6.0, 0.0);
     auto mean_x = [&] {
         double num = 0.0;
@@ -130,9 +110,9 @@ TEST(TiltedSplitOperator1D, BlochOscillationReturnsInsteadOfRunningAway) {
         prop.step(psi, std::min(50, steps - s));
         excursion = std::max(excursion, std::abs(mean_x() - x0));
     }
-    const double free_fall = 0.5 * f * t_b * t_b;  // = 40
-    EXPECT_LT(excursion, 0.15 * free_fall);  // never runs away
-    EXPECT_LT(std::abs(mean_x() - x0), 1.5);  // and RETURNS at T_B
+    const double free_fall = 0.5 * f * t_b * t_b;
+    EXPECT_LT(excursion, 0.15 * free_fall);
+    EXPECT_LT(std::abs(mean_x() - x0), 1.5);
 }
 
 }  // namespace

@@ -1,11 +1,4 @@
-// RED: specification for the FFT-bin -> physical-wavenumber mapping.
-//
-// For a periodic Grid1D of n points over length L = xmax - xmin, the FFT bin j
-// corresponds to wavenumber
-//     k_j = 2 pi j / L          for j = 0 .. n/2 - 1   (non-negative branch)
-//     k_j = 2 pi (j - n) / L    for j = n/2 .. n - 1   (negative branch)
-// (the NumPy fftfreq layout). Getting this wrong is THE classic split-operator
-// bug: the kinetic phase then scrambles high-frequency components.
+// FFT-bin -> physical wavenumber, NumPy fftfreq layout: k_j = 2pi j/L (j<n/2) else 2pi(j-n)/L.
 
 #include <gtest/gtest.h>
 
@@ -22,7 +15,6 @@ using ses::Grid1D;
 constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
 TEST(Wavenumbers, MatchesFftfreqLayout) {
-    // L = 8, n = 8  ->  dk = 2 pi / 8.
     const Grid1D g{0.0, 8.0, 8};
     const std::vector<double> k = ses::wavenumbers(g);
     ASSERT_EQ(k.size(), 8u);
@@ -37,11 +29,8 @@ TEST(Wavenumbers, MatchesFftfreqLayout) {
     EXPECT_DOUBLE_EQ(k[7], -dk);
 }
 
-// RED: n = 1 (a squashed axis, e.g. the 2D scenes' z) has ONE bin -- DC.
-// The `j < n/2` branch maps it to j - n = -1, giving the flat axis a
-// spurious k = -2 pi / L: every 3D energy readout on an (nx, ny, 1) grid
-// then carries a constant +k^2/2 offset (pi^2/2 for L = 2 -- exactly the
-// corral's phantom +4.9348).
+// n=1 squashed axis (2D scenes' z) must be DC, not the j-n=-1 branch:
+// spurious k=-2pi/L adds constant +k^2/2 to 3D energy (pi^2/2 at L=2 = corral phantom +4.9348).
 TEST(Wavenumbers, SingleBinAxisIsDc) {
     const Grid1D g{-1.0, 1.0, 1};
     const std::vector<double> k = ses::wavenumbers(g);
@@ -50,7 +39,6 @@ TEST(Wavenumbers, SingleBinAxisIsDc) {
 }
 
 TEST(Wavenumbers, SpacingIsIndependentOfOffset) {
-    // The mapping depends only on L and n, not on where the box sits.
     const Grid1D g{-13.0, -5.0, 8};  // same L = 8
     const std::vector<double> k = ses::wavenumbers(g);
     const double dk = kTwoPi / 8.0;

@@ -1,9 +1,4 @@
-// RED: specification for the complex field over a Grid3D.
-//
-// Same physics as Field1D, lifted: the discrete norm carries the CELL VOLUME
-//     ||psi||^2 = sum_ijk |psi_ijk|^2 * hx hy hz
-// and a product of three continuum-normalized 1D Gaussians must have unit
-// discrete norm.
+// RED spec: ||psi||^2 = sum_ijk |psi_ijk|^2 * hx hy hz
 
 #include <complex>
 
@@ -38,7 +33,7 @@ TEST(Field3D, TripleIndexMatchesFlatLayout) {
 }
 
 TEST(Field3D, NormIncludesCellVolume) {
-    // Constant psi = 1: sum = 16*8*4 ones * volume 0.125 = 64 exactly.
+    // psi=1: (16*8*4 cells) * (cell-vol 0.125) = 64 exact
     Field3D f{kSmall};
     for (int i = 0; i < f.size(); ++i) {
         f.data()[static_cast<std::size_t>(i)] = std::complex<double>{1.0, 0.0};
@@ -47,8 +42,7 @@ TEST(Field3D, NormIncludesCellVolume) {
 }
 
 TEST(Field3D, SeparableGaussianHasUnitNorm) {
-    // Product of three continuum-normalized 1D Gaussians (sigma = 1) on
-    // [-8,8)^3 with n = 32 (h = 0.5).
+    // Product of three continuum-normalized 1D Gaussians (sigma = 1).
     const Grid1D axis{-8.0, 8.0, 32};
     const Grid3D g{axis, axis, axis};
     Field3D f{g};

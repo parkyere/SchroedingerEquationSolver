@@ -1,19 +1,7 @@
 // RED: pick the resident eigenstate-atlas precision that fits GPU VRAM.
-//
-// The tracked manifold keeps every state buffer resident in complex fp32; at
-// 256^3 the full atlas (kNumStates x kBytesPerStateFp32, ~12.2 GB) overflows
-// an 8 GB card: the driver pages the surplus into system RAM (WDDM shared
-// memory) and the frame rate collapses. At startup the shell queries free
-// VRAM and, when the fp32 atlas would not fit, drops the buffers to fp16
-// (half the footprint).
-//
-// The DECISION is pure integer arithmetic (this function); the Vulkan
-// VK_EXT_memory_budget query that feeds it is the untested Humble-Object
-// shell (app/src/main.cpp). Oracles:
-//   - ample VRAM              -> Fp32, fits;
-//   - fp32 overflows, fp16 ok -> Fp16, fits;
-//   - even fp16 overflows     -> Fp16, but out_fits=false (caller warns);
-//   - unmeasurable budget     -> Fp32 (never silently degrade fidelity).
+// Overflowing fp32 pages into WDDM shared RAM -> framerate collapse, so fall to fp16.
+// Decision is pure integer arithmetic (this function); the VK_EXT_memory_budget
+// query that feeds it is the untested Humble-Object shell (app/src/main.cpp).
 
 
 #include <gtest/gtest.h>
@@ -27,7 +15,7 @@ namespace {
 using ses::choose_state_precision;
 using ses::GpuPrecision;
 
-// The real workload the shell will pass: the n<=6 manifold at 256^3.
+// Real workload: the n<=6 manifold at 256^3.
 constexpr int kNumStates = 91;
 constexpr std::int64_t kBytesPerStateFp32 = 134217728;  // 256^3 * 2 floats * 4 B
 constexpr std::int64_t kHeadroom = 512LL * 1024 * 1024;  // textures/fbo/working
@@ -51,8 +39,7 @@ TEST(ChooseStatePrecision, Fp32OverflowsButFp16Fits) {
 }
 
 TEST(ChooseStatePrecision, EvenFp16OverflowsStillPicksFp16AndFlags) {
-    // 4 GB card: even the 6.1 GB fp16 atlas will not fit -- pick the smallest
-    // footprint anyway and signal the caller to warn (it may reduce the box).
+    // 4 GB: even fp16 (~6.1 GB) overflows; pick smallest anyway, flag so caller can shrink the box.
     bool fits = true;
     EXPECT_EQ(choose_state_precision(4 * kGiB, kNumStates, kBytesPerStateFp32,
                                      kHeadroom, &fits),
@@ -61,22 +48,19 @@ TEST(ChooseStatePrecision, EvenFp16OverflowsStillPicksFp16AndFlags) {
 }
 
 TEST(ChooseStatePrecision, UnmeasurableBudgetDefaultsToFp32) {
-    // The shell passes kVramUnknown when VK_EXT_memory_budget is unavailable:
-    // do NOT silently downgrade physics fidelity on a budget we cannot
-    // measure.
+    // kVramUnknown = VK_EXT_memory_budget unavailable; do NOT downgrade fidelity on an unmeasurable budget.
     bool fits = false;
     EXPECT_EQ(choose_state_precision(ses::kVramUnknown, kNumStates,
                                      kBytesPerStateFp32, kHeadroom, &fits),
               GpuPrecision::Fp32);
     EXPECT_TRUE(fits);
-    // Any other negative (nonsense) free value is treated the same way.
+    // Any negative (nonsense) free value: same default.
     EXPECT_EQ(choose_state_precision(-5, kNumStates, kBytesPerStateFp32,
                                      kHeadroom, nullptr),
               GpuPrecision::Fp32);
 }
 
 TEST(ChooseStatePrecision, OutFitsPointerIsOptional) {
-    // The overload must be callable without the fits flag.
     EXPECT_EQ(choose_state_precision(16 * kGiB, kNumStates, kBytesPerStateFp32,
                                      kHeadroom),
               GpuPrecision::Fp32);

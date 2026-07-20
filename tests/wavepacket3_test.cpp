@@ -1,9 +1,4 @@
-// RED: 3D Gaussian wavepacket, per-axis observables, and 3D potential
-// builders.
-//
-// The packet is a product of three 1D packets with PER-AXIS width and
-// momentum (anisotropic on purpose: any axis mix-up in the factory, the
-// observables, or the k-mapping shows up as a wrong per-axis number).
+// RED: anisotropic on purpose -- axis mix-up surfaces as a wrong per-axis number.
 
 
 #include <gtest/gtest.h>
@@ -62,11 +57,11 @@ TEST(Observables3, MeanMomentumPerAxis) {
     EXPECT_NEAR(p.z, -1.0, 1e-8);
 }
 
-// Integer coordinates: [0,8)^3 with n=8 -> x_i = 0..7 exactly per axis.
+// n=8 on [0,8) -> integer grid points x=0..7; exact EXPECT_EQ below.
 const Grid3D kIntGrid = cube(0.0, 8.0, 8);
 
 TEST(HarmonicPotential3, ExactValuesAndMinimum) {
-    // omega = 2, center (1,2,3): V = 2 * |r - c|^2.
+    // V = omega * |r-c|^2.
     const std::vector<double> v = ses::harmonic_potential(kIntGrid, 2.0, Vec3d{1.0, 2.0, 3.0});
     ASSERT_EQ(v.size(), 512u);
     EXPECT_EQ(v[static_cast<std::size_t>(kIntGrid.flat(1, 2, 3))], 0.0);
@@ -77,7 +72,7 @@ TEST(HarmonicPotential3, ExactValuesAndMinimum) {
 }
 
 TEST(SoftCoulombPotential3, ExactValuesAndFiniteAtNucleus) {
-    // Z = 1, a = 1, nucleus (2,2,2): V = -1/sqrt(|r-c|^2 + 1).
+    // V = -Z/sqrt(|r-c|^2 + a^2).
     const std::vector<double> v =
         ses::soft_coulomb_potential(kIntGrid, 1.0, 1.0, Vec3d{2.0, 2.0, 2.0});
     EXPECT_DOUBLE_EQ(v[static_cast<std::size_t>(kIntGrid.flat(2, 2, 2))], -1.0);

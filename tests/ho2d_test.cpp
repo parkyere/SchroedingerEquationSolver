@@ -1,7 +1,4 @@
-// RED: the 2D circular HO ladder. a_R-dag on the isotropic ground adds
-// EXACTLY one omega quantum (and +1 angular momentum: the state grows a
-// node-free e^{i phi} vortex); a_R on the ground annihilates (norm ~ 0);
-// the up-then-down round trip lands back on the ground.
+// RED: 2D circular HO ladder -- a-dag adds one omega; a|0> = 0; up-down round-trips.
 
 #include <gtest/gtest.h>
 
@@ -60,17 +57,17 @@ TEST(Ho2dLadder, RaisesExactlyOneOmegaAndRoundTrips) {
 
     ses::Field3D up = ses::ho2d_ladder(ground, omega, true);
     const double n_up = ses::norm_sq(up);
-    ASSERT_GT(n_up, 0.5);  // a-dag on the ground has unit weight
+    ASSERT_GT(n_up, 0.5);
     ses::normalize(up);
     const double e1 = ses::mean_energy(up, v);
-    EXPECT_NEAR(e1 - e0, omega, 0.02 * omega);  // exactly one quantum
+    EXPECT_NEAR(e1 - e0, omega, 0.02 * omega);
 
     ses::Field3D down = ses::ho2d_ladder(up, omega, false);
     ses::normalize(down);
-    EXPECT_GT(overlap2(down, ground), 0.999);  // round trip
+    EXPECT_GT(overlap2(down, ground), 0.999);
 
     ses::Field3D dead = ses::ho2d_ladder(ground, omega, false);
-    EXPECT_LT(ses::norm_sq(dead), 1e-3);  // a|0> = 0: refuse signal
+    EXPECT_LT(ses::norm_sq(dead), 1e-3);  // a|0> = 0
 }
 
 }  // namespace

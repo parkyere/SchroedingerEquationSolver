@@ -1,14 +1,4 @@
-// RED: the license physics of the one-electron molecule scenes (fixed
-// nuclei, Born-Oppenheimer).
-//
-//  - H2+ (two bare protons): the ground sigma_g piles charge BETWEEN the
-//    nuclei, the deflated first excited sigma_u carries a nodal plane
-//    there; and the total energy E_elec(R) + 1/R is LOWER at the bond
-//    length than both at large R and than the isolated-atom limit on the
-//    same grid -- the chemical bond as one inequality chain.
-//  - Stripped benzene (the user's model): the FIRST electron of C6H6^41+
-//    over BARE nuclei -- regularized Coulomb only, Z_C = 6 / Z_H = 1,
-//    lattice-snapped centers, no soft cores anywhere.
+// RED: one-electron molecule scenes, fixed nuclei (Born-Oppenheimer).
 
 #include <gtest/gtest.h>
 
@@ -42,7 +32,6 @@ TEST(H2Plus, BondingAndAntibondingAndTheChemicalBond) {
     const Grid1D ax{-8.0, 8.0, 32};  // h = 0.5; centers land on grid points
     const Grid3D g{ax, ax, ax};
 
-    // R = 2 (near equilibrium): sigma_g then the deflated sigma_u.
     const std::vector<Vec3d> near = {{-1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
     const std::vector<double> v2 =
         ses::regularized_coulomb_potential(g, 1.0, near);
@@ -50,7 +39,6 @@ TEST(H2Plus, BondingAndAntibondingAndTheChemicalBond) {
                                               Vec3d{});
     const double e_g = relax_ground_energy(g, v2, ground, 600);
 
-    // Antisymmetric-in-x seed + deflation vs the ground: sigma_u.
     Field3D odd{g};
     const Field3D lobe_r = ses::gaussian_wavepacket(
         g, Vec3d{1.0, 0.0, 0.0}, Vec3d{1.2, 1.2, 1.2}, Vec3d{});
@@ -66,15 +54,13 @@ TEST(H2Plus, BondingAndAntibondingAndTheChemicalBond) {
     const double e_u = ses::mean_energy(odd, v2);
 
     EXPECT_LT(e_g, e_u) << "bonding below antibonding";
-    // sigma_u has a nodal plane between the nuclei; sigma_g piles charge
-    // there (the bond density).
+    // sigma_u nodal plane at midpoint; sigma_g piles charge there.
     const int mid = 16;  // coord 0
     const double den_g = std::norm(ground(mid, mid, mid));
     const double den_u = std::norm(odd(mid, mid, mid));
     EXPECT_LT(den_u, 0.05 * den_g);
 
-    // The bond: E_total(R = 2) undercuts both the stretched molecule and
-    // the isolated atom (same grid, same regularization -- honest ladder).
+    // same grid & regularization keeps the E_total comparison honest.
     const std::vector<Vec3d> far = {{-3.0, 0.0, 0.0}, {3.0, 0.0, 0.0}};
     const std::vector<double> v6 =
         ses::regularized_coulomb_potential(g, 1.0, far);
@@ -96,15 +82,8 @@ TEST(H2Plus, BondingAndAntibondingAndTheChemicalBond) {
 }
 
 TEST(StrippedBenzene, FirstElectronLivesOnTheCarbonsInADeepQuasiBand) {
-    // The user's model: ALL electrons stripped, then the FIRST electron of
-    // C6H6^41+ over the BARE nuclei -- regularized bare Coulomb (Z_C = 6,
-    // Z_H = 1), NO soft cores, no free parameters. Every center is snapped
-    // to a lattice point so each nucleus cell takes the honest analytic
-    // average. Contracts: the ground manifold is a DEEP carbon-core band
-    // (hydrogen-like on Z = 6, far below anything hydrogenic), the density
-    // sits on the carbons (not the hydrogens), and the lowest three states
-    // are quasi-degenerate (inter-carbon hopping at 1s(Z=6) size ~ e^{-16};
-    // the residual spread on this crude lattice is site-energy noise).
+    // First electron of C6H6^41+ over bare regularized Coulomb, no soft cores.
+    // Centers snapped to lattice so each nucleus cell takes the analytic average.
     const Grid1D ax{-8.0, 8.0, 32};
     const Grid3D g{ax, ax, ax};
     const double ring_r = 2.63;  // benzene C-C = 1.39 A in bohr
@@ -145,16 +124,13 @@ TEST(StrippedBenzene, FirstElectronLivesOnTheCarbonsInADeepQuasiBand) {
     const double ee0 = ses::mean_energy(e0, v);
     const double ee1 = ses::mean_energy(e1, v);
     const double ee2 = ses::mean_energy(e2, v);
-    // No ORDERING claim on purpose: within a quasi-degenerate band the
-    // deflated ITP finds orthogonal members in arbitrary energy order
-    // (measured: E0 = -23.886 vs E1 = -23.910, split 0.024 -- the band
-    // physics itself). The valid contracts are depth and band width.
+    // No ordering assertion: deflated ITP finds a quasi-degenerate band's
+    // members in arbitrary energy order (E0 = -23.886, E1 = -23.910, split 0.024).
     const double lo = std::min(ee0, std::min(ee1, ee2));
     const double hi = std::max(ee0, std::max(ee1, ee2));
     EXPECT_LT(hi, -5.0) << "Z = 6 core states, far below hydrogenic scales";
     EXPECT_LT(hi - lo, 1.5) << "a quasi-degenerate carbon-core band";
 
-    // The first electron's density belongs to the carbons.
     auto blob = [&](const Field3D& f, const Vec3d& p) {
         double acc = 0.0;
         for (int k = 0; k < g.z.n; ++k) {

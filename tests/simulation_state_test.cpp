@@ -1,7 +1,4 @@
-// RED: state injection and propagator access on the simulation session --
-// the two hooks the GPU/CPU sync choreography needs:
-// set_psi() lets the shell hand a GPU-evolved state back to the CPU session,
-// and propagator() exposes the tested phase tables without rebuilding them.
+// RED: set_psi()/propagator() -- the seams GPU/CPU sync needs: inject a GPU-evolved state, reuse phase tables.
 
 
 #include <gtest/gtest.h>

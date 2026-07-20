@@ -1,6 +1,5 @@
-// Degenerate / adversarial-input guards (REVIEW_BACKLOG latent-correctness).
-// These regimes the app does not currently produce, but the helpers must not
-// emit NaN / deref past-the-end / spin when handed them.
+// Degenerate / adversarial-input guards (REVIEW_BACKLOG latent-correctness):
+// inputs the app never produces, but helpers must not NaN / overrun / spin.
 
 
 #include <gtest/gtest.h>
@@ -27,7 +26,6 @@ Grid3D cube(int n) {
     return Grid3D{a, a, a};
 }
 
-// normalize() of a zero field must not divide by zero -> NaN.
 TEST(DegenerateGuards, NormalizeZeroFieldStaysFinite) {
     Field3D f{cube(8)};  // all zero
     ses::normalize(f);
@@ -39,7 +37,7 @@ TEST(DegenerateGuards, NormalizeZeroFieldStaysFinite) {
     }
 }
 
-// Every observable divides by the total weight -> 0/0 on a zero field.
+// every observable divides by total weight -> 0/0 on a zero field.
 TEST(DegenerateGuards, Observables3ZeroFieldFinite) {
     const Grid3D g = cube(8);
     const Field3D f{g};  // all zero
@@ -63,8 +61,7 @@ TEST(DegenerateGuards, Observables1ZeroFieldFinite) {
     EXPECT_TRUE(std::isfinite(ses::mean_energy(f, v)));
 }
 
-// A single occupied cell: <x^2> - <x>^2 rounds to a tiny negative -> the
-// variance clamp must keep sigma real (not NaN) and non-negative.
+// single cell: <x^2>-<x>^2 rounds tiny-negative; clamp must keep sigma real, >=0.
 TEST(DegenerateGuards, SigmaPositionSingleCellNonNegative) {
     const Grid3D g = cube(8);
     Field3D f{g};
@@ -76,8 +73,7 @@ TEST(DegenerateGuards, SigmaPositionSingleCellNonNegative) {
     }
 }
 
-// marching_cubes_at_fraction: *max_element(end()) is UB on an empty field,
-// and a non-positive peak has no isosurface.
+// *max_element(end()) is UB on empty; a non-positive peak has no isosurface.
 TEST(DegenerateGuards, MarchingCubesEmptyReturnsEmpty) {
     const Grid3D g = cube(8);
     const ses::Mesh m = ses::marching_cubes_at_fraction({}, g, 0.25);
@@ -91,13 +87,12 @@ TEST(DegenerateGuards, MarchingCubesZeroFieldReturnsEmpty) {
     EXPECT_TRUE(m.vertices.empty());
 }
 
-// A non-power-of-two length must fail loudly (not spin / garbage under NDEBUG).
+// non-power-of-two must throw, not spin / garbage under NDEBUG.
 TEST(DegenerateGuards, FftNonPowerOfTwoThrows) {
     std::vector<std::complex<double>> v48(48);
     EXPECT_THROW(ses::fft(v48), std::invalid_argument);
     std::vector<std::complex<double>> v3(3);
     EXPECT_THROW(ses::fft(v3), std::invalid_argument);
-    // Powers of two still fine.
     std::vector<std::complex<double>> v16(16);
     EXPECT_NO_THROW(ses::fft(v16));
 }

@@ -1,8 +1,6 @@
-// RED: "Real time" must restore x1 pacing (playback contract).
-// Repro: slider x16 -> key 1 ("Real time (1)") -> scene keeps running x16
-// forever: set_real_time never touched time_scale_ (1D/2D overrides are
-// no-ops, base only flips stepping_). Contract: after set_real_time(),
-// time_scale() == 1 on EVERY director.
+// RED: set_real_time() must restore time_scale()==1 on every director family.
+// Root cause: set_real_time never touched time_scale_ (1D/2D overrides no-ops,
+// base only flips stepping_) -> slider x16 stayed sticky.
 
 #include <gtest/gtest.h>
 
@@ -11,7 +9,7 @@ import ses.scenario.doubleslit2d_director;
 
 namespace {
 
-// The user's repro family: 1D scenes, where set_real_time was a pure no-op.
+// 1D family: set_real_time was a pure no-op here (override did nothing).
 TEST(TimeScaleRealTime, Line1dFamilyRestoresUnitScale) {
     ses_shell::Tunneling1DDirector d;
     d.set_time_scale(16);

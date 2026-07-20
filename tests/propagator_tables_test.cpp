@@ -1,9 +1,5 @@
-// RED: read access to the split-operator phase tables, so the GPU engine
-// consumes the TESTED tables instead of re-deriving them,
-// plus dt access on the simulation session for the same reason.
-//
-// Oracles: table entries equal the defining formulas evaluated through the
-// same public building blocks (wavenumbers, potential), bitwise.
+// RED: expose phase tables + dt so the GPU engine consumes tested tables.
+// Oracle: entries == defining formulas via same public blocks (wavenumbers, potential), bitwise.
 
 
 #include <gtest/gtest.h>

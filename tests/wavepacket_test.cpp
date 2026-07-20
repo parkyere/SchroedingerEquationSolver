@@ -1,15 +1,6 @@
-// RED: specification for the Gaussian wavepacket factory and the observables
-// used to interrogate it.
-//
-// Physics (atomic units, docs/ARCHITECTURE.md):
+// RED: Gaussian wavepacket factory + observables spec.
+// Atomic units (docs/ARCHITECTURE.md):
 //     psi(x) = (2 pi s^2)^(-1/4) exp(-(x-x0)^2 / (4 s^2)) exp(i k0 x)
-// - |psi|^2 is Gaussian with mean x0 and standard deviation s;
-// - the exp(i k0 x) phase carries mean momentum <p> = k0 (in the momentum
-//   representation the packet is centered at k0);
-// - the state is normalized.
-//
-// Observables must be scale-invariant (they divide by the norm), so they work
-// on unnormalized fields too.
 
 #include <complex>
 
@@ -26,7 +17,7 @@ namespace {
 using ses::Field1D;
 using ses::Grid1D;
 
-const Grid1D kGrid{-16.0, 16.0, 256};  // h = 0.125, tails ~ e^-36 at the walls
+const Grid1D kGrid{-16.0, 16.0, 256};  // tails ~ e^-36 at the walls
 
 TEST(GaussianWavepacket, IsNormalized) {
     const Field1D psi = ses::gaussian_wavepacket(kGrid, 2.0, 1.5, 3.0);
@@ -34,7 +25,6 @@ TEST(GaussianWavepacket, IsNormalized) {
 }
 
 TEST(GaussianWavepacket, PhaseCarriesThePlaneWave) {
-    // psi(x) * e^{-i k0 x} must be real and non-negative everywhere.
     const double k0 = 3.0;
     const Field1D psi = ses::gaussian_wavepacket(kGrid, 2.0, 1.5, k0);
     for (int i = 0; i < psi.size(); ++i) {
@@ -72,7 +62,7 @@ TEST(Observables, MeanMomentumOfPacketIsK0) {
 TEST(Observables, AreScaleInvariant) {
     Field1D psi = ses::gaussian_wavepacket(kGrid, -1.0, 2.0, 1.0);
     for (int i = 0; i < psi.size(); ++i) {
-        psi[i] = 7.0 * psi[i];  // break normalization on purpose
+        psi[i] = 7.0 * psi[i];
     }
     EXPECT_NEAR(ses::mean_position(psi), -1.0, 1e-10);
     EXPECT_NEAR(ses::sigma_x(psi), 2.0, 1e-10);

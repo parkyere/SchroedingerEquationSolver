@@ -1,7 +1,4 @@
-// Probability current / Bohmian velocity + streakline fade (ses.flow).
-// The current's handedness is the physical anchor: e^{+i phi} (m=+1) must
-// circulate counterclockwise about z -- the same convention the L_z
-// measurement labels +m (ses.measurement).
+// Handedness: e^{+i phi} (m=+1) circulates CCW about +z, matching L_z = +m (ses.measurement).
 
 #include <complex>
 
@@ -14,40 +11,36 @@ namespace {
 
 using ses::Vec3d;
 
-// Plane wave psi = e^{i k x}: d_x psi = i k psi, so
-// j = Im(conj(psi) i k psi) = k |psi|^2. At x = 0 (psi = 1): j_x = k.
+// Plane wave e^{ikx}: j = k|psi|^2, so j_x = k at psi = 1.
 TEST(Flow, PlaneWaveCurrentIsKTimesDensity) {
     const double k = 2.0;
     const std::complex<double> psi{1.0, 0.0};
-    const std::complex<double> dx{0.0, k};  // i k
+    const std::complex<double> dx{0.0, k};
     const Vec3d j = ses::probability_current(psi, dx, {0.0, 0.0}, {0.0, 0.0});
     EXPECT_NEAR(j.x, k, 1e-12);
     EXPECT_NEAR(j.y, 0.0, 1e-12);
     EXPECT_NEAR(j.z, 0.0, 1e-12);
 }
 
-// m = +1 ring psi ~ x + i y (~ e^{i phi}): at (x=1, y=0) the current must
-// point +y -- counterclockwise about +z, the right-hand sense of L_z = +hbar.
-// grad(x + i y) = (1, i, 0).
+// m = +1 ring psi ~ x + i y: grad = (1, i, 0); at (1,0) current -> +y (CCW, L_z > 0).
 TEST(Flow, RingStateM1CirculatesCounterclockwise) {
-    const std::complex<double> psi{1.0, 0.0};  // value at (1, 0)
+    const std::complex<double> psi{1.0, 0.0};
     const std::complex<double> dx{1.0, 0.0};
     const std::complex<double> dy{0.0, 1.0};
     const Vec3d j = ses::probability_current(psi, dx, dy, {0.0, 0.0});
     EXPECT_NEAR(j.x, 0.0, 1e-12);
-    EXPECT_GT(j.y, 0.0);  // +y at +x == counterclockwise == L_z > 0
+    EXPECT_GT(j.y, 0.0);
 }
 
-// The conjugate m = -1 ring (x - i y) must circulate the OTHER way (-y at +x).
+// m = -1 ring (x - i y): grad = (1, -i, 0); at (1,0) current -> -y (CW, L_z < 0).
 TEST(Flow, RingStateMinus1CirculatesClockwise) {
     const std::complex<double> psi{1.0, 0.0};
     const std::complex<double> dx{1.0, 0.0};
-    const std::complex<double> dy{0.0, -1.0};  // grad(x - i y) = (1, -i, 0)
+    const std::complex<double> dy{0.0, -1.0};
     const Vec3d j = ses::probability_current(psi, dx, dy, {0.0, 0.0});
-    EXPECT_LT(j.y, 0.0);  // -y at +x == clockwise == L_z < 0
+    EXPECT_LT(j.y, 0.0);
 }
 
-// A real (standing-wave) state carries no current, regardless of its gradient.
 TEST(Flow, RealStateHasNoCurrent) {
     const std::complex<double> psi{0.7, 0.0};
     const std::complex<double> dx{-0.3, 0.0};
@@ -59,7 +52,7 @@ TEST(Flow, RealStateHasNoCurrent) {
     EXPECT_NEAR(j.z, 0.0, 1e-15);
 }
 
-// v = j / rho; at a node (rho -> 0) it must stay finite (guarded), not blow up.
+// v = j/rho; guarded to 0 at a node (rho -> 0).
 TEST(Flow, BohmianVelocityGuardsNodes) {
     const std::complex<double> zero{0.0, 0.0};
     const std::complex<double> dx{5.0, 5.0};
@@ -69,7 +62,6 @@ TEST(Flow, BohmianVelocityGuardsNodes) {
     EXPECT_EQ(v.z, 0.0);
 }
 
-// Trail fade: tail transparent, head opaque, monotone in between.
 TEST(Flow, TrailFadeMonotoneTailToHead) {
     EXPECT_NEAR(ses::trail_fade(0, 40), 0.0, 1e-12);
     EXPECT_NEAR(ses::trail_fade(39, 40), 1.0, 1e-12);

@@ -1,16 +1,6 @@
-// RED: exact, unitary rotation of a 3D field about the z-axis.
-// The paramagnetic term (B/2) L_z of the magnetic Hamiltonian is the
-// generator of z-rotations, so evolving psi under it is a rigid rotation --
-// but applied to the ACTUAL wavefunction, not just the display. Done by the
-// three-shear Fourier method (each shear is a per-line Fourier phase ramp),
-// which is information-preserving: exactly norm-conserving, no interpolation
-// blur, valid for |theta| < pi.
-//
-// Oracles:
-//  - norm is conserved to machine precision (each shear is unitary);
-//  - an off-axis blob's mean position rotates: <x>,<y> -> R(theta);
-//  - a z-symmetric field is invariant;
-//  - composition R(a) . R(b) == R(a+b).
+// rotate_z / rotate_axis: exact unitary rotation (three-shear), |theta| < pi.
+// WHY: rotate_z IS the (B/2) L_z paramagnetic evolution acting on the real
+// wavefunction (physics-first), not a display-only rotation.
 
 
 #include <gtest/gtest.h>
@@ -34,7 +24,6 @@ Grid3D cube(double half, int n) {
     return Grid3D{a, a, a};
 }
 
-// A real Gaussian blob centered at (x0, y0, 0).
 Field3D blob(const Grid3D& g, double x0, double y0, double sigma) {
     Field3D f{g};
     for (int k = 0; k < g.z.n; ++k) {
@@ -74,7 +63,6 @@ TEST(RotateZ, MeanPositionRotates) {
 
 TEST(RotateZ, ZSymmetricFieldIsInvariant) {
     const Grid3D g = cube(16.0, 64);
-    // Depends only on rho and z -> invariant under z-rotation.
     Field3D f{g};
     for (int k = 0; k < g.z.n; ++k) {
         for (int j = 0; j < g.y.n; ++j) {
@@ -96,10 +84,6 @@ TEST(RotateZ, ZSymmetricFieldIsInvariant) {
     EXPECT_LT(max_diff, 2e-3);
 }
 
-// rotate_axis generalizes to rotation about any coordinate axis (for a
-// magnetic field along x or y, not just z): three-shear in the plane
-// perpendicular to `axis`. rotate_axis(_, 2, _) must equal rotate_z.
-
 TEST(RotateAxis, AgreesWithRotateZForAxisTwo) {
     const Grid3D g = cube(16.0, 64);
     Field3D a = blob(g, 3.0, 1.0, 1.6);
@@ -115,7 +99,7 @@ TEST(RotateAxis, AgreesWithRotateZForAxisTwo) {
 
 TEST(RotateAxis, AboutXRotatesInTheYZPlane) {
     const Grid3D g = cube(16.0, 64);
-    Field3D f = blob(g, 0.0, 4.0, 1.5);  // on the +y axis
+    Field3D f = blob(g, 0.0, 4.0, 1.5);
     const double theta = 0.6;
     const double n0 = ses::norm_sq(f);
     ses::rotate_axis(f, 0, theta);
@@ -132,7 +116,6 @@ TEST(RotateAxis, AboutYConservesNormAndLeavesAYSymmetricFieldInvariant) {
     for (int k = 0; k < g.z.n; ++k) {
         for (int j = 0; j < g.y.n; ++j) {
             for (int i = 0; i < g.x.n; ++i) {
-                // depends only on the distance from the y-axis and on y
                 const double s2 =
                     g.x.coord(i) * g.x.coord(i) + g.z.coord(k) * g.z.coord(k);
                 const double y = g.y.coord(j);

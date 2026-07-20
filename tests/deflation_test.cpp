@@ -1,18 +1,5 @@
 // RED: excited states via deflated imaginary-time relaxation.
-// e^{-H dtau} cannot remove components along already-found lower
-// eigenstates by decay alone once they dominate -- so each step PROJECTS
-// them out (Gram-Schmidt deflation), and the flow converges to the ground
-// state of the orthogonal complement: the next excited state.
-//
-// Building block: the discrete inner product <a|b> = sum conj(a_i) b_i dV.
-//
-// Oracles:
-//  - inner_product: exact hand values, conjugate symmetry, <a|a> == norm_sq,
-//    even/odd Gaussian orthogonality;
-//  - 3D harmonic (w = 1): ground E0 = 3/2; the deflated relaxation from a
-//    displaced (mixed-parity) guess must land at the first excited level
-//    E1 = 5/2, orthogonal to the ground state -- while the SAME guess
-//    without deflation falls back to the ground state (the control).
+// Inner product: <a|b> = sum conj(a_i) b_i dV.
 
 #include <complex>
 
@@ -42,7 +29,7 @@ TEST(InnerProduct, ExactSingleCellValue) {
     Field3D b{g};
     a(1, 0, 1) = std::complex<double>{1.0, 2.0};
     b(1, 0, 1) = std::complex<double>{3.0, -1.0};
-    // conj(1+2i)(3-i) = (1-2i)(3-i) = 3 - i - 6i + 2i^2 = 1 - 7i
+    // conj(1+2i)(3-i) = 1 - 7i
     const std::complex<double> ip = ses::inner_product(a, b);
     EXPECT_DOUBLE_EQ(ip.real(), 1.0);
     EXPECT_DOUBLE_EQ(ip.imag(), -7.0);
@@ -95,23 +82,21 @@ TEST(DeflatedRelaxation, FindsTheFirstExcitedHarmonicState) {
     const std::vector<double> v = ses::harmonic_potential(g, omega, Vec3d{});
     const ses::ImaginaryTimePropagator3D relaxer{g, v, 0.05};
 
-    // Ground state (even sector), E0 = 3/2.
+    // ground state, E0 = 3/2
     Field3D ground = ses::gaussian_wavepacket(g, Vec3d{}, Vec3d{1.2, 1.2, 1.2}, Vec3d{});
     relaxer.relax(ground, 600);
     EXPECT_NEAR(ses::mean_energy(ground, v), 1.5 * omega, 2e-2);
 
-    // Mixed-parity guess: displaced, so it overlaps BOTH the ground state
-    // and the p-manifold.
+    // displaced guess overlaps both ground and p-manifold
     const Field3D guess =
         ses::gaussian_wavepacket(g, Vec3d{1.0, 0.5, 0.0}, Vec3d{1.2, 1.2, 1.2}, Vec3d{});
 
-    // CONTROL: without deflation the same guess falls to the ground state.
+    // control: undeflated falls to ground
     Field3D undeflated = guess;
     relaxer.relax(undeflated, 600);
     EXPECT_NEAR(ses::mean_energy(undeflated, v), 1.5 * omega, 2e-2);
 
-    // Deflated: converges to the first excited level E1 = 5/2, orthogonal
-    // to the ground state.
+    // deflated: E1 = 5/2, orthogonal to ground
     Field3D excited = guess;
     relaxer.relax_deflated(excited, {&ground}, 600);
     EXPECT_NEAR(ses::mean_energy(excited, v), 2.5 * omega, 2e-2);

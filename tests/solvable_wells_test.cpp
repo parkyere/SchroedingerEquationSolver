@@ -1,17 +1,5 @@
-// RED: the license physics of the three new 1D "solvable well" scenes,
-// plus the shared oracle they all lean on:
-//
-//  - bound_states_1d(grid, V, count): the lowest eigenpairs of ANY 1D
-//    potential via the radial engine's Dirichlet FD tridiagonal solver
-//    (the 1D box [xmin, xmax] IS a radial problem at l = 0). Verified
-//    against the HO ladder and the closed-form Morse spectrum.
-//  - Double well: the ground doublet's splitting dE drives a full
-//    left <-> right tunneling oscillation with period 2 pi / dE (the
-//    ammonia-inversion demo): psi_L = (psi_0 + psi_1)/sqrt(2) transfers
-//    to the right well at t = pi / dE.
-//  - Poschl-Teller: V = -l(l+1)/(2 a^2) sech^2(x/a) at integer l is
-//    REFLECTIONLESS for every incident energy; an equal-depth, equal-area
-//    square well reflects visibly at the same energy.
+// RED: three 1D solvable-well scenes. bound_states_1d reuses the radial engine's
+// Dirichlet FD tridiagonal solver -- a 1D box [xmin, xmax] IS radial l = 0.
 
 #include <gtest/gtest.h>
 
@@ -70,21 +58,17 @@ TEST(BoundStates1D, ReproducesTheHarmonicLadderInABox) {
         EXPECT_EQ(node_count(s[static_cast<std::size_t>(k)].psi), k)
             << "nodes_" << k;
     }
-    // Cross-validate the FD eigenvector against the Hermite oracle.
     for (int k = 0; k < 4; ++k) {
         EXPECT_NEAR(overlap_sq(s[static_cast<std::size_t>(k)].psi,
                                ses::ho_eigenstate(g, w, k)),
                     1.0, 1e-6)
             << "overlap_" << k;
     }
-    // Orthogonality across the set.
     EXPECT_NEAR(overlap_sq(s[0].psi, s[1].psi), 0.0, 1e-9);
     EXPECT_NEAR(overlap_sq(s[2].psi, s[5].psi), 0.0, 1e-9);
 }
 
 TEST(BoundStates1D, MorseSpectrumMatchesTheClosedForm) {
-    // E_n = w0 (n + 1/2) - (alpha^2/2)(n + 1/2)^2, w0 = alpha sqrt(2 d):
-    // the anharmonic ladder whose spacing SHRINKS toward dissociation.
     const ses::Grid1D g{-80.0, 80.0, 2048};
     const double d = 0.3;
     const double alpha = 0.12;
@@ -103,25 +87,22 @@ TEST(BoundStates1D, MorseSpectrumMatchesTheClosedForm) {
         }
     }
     EXPECT_EQ(bound, 6);  // nu = sqrt(2d)/alpha ~ 6.45 -> exactly 6 states
-    // The anharmonic signature: the top gap is well under the bottom gap.
     const double gap0 = s[1].energy - s[0].energy;
     const double gap4 = s[5].energy - s[4].energy;
     EXPECT_LT(gap4, 0.6 * gap0);
 }
 
 TEST(DoubleWell1D, SplittingDrivesTheFullTunnelingOscillation) {
-    // psi_L = (psi_0 + psi_1)/sqrt(2) starts left (P_L > 0.95) and lands
-    // right (P_R > 0.85) after t = pi / dE -- the two-level physics of the
-    // ammonia inversion, verified through the REAL split-step propagator.
+    // Ammonia inversion.
     const ses::Grid1D g{-16.0, 16.0, 1024};
     const double vb = 0.12;
     const double a = 6.0;
     const std::vector<double> v = ses::double_well_potential(g, vb, a);
     const std::vector<ses::Bound1D> s = ses::bound_states_1d(g, v, 2);
     const double de = s[1].energy - s[0].energy;
-    EXPECT_GT(de, 3e-3);  // params keep the demo in a sane band
+    EXPECT_GT(de, 3e-3);
     EXPECT_LT(de, 5e-2);
-    EXPECT_LT(s[1].energy, vb);  // a genuine below-barrier doublet
+    EXPECT_LT(s[1].energy, vb);
 
     ses::Field1D psi{g};
     for (int i = 0; i < g.n; ++i) {
@@ -139,17 +120,13 @@ TEST(DoubleWell1D, SplittingDrivesTheFullTunnelingOscillation) {
 }
 
 TEST(PoschlTeller1D, IsReflectionlessWhereTheSquareWellReflects) {
-    // Same packet (E = 0.125), two attractive wells of EQUAL depth and
-    // integrated area: the lambda = 2 sech^2 well transmits everything;
-    // the sharp-edged square well reflects a visible fraction. R is the
-    // NEGATIVE-momentum probability after the interaction -- the definition
-    // of reflection -- so the slow transmitted tail (still near the well in
-    // position space at finite t) cannot pollute the verdict. The incident
-    // packet's own k < 0 content is e^{-2 (k0/sigma_k)^2 } ~ 1e-11.
+    // R = negative-k probability (momentum space), so the slow transmitted tail
+    // can't pollute the verdict; the two wells have EQUAL depth and area. The
+    // incident packet's own k<0 floor ~1e-11, far below the 5e-3 bound.
     const ses::Grid1D g{-80.0, 80.0, 2048};
-    // The MAGIC depth: lambda (lambda+1) / (2 a^2) = 6/8 at lambda = 2,
-    // a = 2 (a non-integer lambda well DOES reflect -- measured ~1% at
-    // v0 = 0.375, which is how this constant got its regression lock).
+    // MAGIC depth: lambda (lambda+1) / (2 a^2) = 6/8 at lambda = 2, a = 2.
+    // Non-integer lambda reflects (~1% measured at v0 = 0.375) -- the
+    // regression lock on this constant.
     const double v0 = 0.75;
     const double dt = 0.04;
     const int steps = 2500;  // t = 100 au: interaction long complete
