@@ -87,7 +87,8 @@ if(SES_ARC_TESTS)
     foreach(_arc IN ITEMS anderson benzene billiard bloch carpet cascade
             cat corral decay doubleslit2d
             dw1d efield energy h2p kepler ladder1d landau magnetic manifold
-            morse1d partial pt1d qdot rabi scene trapdecay tunnel tunnel1d)
+            morse1d partial pt1d qdot qpc2d rabi scene trapdecay tunnel
+            tunnel1d)
         add_test(NAME Arc.${_arc}
                  COMMAND sesolver_app --selftest-${_arc})
         set_tests_properties(Arc.${_arc} PROPERTIES

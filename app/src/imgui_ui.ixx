@@ -838,6 +838,37 @@ void draw_anderson_panel(ShellT& shell, UiState& ui,
     ImGui::End();
 }
 
+// QPC panel: gap slider + the conductance-staircase readout.
+template <typename ShellT>
+void draw_qpc_panel(ShellT& shell, UiState& ui, ses_shell::QpcApi& qp) {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
+    draw_scene_picker(shell);
+    draw_perf_readout(shell);
+    if (ImGui::Button("Fire (2)")) qp.fire();
+    ImGui::SameLine();
+    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
+    float w = static_cast<float>(qp.gap());
+    if (ImGui::SliderFloat("Gap width", &w, 1.0f, 10.0f, "%.1f")) {
+        qp.set_gap(static_cast<double>(w));
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A transverse channel opens every lambda/2 =\n"
+                          "pi/k0 ~ 3.1 Bohr of width: fire at several\n"
+                          "widths and watch the transmitted flux climb\n"
+                          "the conductance STAIRCASE.");
+    }
+    ImGui::Text("channels open: %d   transmitted: %.1f%%",
+                qp.open_channels(), 100.0 * qp.transmitted());
+    draw_time_scale(shell, ui);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(shell.status_text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+}
+
 // Quantum-billiard panel: shape toggle + the scar (time-average) lens.
 template <typename ShellT>
 void draw_billiard_panel(ShellT& shell, UiState& ui,

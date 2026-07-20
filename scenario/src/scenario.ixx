@@ -253,6 +253,16 @@ struct QdotApi {
     virtual void fire_displaced() = 0;  // coherent orbit / rosette
 };
 
+// Quantum point contact: conductance staircase in the gap width.
+struct QpcApi {
+    virtual ~QpcApi() = default;
+    virtual void set_gap(double w) = 0;  // constriction width (refires)
+    virtual double gap() const = 0;
+    virtual void fire() = 0;
+    virtual double transmitted() const = 0;  // right-cap flux tally
+    virtual int open_channels() const = 0;   // floor(w k0 / pi)
+};
+
 // Quantum carpet: free ring, temporal Talbot weave.
 struct CarpetApi {
     virtual ~CarpetApi() = default;
@@ -336,6 +346,7 @@ public:
     virtual BilliardApi* billiard() { return nullptr; }
     virtual AndersonApi* anderson() { return nullptr; }
     virtual CarpetApi* carpet() { return nullptr; }
+    virtual QpcApi* qpc() { return nullptr; }
 
     // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
     // scenes return 0 and the renderer draws nothing extra.

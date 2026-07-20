@@ -662,6 +662,47 @@ void register_verification_arcs(ShellT* shell) {
     // operator itself (a|0> = 0) with the level untouched. Condition-polled
     // (the CPU scene ticks immediately, but the poll keeps the boot-order
     // contract explicit).
+    // QPC arc (main forces --scene=qpc2d): the staircase foot vs the
+    // first channel at scene scale. The full 4-point staircase is pinned
+    // by tests/qpc2d_test.cpp.
+    if (shell->has_arg("--selftest-qpc2d")) {
+        shell->sched().after(1000, [shell] {
+            selftest_scene_wait_running(shell, "qpc2d", 0, [shell](
+                                                               bool runs) {
+                auto* qp = shell->qp();
+                if (!runs || qp == nullptr) {
+                    std::fprintf(stderr, "selftest-qpc2d: scene not "
+                                         "running or no api  [FAIL]\n");
+                    shell->request_exit(1);
+                    return;
+                }
+                const double t_run = 60.0;
+                shell->set_time_scale(16);
+                qp->set_gap(2.0);  // below the first mode
+                selftest_wait_sim_time(shell, t_run, 0, [shell,
+                                                         t_run](bool ok1) {
+                    const double t_closed = shell->qp()->transmitted();
+                    shell->qp()->set_gap(4.5);  // one channel open
+                    selftest_wait_sim_time(
+                        shell, t_run, 0,
+                        [shell, ok1, t_closed](bool ok2) {
+                            const double t_open =
+                                shell->qp()->transmitted();
+                            const bool pass = ok1 && ok2 &&
+                                              t_open > 0.02 &&
+                                              t_closed < 0.3 * t_open;
+                            std::fprintf(
+                                stderr,
+                                "selftest-qpc2d: transmitted gap 2.0 = "
+                                "%.3f, gap 4.5 = %.3f  [%s]\n",
+                                t_closed, t_open, pass ? "PASS" : "FAIL");
+                            shell->request_exit(pass ? 0 : 1);
+                        });
+                });
+            });
+        });
+    }
+
     // Carpet arc (main forces --scene=carpet1d): scrambled mid-carpet,
     // full revival at T_rev = L^2/pi -- maxima tracked at row cadence by
     // the director (frame polling would miss the ~2 au peak).
