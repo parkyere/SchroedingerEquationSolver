@@ -15,6 +15,7 @@ export module ses.scenario.spins_director;
 export import ses.scenario;
 export import ses.spinlattice;
 export import ses.spinexact;
+import ses.vk.spin_engine;
 
 
 // 25 pinned electron spins, INTERACTING through the mean-field
@@ -54,16 +55,18 @@ public:
     // ---- SpinsApi ----
     void set_j(double j) override {
         j_ = std::clamp(j, -1.0, 1.0);
+        sync_gpu_params();
         title_dirty_ = true;
     }
     double j() const override { return j_; }
     void set_alpha(double a) override {
         alpha_ = std::clamp(a, 0.0, 0.3);
-        title_dirty_ = true;
+        title_dirty_ = true;  // closed-system exact GPU ignores alpha
     }
     double alpha() const override { return alpha_; }
     void set_b(int axis, double v) override {
         b_[axis] = std::clamp(v, -1.0, 1.0);
+        sync_gpu_params();
         title_dirty_ = true;
     }
     double b(int axis) const override { return b_[axis]; }
@@ -136,6 +139,7 @@ public:
         }
         if (on) {
             exact_ = ses::exact_from_product(lat_);
+            push_exact_to_gpu();
         } else {
             refresh_bloch();
             for (int i = 0; i < kSlN * kSlN; ++i) {
@@ -174,26 +178,49 @@ public:
 
     // ---- lifecycle / frame ----
     const ses::Grid3D& grid() const override { return grid_; }
-    void init_compute(ses_vk::DeviceContext&, bool, std::int64_t) override {
+    // Build the GPU exact-spin accelerator when a device is available; on
+    // any failure gpu_ready_ stays false and the CPU exact_step carries it.
+    void init_compute(ses_vk::DeviceContext& ctx, bool device_ok,
+                      std::int64_t) override {
         compute_attempted_ = true;
+        if (device_ok && gpu_.initialize(ctx)) {
+            gpu_.set_params(b_[0], b_[1], b_[2], j_, kSlDt);
+            gpu_ready_ = true;
+        }
     }
-    void release_gpu() override {}
+    void release_gpu() override {
+        gpu_.destroy();
+        gpu_ready_ = false;
+    }
     bool compute_attempted() const override { return compute_attempted_; }
+    // The GPU here only accelerates the EXACT step; the scene still runs
+    // (on CPU) without it, so the shell's "gpu scene" gate stays false.
     bool gpu_ok() const override { return false; }
 
     void run_frame() override {
         if (pending_steps_ > 0) {
             const int n = pending_steps_;
             pending_steps_ = 0;
-            for (int k = 0; k < n; ++k) {
-                if (exact_mode_) {
-                    // Exact mode is a CLOSED quantum system: alpha does
-                    // not apply (dissipation needs an environment).
-                    ses::exact_step(exact_, b_[0], b_[1], b_[2], j_,
-                                    kSlDt);
-                } else {
-                    ses::spinlattice_step(lat_, b_[0], b_[1], b_[2], j_,
-                                          alpha_, kSlDt);
+            if (exact_mode_ && gpu_ready_) {
+                // GPU evolves the 2^16 state; readback keeps exact_
+                // current for the CPU-side Bloch reduction + measurement.
+                gpu_.step(n);
+                const float* st = gpu_.state();
+                for (std::size_t m = 0; m < exact_.c.size(); ++m) {
+                    exact_.c[m] = std::complex<double>{st[2 * m],
+                                                       st[2 * m + 1]};
+                }
+            } else {
+                for (int k = 0; k < n; ++k) {
+                    if (exact_mode_) {
+                        // Exact mode is a CLOSED quantum system: alpha does
+                        // not apply (dissipation needs an environment).
+                        ses::exact_step(exact_, b_[0], b_[1], b_[2], j_,
+                                        kSlDt);
+                    } else {
+                        ses::spinlattice_step(lat_, b_[0], b_[1], b_[2], j_,
+                                              alpha_, kSlDt);
+                    }
                 }
             }
             sim_time_ += n * kSlDt;
@@ -248,6 +275,7 @@ public:
             for (int i = 0; i < kSlN * kSlN; ++i) {
                 ses::exact_site_rotate(exact_, i, ax, ay, 0.0, th);
             }
+            push_exact_to_gpu();  // the collapse must reach the GPU state
         } else {
             for (auto& s : lat_.s) {
                 plus += ses::spin_measure(s, nx, ny, nz, uni(rng_)) > 0
@@ -316,7 +344,8 @@ public:
         std::string s = strf(
             "16 interacting spins [%s]  |  t = %.1f au  J = %+.2f  "
             "alpha = %.2f%s  |M| = %.2f  Neel = %.2f  mean |<s>| = %.2f",
-            exact_mode_ ? "EXACT 2^16 Heisenberg"
+            exact_mode_ ? (gpu_ready_ ? "EXACT 2^16 Heisenberg (GPU)"
+                                      : "EXACT 2^16 Heisenberg (CPU)")
                         : "mean-field, no entanglement",
             sim_time_, j_, alpha_,
             exact_mode_ ? " (unused: closed system)" : "",
@@ -376,6 +405,7 @@ private:
     void after_seed(const char* what) {
         if (exact_mode_) {
             exact_ = ses::exact_from_product(lat_);  // fresh product boot
+            push_exact_to_gpu();
         }
         refresh_bloch();
         sim_time_ = 0.0;
@@ -383,6 +413,19 @@ private:
         note_ = what;
         display_changed_ = true;
         title_dirty_ = true;
+    }
+
+    // Keep the resident GPU state in sync with the CPU-side exact_ (after
+    // a seed / mode-switch / measurement); no-op without a GPU.
+    void push_exact_to_gpu() {
+        if (gpu_ready_) {
+            gpu_.upload(exact_.c);
+        }
+    }
+    void sync_gpu_params() {
+        if (gpu_ready_) {
+            gpu_.set_params(b_[0], b_[1], b_[2], j_, kSlDt);
+        }
     }
 
     void refresh_bloch() {
@@ -468,6 +511,8 @@ private:
     ses::SpinLattice lat_;
     ses::SpinState16 exact_;  // the full 2^16 wavefunction (exact mode)
     bool exact_mode_ = false;
+    ses_vk::SpinEngine gpu_;   // GPU accelerator for exact_step (optional)
+    bool gpu_ready_ = false;
     // Per-site Bloch vectors (3 doubles/site), refreshed each frame from
     // whichever engine is live -- the single display source.
     std::vector<double> bloch_ =

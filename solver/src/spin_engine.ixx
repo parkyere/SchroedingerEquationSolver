@@ -1,0 +1,292 @@
+module;
+#include <volk.h>
+#if defined(_MSC_VER)
+#pragma warning(push, 0)
+#endif
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#include <vk_mem_alloc.h>
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+#include <spin_site_gate_spv.h>
+#include <spin_bond_gate_spv.h>
+#include <algorithm>
+#include <cmath>
+#include <complex>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+export module ses.vk.spin_engine;
+export import ses.vk.device;
+export import ses.vk.compute;
+export import ses.spinexact;
+// volk/VMA textually first: VK_*/VMA macros never cross module boundaries.
+
+
+// GPU accelerator for the EXACT 2^N Heisenberg spin evolution: the full
+// fp32 wavefunction lives resident in an SSBO, and each Strang step is
+// recorded as the 80 aliasing gate dispatches (16 half-field + 24 forward
+// bonds + 24 reversed + 16 half-field) with a compute-to-compute barrier
+// between each. The heavy unitary evolution runs on the GPU; the light
+// per-site Bloch reduction and the rare measurement stay CPU-side off the
+// per-step readback. Gate coefficients come from ses.spinexact's shared
+// site_gate_matrix / bond_gate_params, so the GPU is bit-faithful to the
+// CPU oracle up to fp32 (vkcheck check_spin_step).
+
+
+export namespace ses_vk {
+
+class SpinEngine {
+public:
+    SpinEngine() = default;
+    SpinEngine(const SpinEngine&) = delete;
+    SpinEngine& operator=(const SpinEngine&) = delete;
+    ~SpinEngine() { destroy(); }
+
+    // Build the resident state SSBO, the two gate kernels, and the 40
+    // descriptor sets (16 site + 24 bond). false => caller stays on CPU.
+    bool initialize(DeviceContext& ctx) {
+        ctx_ = &ctx;
+        dim_ = ses::kExactDim;
+        half_groups_ =
+            static_cast<std::uint32_t>((dim_ / 2 + 255) / 256);
+        quarter_groups_ =
+            static_cast<std::uint32_t>((dim_ / 4 + 255) / 256);
+        nbonds_ = ses::exact_bonds(bonds_);
+
+        if (!site_k_.create(ctx, k_spin_site_gate_spv,
+                            k_spin_site_gate_spv_size,
+                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !bond_k_.create(ctx, k_spin_bond_gate_spv,
+                            k_spin_bond_gate_spv_size,
+                            {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}})) {
+            return false;
+        }
+        const VkDeviceSize bytes = dim_ * 2 * sizeof(float);
+        if (!ctx.create_device_buffer(bytes, &state_) ||
+            !ctx.create_host_buffer(bytes,
+                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    &staging_)) {
+            return false;
+        }
+        const int n_sites = ses::kExactSites;
+        const int n_sets = n_sites + nbonds_;
+        if (!arena_.create(ctx, static_cast<std::uint32_t>(n_sets),
+                           static_cast<std::uint32_t>(n_sets),
+                           static_cast<std::uint32_t>(n_sets))) {
+            return false;
+        }
+        site_ubo_.resize(static_cast<std::size_t>(n_sites));
+        bond_ubo_.resize(static_cast<std::size_t>(nbonds_));
+        site_set_.assign(static_cast<std::size_t>(n_sites), VK_NULL_HANDLE);
+        bond_set_.assign(static_cast<std::size_t>(nbonds_), VK_NULL_HANDLE);
+        for (int i = 0; i < n_sites; ++i) {
+            if (!ctx.create_host_buffer(sizeof(SiteParams),
+                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                        &site_ubo_[static_cast<std::size_t>(i)]))
+                return false;
+            const std::size_t si = static_cast<std::size_t>(i);
+            site_set_[si] = arena_.allocate(ctx, site_k_.set_layout());
+            if (site_set_[si] == VK_NULL_HANDLE) return false;
+            arena_.write_buffer(ctx, site_set_[si], 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, state_.buf);
+            arena_.write_buffer(ctx, site_set_[si], 1,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                site_ubo_[si].buf, sizeof(SiteParams));
+        }
+        for (int i = 0; i < nbonds_; ++i) {
+            if (!ctx.create_host_buffer(sizeof(BondParams),
+                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                        &bond_ubo_[static_cast<std::size_t>(i)]))
+                return false;
+            const std::size_t bi = static_cast<std::size_t>(i);
+            bond_set_[bi] = arena_.allocate(ctx, bond_k_.set_layout());
+            if (bond_set_[bi] == VK_NULL_HANDLE) return false;
+            arena_.write_buffer(ctx, bond_set_[bi], 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, state_.buf);
+            arena_.write_buffer(ctx, bond_set_[bi], 1,
+                                VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                bond_ubo_[bi].buf, sizeof(BondParams));
+        }
+        ready_ = true;
+        return true;
+    }
+
+    void destroy() {
+        if (ctx_ == nullptr) {
+            return;
+        }
+        for (Buffer& b : site_ubo_) ctx_->destroy_buffer(&b);
+        for (Buffer& b : bond_ubo_) ctx_->destroy_buffer(&b);
+        site_ubo_.clear();
+        bond_ubo_.clear();
+        arena_.destroy(*ctx_);
+        site_k_.destroy(*ctx_);
+        bond_k_.destroy(*ctx_);
+        ctx_->destroy_buffer(&state_);
+        ctx_->destroy_buffer(&staging_);
+        ctx_ = nullptr;
+        ready_ = false;
+    }
+
+    bool ready() const { return ready_; }
+    std::size_t dim() const { return dim_; }
+
+    // Recompute the per-dispatch gate UBOs for the current H (does no GPU
+    // work -- host UBO writes only). Call on any B/J/dt change.
+    void set_params(double bx, double by, double bz, double j, double dt) {
+        const double bmag = std::sqrt(bx * bx + by * by + bz * bz);
+        has_field_ = bmag > 0.0;
+        if (has_field_) {
+            const ses::SiteGate g = ses::site_gate_matrix(
+                bx / bmag, by / bmag, bz / bmag, bmag * 0.5 * dt);
+            for (int i = 0; i < ses::kExactSites; ++i) {
+                SiteParams sp{};
+                sp.half_n = static_cast<std::uint32_t>(dim_ / 2);
+                sp.site = static_cast<std::uint32_t>(i);
+                fill_c(sp.row0, g.a00);
+                fill_c(sp.row0 + 2, g.a01);
+                fill_c(sp.row1, g.a10);
+                fill_c(sp.row1 + 2, g.a11);
+                write_ubo(site_ubo_[static_cast<std::size_t>(i)], &sp,
+                          sizeof(sp));
+            }
+        }
+        const ses::BondGate bg = ses::bond_gate_params(0.5 * j * dt);
+        for (int i = 0; i < nbonds_; ++i) {
+            BondParams bp{};
+            bp.quarter_n = static_cast<std::uint32_t>(dim_ / 4);
+            bp.site_i = static_cast<std::uint32_t>(bonds_[i][0]);
+            bp.site_j = static_cast<std::uint32_t>(bonds_[i][1]);
+            fill_c(bp.gate, bg.phase);
+            fill_c(bp.gate + 2, bg.diag);
+            fill_c(bp.off4, bg.off);
+            write_ubo(bond_ubo_[static_cast<std::size_t>(i)], &bp,
+                      sizeof(bp));
+        }
+    }
+
+    // Push a fresh host state (complex<double>) to the resident SSBO.
+    void upload(const std::vector<std::complex<double>>& c) {
+        float* dst = static_cast<float*>(staging_.mapped);
+        for (std::size_t m = 0; m < dim_; ++m) {
+            dst[2 * m] = static_cast<float>(c[m].real());
+            dst[2 * m + 1] = static_cast<float>(c[m].imag());
+        }
+        vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return;
+        }
+        const VkDeviceSize bytes = dim_ * 2 * sizeof(float);
+        const VkBufferCopy r{0, 0, bytes};
+        vkCmdCopyBuffer(shot.cb(), staging_.buf, state_.buf, 1, &r);
+        barrier_transfer_to_compute(shot.cb());
+        shot.submit_and_wait(*ctx_);
+    }
+
+    // Evolve n Strang steps, then read the state back into staging_.
+    void step(int n) {
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return;
+        }
+        VkCommandBuffer cb = shot.cb();
+        bool first = true;
+        for (int k = 0; k < n; ++k) {
+            if (has_field_) {
+                for (int s = 0; s < ses::kExactSites; ++s) {
+                    dispatch_site(cb, s, first);
+                    first = false;
+                }
+            }
+            for (int b = 0; b < nbonds_; ++b) {
+                dispatch_bond(cb, b, first);
+                first = false;
+            }
+            for (int b = nbonds_ - 1; b >= 0; --b) {
+                dispatch_bond(cb, b, first);
+                first = false;
+            }
+            if (has_field_) {
+                for (int s = 0; s < ses::kExactSites; ++s) {
+                    dispatch_site(cb, s, first);
+                    first = false;
+                }
+            }
+        }
+        // Readback: state -> staging, fenced for the host reduction.
+        barrier_compute_to_transfer(cb);
+        const VkDeviceSize bytes = dim_ * 2 * sizeof(float);
+        const VkBufferCopy r{0, 0, bytes};
+        vkCmdCopyBuffer(cb, state_.buf, staging_.buf, 1, &r);
+        barrier_transfer_to_host(cb);
+        shot.submit_and_wait(*ctx_);
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+    }
+
+    // The current fp32 state (interleaved re/im), valid after step()/upload.
+    const float* state() const {
+        return static_cast<const float*>(staging_.mapped);
+    }
+
+private:
+    struct alignas(16) SiteParams {
+        std::uint32_t half_n, site, pad0, pad1;
+        float row0[4];
+        float row1[4];
+    };
+    struct alignas(16) BondParams {
+        std::uint32_t quarter_n, site_i, site_j, pad;
+        float gate[4];
+        float off4[4];
+    };
+
+    static void fill_c(float* dst, const std::complex<double>& z) {
+        dst[0] = static_cast<float>(z.real());
+        dst[1] = static_cast<float>(z.imag());
+    }
+    void write_ubo(Buffer& b, const void* src, std::size_t sz) {
+        std::memcpy(b.mapped, src, sz);
+        vmaFlushAllocation(ctx_->allocator, b.alloc, 0, VK_WHOLE_SIZE);
+    }
+    void dispatch_site(VkCommandBuffer cb, int s, bool first) {
+        if (!first) {
+            barrier_compute_to_compute(cb);
+        }
+        site_k_.bind(cb, site_set_[static_cast<std::size_t>(s)]);
+        vkCmdDispatch(cb, half_groups_, 1, 1);
+    }
+    void dispatch_bond(VkCommandBuffer cb, int b, bool first) {
+        if (!first) {
+            barrier_compute_to_compute(cb);
+        }
+        bond_k_.bind(cb, bond_set_[static_cast<std::size_t>(b)]);
+        vkCmdDispatch(cb, quarter_groups_, 1, 1);
+    }
+
+    DeviceContext* ctx_ = nullptr;
+    std::size_t dim_ = 0;
+    std::uint32_t half_groups_ = 0;
+    std::uint32_t quarter_groups_ = 0;
+    int bonds_[2 * ses::kExactSites][2]{};
+    int nbonds_ = 0;
+    Buffer state_{};
+    Buffer staging_{};
+    Kernel site_k_;
+    Kernel bond_k_;
+    DescriptorArena arena_;
+    std::vector<Buffer> site_ubo_;
+    std::vector<Buffer> bond_ubo_;
+    std::vector<VkDescriptorSet> site_set_;
+    std::vector<VkDescriptorSet> bond_set_;
+    bool has_field_ = false;
+    bool ready_ = false;
+};
+
+}  // namespace ses_vk

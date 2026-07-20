@@ -96,6 +96,7 @@ import ses.harmonics;
 import ses.wavepacket;
 import ses.potential;
 import ses.spinexact;
+import ses.vk.spin_engine;
 
 namespace {
 
@@ -1219,6 +1220,62 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
     std::printf("spin gates x%zu (raw Vulkan, 2^16): max |gpu - cpu| = %.3e "
                 "(tol %.3e)  [%s]\n",
                 seq.size(), max_err, tol, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// The full SpinEngine step orchestration (80 dispatches/step: 16 half-
+// field + 24 forward bonds + 24 reversed + 16 half-field) over several
+// steps vs ses::exact_step (fp64). Tests the multi-step barrier chain and
+// the bond ordering, not just the isolated gates -- the arrows-shrink
+// physics rides on this being right.
+bool check_spin_engine_step(ses_vk::DeviceContext& ctx) {
+    const double bx = 0.1, by = -0.05, bz = 0.2, jj = 0.5, dt = 0.05;
+    const int steps = 40;
+    // A Neel product boot (entangles under J -- the interesting regime).
+    ses::SpinLattice lat;
+    lat.nx = ses::kExactSide;
+    lat.ny = ses::kExactSide;
+    lat.s.resize(ses::kExactSites);
+    for (int y = 0; y < ses::kExactSide; ++y) {
+        for (int x = 0; x < ses::kExactSide; ++x) {
+            const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
+            // Unit Bloch vector (tilted Neel) -> the product state is
+            // already normalized.
+            lat.s[static_cast<std::size_t>(y * ses::kExactSide + x)] =
+                ses::spinor_from_bloch(0.6, 0.0, sgn * 0.8);
+        }
+    }
+    ses::SpinState16 cpu = ses::exact_from_product(lat);
+    for (int k = 0; k < steps; ++k) {
+        ses::exact_step(cpu, bx, by, bz, jj, dt);
+    }
+
+    ses_vk::SpinEngine eng;
+    if (!eng.initialize(ctx)) {
+        std::printf("spin engine step: init FAIL\n");
+        return false;
+    }
+    eng.set_params(bx, by, bz, jj, dt);
+    ses::SpinState16 boot = ses::exact_from_product(lat);
+    eng.upload(boot.c);
+    eng.step(steps);
+    const float* out = eng.state();
+    double max_err = 0.0;
+    double norm = 0.0;
+    for (std::size_t m = 0; m < eng.dim(); ++m) {
+        max_err = std::max(max_err,
+                           std::abs(out[2 * m] - cpu.c[m].real()));
+        max_err = std::max(max_err,
+                           std::abs(out[2 * m + 1] - cpu.c[m].imag()));
+        norm += static_cast<double>(out[2 * m]) * out[2 * m] +
+                static_cast<double>(out[2 * m + 1]) * out[2 * m + 1];
+    }
+    eng.destroy();
+    // fp32 over 40 steps x 80 gates: per-amplitude error stays ~1e-4.
+    const bool pass = max_err < 2e-4 && std::abs(norm - 1.0) < 1e-3;
+    std::printf("spin engine %d steps (raw Vulkan, 2^16): max |gpu - cpu| = "
+                "%.3e, norm %.6f  [%s]\n",
+                steps, max_err, norm, pass ? "PASS" : "FAIL");
     return pass;
 }
 
@@ -3008,6 +3065,7 @@ int main() {
             : 1;
     failures += check_fft3(ctx) ? 0 : 1;
     failures += check_spin_step(ctx) ? 0 : 1;
+    failures += check_spin_engine_step(ctx) ? 0 : 1;
     failures += check_engine_step(ctx) ? 0 : 1;
     failures += check_engine_planar(ctx) ? 0 : 1;
     failures += check_engine_absorber(ctx) ? 0 : 1;

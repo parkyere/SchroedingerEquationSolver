@@ -39,6 +39,7 @@ target_sources(ses_solver
         src/vk_compute.ixx
         src/vk_engine.ixx
         src/engine_blobs.ixx
+        src/spin_engine.ixx
         src/vram_probe.ixx)
 target_compile_features(ses_solver PUBLIC cxx_std_20)
 add_dependencies(ses_solver ses_solver_spv)
