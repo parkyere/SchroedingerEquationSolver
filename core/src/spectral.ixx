@@ -1,4 +1,5 @@
 module;
+#include <cstddef>
 #include <numbers>
 #include <vector>
 export module ses.spectral;

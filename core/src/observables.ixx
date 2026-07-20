@@ -97,11 +97,12 @@ inline double mean_energy(const Field1D& f, const std::vector<double>& potential
     return obs_ratio(num_v, den_x) + obs_ratio(num_t, den_k);
 }
 
-// Var(H) = <H^2> - <H>^2, scale-invariant. H psi is built spectrally
-// (T = k^2/2 in k-space) + V in real space, so <H^2> = ||H psi||^2 needs no
-// operator squaring. The honest eigenstate discriminator: zero (to
-// round-off) iff psi is an H eigenstate -- no measurement, no basis
-// bookkeeping (drives the 1D scene's eigenstate-vs-superposition HUD).
+// Var(H) = ||(H - <H>) psi||^2 / ||psi||^2, scale-invariant. H psi is
+// built spectrally (T = k^2/2 in k-space) + V in real space. The honest
+// eigenstate discriminator: zero (to round-off) iff psi is an H eigenstate
+// -- no measurement, no basis bookkeeping (drives the 1D scene's
+// eigenstate-vs-superposition HUD); the residual form keeps the round-off
+// floor E-independent (LOCK: observables_test HighEnergyEigenstate).
 inline double energy_variance(const Field1D& f, const std::vector<double>& potential) {
     std::vector<std::complex<double>> hpsi = f.data();
     fft(hpsi);
@@ -110,18 +111,25 @@ inline double energy_variance(const Field1D& f, const std::vector<double>& poten
         hpsi[j] *= 0.5 * k[j] * k[j];
     }
     ifft(hpsi);
-    double num_h2 = 0.0;
     double num_h = 0.0;
     double den = 0.0;
     for (int i = 0; i < f.size(); ++i) {
         const std::size_t s = static_cast<std::size_t>(i);
         hpsi[s] += potential[s] * f[i];
         den += std::norm(f[i]);
-        num_h2 += std::norm(hpsi[s]);
         num_h += (std::conj(f[i]) * hpsi[s]).real();
     }
     const double mean = obs_ratio(num_h, den);
-    return std::max(0.0, obs_ratio(num_h2, den) - mean * mean);
+    // Robust residual form ||(H - <H>) psi||^2 / ||psi||^2: the naive
+    // <H^2> - <H>^2 difference carries an E^2-scaled cancellation floor
+    // (platform/compiler dependent) that can defeat the ABSOLUTE 1e-8
+    // eigenstate gates at high rungs; the residual has no cancellation.
+    double num_var = 0.0;
+    for (int i = 0; i < f.size(); ++i) {
+        const std::size_t s = static_cast<std::size_t>(i);
+        num_var += std::norm(hpsi[s] - mean * f[i]);
+    }
+    return obs_ratio(num_var, den);
 }
 
 // Absolute probability content of the half-open interval [a, b):
