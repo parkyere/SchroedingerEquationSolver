@@ -24,6 +24,7 @@ import ses.grid;
 import ses.observables;
 import ses.potential;
 import ses.wavepacket;
+import ses.ladder;
 
 namespace {
 
@@ -115,6 +116,20 @@ TEST(ProbabilityInRange, SymmetricPacketSplitsEvenlyAboutItsCenter) {
     const double left = ses::probability_in_range(f, -16.0, 0.0);
     const double right = ses::probability_in_range(f, 0.25, 16.0);
     EXPECT_NEAR(left, right, 1e-14);
+}
+
+// LOCK: Var(H) of an EXACT high-energy eigenstate stays at round-off on
+// the SCENE's 64k grid at E = 10002 Ha. The naive <H^2> - <H>^2 form has an
+// E^2-scaled cancellation floor (upper bound ~ 5e-6 here; it happened to
+// stay under the 1e-8 gate on THIS MSVC build, but the margin is platform
+// luck) -- the residual form ||(H - <H>) psi||^2 has no floor at all, and
+// this test pins that for every future compiler.
+TEST(EnergyVariance, HighEnergyEigenstateStaysAtRoundOff) {
+    const ses::Grid1D g{-100.0, 100.0, 65536};  // the harmonic1d scene grid
+    const double w = 4.0;
+    const std::vector<double> v = ses::harmonic_potential(g, w);
+    const ses::Field1D psi = ses::ho_eigenstate(g, w, 2500);  // E = 10002 Ha
+    EXPECT_LT(ses::energy_variance(psi, v), 1e-8);
 }
 
 }  // namespace
