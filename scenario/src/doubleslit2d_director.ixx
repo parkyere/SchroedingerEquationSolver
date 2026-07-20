@@ -16,16 +16,19 @@ export import ses.scenario;
 export import ses.field;
 export import ses.grid;
 export import ses.lattice2d;
-export import ses.potential;
 import ses.parallel;
 import ses.heightfield;
 
 
-// The REAL double-slit + Aharonov-Bohm experiment, in 2D, literally: an
-// electron packet flies +x into a high potential wall pierced by two
-// slits; a solenoid (flux along z, drawn as the amber arrow + core circle)
-// hides INSIDE the wall between the slits; a screen line on the right
-// accumulates the arrival density over time. Physics is the Peierls
+// The REAL double-slit + Aharonov-Bohm experiment, in 2D, literally: ONE
+// normalized electron packet per shot flies +x into a high potential wall
+// pierced by two slits; a solenoid (flux along z, drawn as the amber arrow
+// + core circle) hides INSIDE the wall between the slits; a screen line on
+// the right integrates the arrivals ACROSS shots -- the single-electron-
+// at-a-time story: fire again (key 2 / the panel button) and the pattern
+// builds up. Electrons don't interact: a new shot replaces the previous
+// field (the old electron is done -- absorbed or detected); the open CAP
+// frame eats whatever leaves (no re-entry). Physics is the Peierls
 // lattice propagator (ses.lattice2d): the flux enters as EXACT link
 // phases, B = 0 in every plaquette the electron can reach -- pure AB
 // fringe shift, period 2 pi.
@@ -45,7 +48,9 @@ constexpr int kDs2dNy = 512;
 constexpr int kDs2dNz = 4;        // display slab thickness (cells)
 constexpr double kDs2dZHalf = 2.0;
 constexpr double kDs2dDt = 0.01;
-constexpr double kDs2dK0 = 2.0;   // +x mechanical momentum (kh ~ 0.47)
+// Long wavelength (user order): lambda = 2 pi, fringe ~17 au at d = 8 --
+// a calm, readable pattern (kh ~ 0.23).
+constexpr double kDs2dK0 = 1.0;
 constexpr double kDs2dSigma = 8.0;
 constexpr double kDs2dLaunchX = -35.0;
 constexpr double kDs2dWallLo = 0.0;
@@ -59,14 +64,12 @@ constexpr double kDs2dWidthMin = 1.0;
 constexpr double kDs2dWidthMax = 4.0;
 constexpr double kDs2dScreenX = 45.0;
 constexpr double kDs2dAbsorb = 10.0;
-constexpr int kDs2dStepsPerTick = 10;  // ~6 au/s at 60 fps: 13 s transit
-// Continuous electron beam (user order): a coherent ON-SHELL source feeds
-// the box every step -- psi += A src e^{-i w t} dt, w = the lattice band
-// energy of k0 -- against the open edge absorbers; injection balances
-// absorption into a steady interference state.
-// CONTRACT: lattice2d_test BeamSourceWithOpenBoundaryReachesSteadyState.
-constexpr double kDs2dSrcAmp = 0.05;
-constexpr double kDs2dSrcSigX = 2.0;
+// Gentle quadratic CAP, exp(-W0 (1 - d/width)^2 dt) per step: the cos^2
+// display mask is far too stiff for the slow shot (-ln m / dt ~ Ha at the
+// ramp head reflects ~30% of k0 = 1 back into the stage).
+// CONTRACT: lattice2d_test SinglePacketDrainsThroughTheOpenBoundary.
+constexpr double kDs2dAbsorbW0 = 4.0;
+constexpr int kDs2dStepsPerTick = 16;  // ~9.6 au/s at 60 fps: ~9 s transit
 // IBM-style STM height surface (like the corral): z = |psi|^2 peak-tracked.
 constexpr double kDs2dSurfH = 6.0;
 constexpr int kDs2dMeshStride = 1;  // 512^2 physics = 512^2 display mesh
@@ -80,8 +83,7 @@ public:
           disp_grid_{ses::Grid1D{-kDs2dBoxX, kDs2dBoxX, kDs2dNx},
                      ses::Grid1D{-kDs2dBoxY, kDs2dBoxY, kDs2dNy},
                      ses::Grid1D{-kDs2dZHalf, kDs2dZHalf, kDs2dNz}},
-          psi_{phys_grid_},
-          src_{phys_grid_} {
+          psi_{phys_grid_} {
         build_mask();
         rebuild_wall_and_prop();
         fire();
@@ -109,7 +111,10 @@ public:
         rebuild_props_overlays();  // the flux arrow length encodes Phi
     }
     double flux() const override { return flux_; }
-    void refire() override { fire(); }
+    // The panel's fire button / key 2: ONE more electron onto the stage;
+    // the screen keeps accumulating (CONTRACT: the selftest arc's shot2
+    // leg doubles the axis histogram).
+    void refire() override { launch(); }
     // Instantaneous probability past the wall (the absorbers eat both
     // exits eventually; read while the pattern crosses the screen).
     double transmitted_fraction() const override {
@@ -241,9 +246,10 @@ public:
         return strf(
             "Electron double slit + Aharonov-Bohm (2D lattice)  |  t = %.1f "
             "au (%dx%d, dt %.2g)  d = %.1f  w = %.1f  Phi = %.2f pi  "
-            "T = %.1f%%  B = 0 on every electron path  keys: 2 refire",
+            "shot %d  T = %.1f%%  B = 0 on every electron path  "
+            "keys: 2 fire electron",
             sim_time_, kDs2dNx, kDs2dNy, kDs2dDt, sep_, width_, flux_ / pi,
-            100.0 * transmitted_fraction());
+            shots_, 100.0 * transmitted_fraction());
     }
 
     int marker_count() const override { return 0; }
@@ -286,17 +292,23 @@ private:
     }
 
     void build_mask() {
-        // 2D absorber frame (x and y edges) built from the 1D profiles.
-        const std::vector<double> mx =
-            ses::absorbing_mask(phys_grid_.x, kDs2dAbsorb);
-        const std::vector<double> my =
-            ses::absorbing_mask(phys_grid_.y, kDs2dAbsorb);
+        // 2D CAP frame, exp(-(Wx + Wy) dt) per step with the quadratic
+        // ramps (see kDs2dAbsorbW0): reflection-quiet for the slow shot.
+        auto ramp_w = [](const ses::Grid1D& ax, double x) {
+            const double d = std::min(x - ax.xmin, ax.xmax - x);
+            if (d >= kDs2dAbsorb) {
+                return 0.0;
+            }
+            const double t = 1.0 - d / kDs2dAbsorb;
+            return kDs2dAbsorbW0 * t * t;
+        };
         mask_.resize(static_cast<std::size_t>(kDs2dNx * kDs2dNy));
         for (int j = 0; j < kDs2dNy; ++j) {
+            const double wy = ramp_w(phys_grid_.y, phys_grid_.y.coord(j));
             for (int i = 0; i < kDs2dNx; ++i) {
+                const double wx = ramp_w(phys_grid_.x, phys_grid_.x.coord(i));
                 mask_[static_cast<std::size_t>(j * kDs2dNx + i)] =
-                    mx[static_cast<std::size_t>(i)] *
-                    my[static_cast<std::size_t>(j)];
+                    std::exp(-(wx + wy) * kDs2dDt);
             }
         }
     }
@@ -328,35 +340,47 @@ private:
         rebuild_props_overlays();
     }
 
-    void fire() {
-        // Vacuum boot: the CONTINUOUS beam fills the box (no one-shot
-        // packet, no normalization -- the steady state balances the source
-        // against the edge absorbers). The emitter is a narrow column at
-        // the old launch x, wide in y, carrying the +x on-shell phase.
+    // Launch ONE normalized electron packet (replacing whatever is in
+    // flight -- electrons don't interact; the previous one counts as
+    // detected/absorbed). The accumulated screen SURVIVES: shot after
+    // shot, the interference pattern builds up.
+    void launch() {
         ses::parallel_for(kDs2dNy, [&](int j) {
             const double y = phys_grid_.y.coord(j);
             for (int i = 0; i < kDs2dNx; ++i) {
                 const double x = phys_grid_.x.coord(i);
                 const double dx = x - kDs2dLaunchX;
-                psi_(i, j, 0) = 0.0;
-                src_(i, j, 0) =
-                    std::exp(-dx * dx / (2.0 * kDs2dSrcSigX * kDs2dSrcSigX) -
-                             y * y / (4.0 * kDs2dSigma * kDs2dSigma)) *
+                psi_(i, j, 0) =
+                    std::exp(-(dx * dx + y * y) /
+                             (4.0 * kDs2dSigma * kDs2dSigma)) *
                     std::complex<double>{std::cos(kDs2dK0 * x),
                                          std::sin(kDs2dK0 * x)};
             }
         });
-        const double hx = phys_grid_.x.spacing();
-        src_omega_ = (1.0 - std::cos(kDs2dK0 * hx)) / (hx * hx);
+        const double n = ses::norm_sq(psi_);
+        if (n > 0.0) {
+            const double inv = 1.0 / std::sqrt(n);
+            for (auto& c : psi_.data()) {
+                c *= inv;
+            }
+        }
+        ++shots_;
         disp_peak_ = 0.0;
         peak_ = 1.0;
-        screen_.assign(static_cast<std::size_t>(kDs2dNy), 0.0);
-        sim_time_ = 0.0;
-        pending_steps_ = 0;
         display_changed_ = true;
         vol_dirty_ = true;
         staging_dirty_ = true;
         title_dirty_ = true;
+    }
+
+    // Full reset: fresh screen + clock + one first electron. Geometry /
+    // flux changes come through here (the old pattern is void).
+    void fire() {
+        screen_.assign(static_cast<std::size_t>(kDs2dNy), 0.0);
+        sim_time_ = 0.0;
+        pending_steps_ = 0;
+        shots_ = 0;
+        launch();
     }
 
     void step_batch(int n) {
@@ -369,21 +393,16 @@ private:
         }
         for (int s = 0; s < n; ++s) {
             prop_->step(psi_);
-            // Edge absorbers (leaked flux VANISHES -- open stage) + the
-            // continuous on-shell source injection.
-            sim_beam_t_ += kDs2dDt;
-            const std::complex<double> ph{std::cos(src_omega_ * sim_beam_t_),
-                                          -std::sin(src_omega_ * sim_beam_t_)};
+            // Edge CAP: leaked flux VANISHES (open stage) -- no injection,
+            // no renormalization; the norm IS the electron still on stage.
             ses::parallel_for(kDs2dNy, [&](int j) {
                 const std::size_t row =
                     static_cast<std::size_t>(j) *
                     static_cast<std::size_t>(kDs2dNx);
                 for (int i = 0; i < kDs2dNx; ++i) {
                     const std::size_t c = row + static_cast<std::size_t>(i);
-                    psi_.data()[c] =
-                        psi_.data()[c] *
-                            mask_[static_cast<std::size_t>(j * kDs2dNx + i)] +
-                        kDs2dSrcAmp * kDs2dDt * ph * src_.data()[c];
+                    psi_.data()[c] *=
+                        mask_[static_cast<std::size_t>(j * kDs2dNx + i)];
                 }
             });
             // The screen integrates arrivals: sum |psi|^2 dt on its line.
@@ -548,9 +567,7 @@ private:
     bool compute_attempted_ = false;
 
     ses::Mesh no_mesh_;
-    ses::Field3D src_;
-    double src_omega_ = 0.0;
-    double sim_beam_t_ = 0.0;
+    int shots_ = 0;
     ses::Heightfield hf_;
     bool mesh_dirty_ = false;
     double disp_peak_ = 0.0;

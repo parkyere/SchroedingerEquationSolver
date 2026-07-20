@@ -593,7 +593,13 @@ void draw_doubleslit_panel(ShellT& shell, UiState& ui,
     ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
     draw_scene_picker(shell);
     draw_perf_readout(shell);
-    if (ImGui::Button("Refire (2)")) shell.press('2');
+    if (ImGui::Button("Fire electron (2)")) shell.press('2');
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("One electron per shot; the screen keeps\n"
+                          "accumulating arrivals shot after shot.\n"
+                          "Electrons don't interact -- a new shot replaces\n"
+                          "the one in flight.");
+    }
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ImGui::SameLine();
