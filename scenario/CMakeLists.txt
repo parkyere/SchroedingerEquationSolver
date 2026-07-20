@@ -30,6 +30,7 @@ target_sources(ses_scenario
         src/carpet1d_director.ixx
         src/qpc2d_director.ixx
         src/bouncer1d_director.ixx
+        src/spin_director.ixx
         src/doubleslit2d_director.ixx
         src/landau2d_director.ixx
         src/bloch1d_director.ixx

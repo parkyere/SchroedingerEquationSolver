@@ -662,6 +662,63 @@ void register_verification_arcs(ShellT* shell) {
     // operator itself (a|0> = 0) with the level untouched. Condition-polled
     // (the CPU scene ticks immediately, but the poll keeps the boot-order
     // contract explicit).
+    // Spin arc (main forces --scene=spin): Larmor quarter turn, resonant
+    // Rabi inversion under the RF drive, then the Hahn echo refocus.
+    // Grid-free scene -- the exact-rotation contracts live in spin_test.
+    if (shell->has_arg("--selftest-spin")) {
+        shell->sched().after(1000, [shell] {
+            auto* sp = shell->sp();
+            if (sp == nullptr) {
+                std::fprintf(stderr, "selftest-spin: no api  [FAIL]\n");
+                shell->request_exit(1);
+                return;
+            }
+            shell->set_time_scale(16);
+            const double t_quarter = 0.25 * 2.0 * 3.14159265358979323846 /
+                                     0.5;  // omega_L = |B| = 0.5
+            selftest_wait_sim_time(shell, t_quarter, 0, [shell](bool ok1) {
+                const double y_quarter = shell->sp()->bloch_y();
+                shell->sp()->toggle_rf();
+                auto min_z = std::make_shared<double>(1.0);
+                const int probe = shell->sched().every(120, [shell, min_z] {
+                    *min_z = std::min(*min_z, shell->sp()->bloch_z());
+                });
+                // One FULL nutation (2 pi / Omega_R = 126 au): the sense
+                // may swing +z first, and -1 only comes on the far side.
+                const double t_mark = shell->director().sim_time();
+                selftest_wait_sim_time(
+                    shell, t_mark + 130.0, 0,
+                    [shell, ok1, y_quarter, min_z, probe](bool ok2) {
+                        shell->sched().cancel(probe);
+                        shell->sp()->toggle_rf();
+                        shell->sp()->spin_echo();
+                        const double t2 = shell->director().sim_time();
+                        selftest_wait_sim_time(
+                            shell, t2 + 2.0 * 30.0 + 2.0, 0,
+                            [shell, ok1, ok2, y_quarter,
+                             min_z](bool ok3) {
+                                const double echo =
+                                    shell->sp()->echo_peak();
+                                const bool larmor_ok = y_quarter > 0.8;
+                                const bool rabi_ok = *min_z < -0.8;
+                                const bool echo_ok = echo > 0.9;
+                                const bool pass = ok1 && ok2 && ok3 &&
+                                                  larmor_ok && rabi_ok &&
+                                                  echo_ok;
+                                std::fprintf(
+                                    stderr,
+                                    "selftest-spin: quarter-turn <y> "
+                                    "%.2f, Rabi min<z> %.2f, echo %.2f  "
+                                    "[%s]\n",
+                                    y_quarter, *min_z, echo,
+                                    pass ? "PASS" : "FAIL");
+                                shell->request_exit(pass ? 0 : 1);
+                            });
+                    });
+            });
+        });
+    }
+
     // Bouncer arc (main forces --scene=bouncer1d): the boot relax lands
     // in the soft-floor Airy window; a drop from height carries E ~ g h.
     // The exact Airy SPACING is pinned by tests/bouncer1d_test.cpp.

@@ -845,6 +845,69 @@ void draw_corral_panel(ShellT& shell, UiState& ui, ses_shell::CorralApi& cr) {
     ImGui::End();
 }
 
+// Spin panel: B/E axis sliders + NMR pulse deck + Born measurement.
+template <typename ShellT>
+void draw_spin_panel(ShellT& shell, UiState& ui, ses_shell::SpinApi& sp) {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
+    draw_scene_picker(shell);
+    draw_perf_readout(shell);
+    if (ImGui::Button("Reset (2)")) shell.press('2');
+    ImGui::SameLine();
+    if (ImGui::Button("pi/2 (3)")) shell.press('3');
+    ImGui::SameLine();
+    if (ImGui::Button("pi (4)")) shell.press('4');
+    ImGui::SameLine();
+    if (ImGui::Button("Spin echo (5)")) shell.press('5');
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("64 detuned spins: pi/2, fan out for tau, pi,\n"
+                          "refocus -- the mean arrow collapses and comes\n"
+                          "BACK (Hahn echo).");
+    }
+    if (ImGui::Button(sp.rf_on() ? "RF off (L)" : "RF drive (L)")) {
+        shell.press('L');
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Co-rotating circular drive locked to omega_L at\n"
+                          "toggle time: resonant Rabi nutation (NMR).");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Measure (M)")) shell.measure_now();
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Born projection along B_hat: the arrow snaps\n"
+                          "with |<+B|psi>|^2 to aligned, else anti.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
+    const char* axes[3] = {"Bx", "By", "Bz"};
+    for (int a = 0; a < 3; ++a) {
+        float v = static_cast<float>(sp.b(a));
+        if (ImGui::SliderFloat(axes[a], &v, -1.0f, 1.0f, "%.2f")) {
+            sp.set_b(a, static_cast<double>(v));
+        }
+    }
+    const char* eaxes[3] = {"Ex", "Ey", "Ez"};
+    for (int a = 0; a < 3; ++a) {
+        float v = static_cast<float>(sp.e(a));
+        if (ImGui::SliderFloat(eaxes[a], &v, -1.0f, 1.0f, "%.2f")) {
+            sp.set_e(a, static_cast<double>(v));
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A pinned spin has no electric dipole: E only\n"
+                          "rides as the red flux (plus a global phase).");
+    }
+    ImGui::Text("<s> = (%+.2f, %+.2f, %+.2f)   echo peak %.2f",
+                sp.bloch_x(), sp.bloch_y(), sp.bloch_z(), sp.echo_peak());
+    draw_time_scale(shell, ui);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(shell.status_text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+}
+
 // Anderson panel: disorder strength + landscape reroll + conductance.
 template <typename ShellT>
 void draw_anderson_panel(ShellT& shell, UiState& ui,

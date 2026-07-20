@@ -273,6 +273,24 @@ struct QdotApi {
     virtual double spectrum_weight(int i) = 0;
 };
 
+// Pinned electron spin on the Bloch sphere (Pauli two-level stage).
+struct SpinApi {
+    virtual ~SpinApi() = default;
+    virtual void set_b(int axis, double v) = 0;  // B free to point anywhere
+    virtual double b(int axis) const = 0;
+    virtual void set_e(int axis, double v) = 0;  // pinned spin: flux only
+    virtual double e(int axis) const = 0;
+    virtual void toggle_rf() = 0;  // co-rotating Rabi drive at omega_L
+    virtual bool rf_on() const = 0;
+    virtual void pulse(bool half) = 0;  // pi/2 (true) / pi about x
+    virtual void spin_echo() = 0;       // detuned-ensemble sequence
+    virtual double echo_peak() const = 0;
+    virtual double bloch_x() = 0;
+    virtual double bloch_y() = 0;
+    virtual double bloch_z() = 0;
+    virtual int last_outcome() const = 0;
+};
+
 // Quantum bouncer: gravity + mirror, the Airy ladder.
 struct BouncerApi {
     virtual ~BouncerApi() = default;
@@ -377,6 +395,7 @@ public:
     virtual CarpetApi* carpet() { return nullptr; }
     virtual QpcApi* qpc() { return nullptr; }
     virtual BouncerApi* bouncer() { return nullptr; }
+    virtual SpinApi* spin() { return nullptr; }
 
     // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
     // scenes return 0 and the renderer draws nothing extra.
