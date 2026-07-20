@@ -9,6 +9,7 @@ module;
 export module ses.scenario.qdot2d_director;
 export import ses.scenario.lattice2d_director;
 import ses.parallel;
+import ses.heightfield;
 
 
 // 2D quantum dot: parabolic confinement 1/2 w0^2 r^2 with an optional
@@ -35,6 +36,11 @@ constexpr double kQd2dBMax = 1.2;
 constexpr double kQd2dDisplace = 4.0;
 constexpr double kQd2dConvTol = 1e-8;
 constexpr int kQd2dTrailCap = 900;
+// IBM-style STM height surface (the corral rule): z = |psi|^2, peak SNAP
+// then 0.98-decay -- the base's decay-only peak_ boots ~100x too high and
+// blacked the cloud out for seconds.
+constexpr double kQd2dSurfH = 6.0;
+constexpr int kQd2dMeshStride = 1;  // 256^2 physics = 256^2 display mesh
 
 class Qdot2DDirector final : public Lattice2DDirectorBase, public QdotApi {
 public:
@@ -117,7 +123,38 @@ public:
     }
 
     double sim_dt() const override { return kQd2dDt; }
+
+    // ---- STM-style surface display (mesh path; cloud off) ----
+    bool cloud() const override { return false; }
+    const ses::Mesh& mesh() const override { return hf_.mesh; }
+    const std::vector<ses::Rgb>& colors() const override {
+        return hf_.colors;
+    }
+    bool take_mesh_dirty() override {
+        return std::exchange(mesh_dirty_, false);
+    }
+    // Tilted boot view so the height relief reads (face-on would hide it).
+    double default_camera_azimuth() const override { return 0.35; }
+    double default_camera_elevation() const override { return 0.95; }
     double default_camera_distance() const override { return 75.0; }
+
+protected:
+    // Heightfield surface instead of the volume slab (corral peak rule).
+    void rebuild_display() override {
+        double cur = 0.0;
+        for (int j = 0; j < kQd2dN; ++j) {
+            for (int i = 0; i < kQd2dN; ++i) {
+                cur = std::max(cur, std::norm(psi_(i, j, 0)));
+            }
+        }
+        disp_peak_ = disp_peak_ <= 0.0 ? cur
+                                       : std::max(cur, 0.98 * disp_peak_);
+        hf_ = ses::heightfield_surface(psi_, kQd2dSurfH, disp_peak_,
+                                       kQd2dMeshStride);
+        mesh_dirty_ = true;
+    }
+
+public:
 
     std::string title_text() override {
         std::string s = strf(
@@ -204,6 +241,9 @@ private:
     }
 
     std::unique_ptr<ses::PeierlsLattice2D> prop_;
+    ses::Heightfield hf_;
+    bool mesh_dirty_ = false;
+    double disp_peak_ = 0.0;
     std::vector<float> trail_;
     double w0_ = kQd2dW0;
     double b_ = kQd2dB;
