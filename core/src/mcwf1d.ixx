@@ -28,11 +28,18 @@ export namespace ses {
 // One unraveling step; u in [0, 1) is the caller's uniform draw; `damp`
 // must be built at dtau = kappa dt / (2 omega) on the SAME grid/potential.
 // Returns true when the jump fired.
-inline bool photon_loss_step(Field1D& /*psi*/, double /*omega*/,
-                             const std::vector<double>& /*v*/,
-                             double /*kappa*/, double /*dt*/, double /*u*/,
-                             const ImaginaryTimePropagator1D& /*damp*/) {
-    return false;  // RED stub
+inline bool photon_loss_step(Field1D& psi, double omega,
+                             const std::vector<double>& v, double kappa,
+                             double dt, double u,
+                             const ImaginaryTimePropagator1D& damp) {
+    const double n_bar =
+        std::max(0.0, mean_energy(psi, v) / omega - 0.5);
+    if (u < kappa * n_bar * dt) {
+        ladder_lower(psi, omega);  // a psi / ||.||: the photon left
+        return true;
+    }
+    damp.relax(psi, 1);  // conditional e^{-kappa n dt/2} / norm
+    return false;
 }
 
 }  // namespace ses
