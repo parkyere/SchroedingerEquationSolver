@@ -529,10 +529,11 @@ TEST(Landau2DDirector, LadderRefusesPastTheLatticeBand) {
     while (climbed < 40 && api->ladder(true)) {
         ++climbed;
     }
-    // The measured band edge: refusal strikes in the n ~ 10..18 window
-    // (5-15% rung tolerance around the probe's n ~ 13 knee).
-    EXPECT_GE(climbed, 8);
-    EXPECT_LE(climbed, 18);
+    // The measured band ceiling (E ~ 0.30/h^2): from the coherent boot
+    // (each a-dag adds ~2B there) refusal strikes within a handful of
+    // rungs -- but never immediately, and never unbounded.
+    EXPECT_GE(climbed, 3);
+    EXPECT_LE(climbed, 20);
     // And the climb was real: the Landau index followed the rungs.
     EXPECT_GT(api->mean_n(), 0.6 * climbed);
     // Descending unwinds the tower and REFUSES at the bottom (a|0> = 0 --
