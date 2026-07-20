@@ -47,6 +47,7 @@ add_executable(sesolver_tests
     hydrogen3_test.cpp
     imaginary_tables_test.cpp
     imaginary_time_test.cpp
+    kepler_test.cpp
     ladder_test.cpp
     lattice2d_test.cpp
     magnetic_test.cpp
