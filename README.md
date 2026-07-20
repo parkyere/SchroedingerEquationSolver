@@ -8,8 +8,9 @@ A from-scratch, **reinvent-the-wheel** solver and 3D visualizer for the
 **single-electron** time-dependent Schrödinger equation (TDSE), built for
 learning. The probability cloud `|ψ(r,t)|²` evolves in real time on the GPU
 and is volume-rendered as an **electron cloud** by a hand-written,
-framework-free Vulkan renderer. Fifteen interactive scenes cover the hydrogen
-atom, traps, tunneling, molecules, interference, and solid-state physics.
+framework-free Vulkan renderer. Twenty-three interactive scenes cover the
+hydrogen atom, traps, tunneling, molecules, interference, solid-state, spin
+dynamics, and scattering.
 
 > Scope is deliberately bounded to a single electron. Many-electron and DFT are
 > explicitly **out of scope** — solving the many-body wavefunction directly on a
@@ -45,17 +46,27 @@ Pick at boot with `--scene <name>` or live from the panel's scene combo.
 | `doublewell1d` | Double well: tunneling splitting oscillation, exponential in the barrier slider |
 | `ptwell1d` | Pöschl–Teller well (reflectionless family) |
 | `morse1d` | Morse potential: anharmonic ladder |
-| `h2plus` | H₂⁺ molecular ion, Born–Oppenheimer fixed nuclei, bond-length knob |
+| `h2plus` | H₂⁺ molecular ion: exact prolate-spheroidal orbital atlas at the fixed equilibrium bond length, plus random normalized superpositions |
 | `benzene` | Six-center one-electron ring toy (stripped benzene core) |
 | `doubleslit2d` | Real 2D double slit + **Aharonov–Bohm** solenoid: Peierls-lattice propagator, flux as exact link phases, accumulated screen histogram |
 | `landau2d` | Landau levels / cyclotron orbit in a uniform B (predicted circle vs measured trail) |
 | `bloch1d` | sin² lattice: band structure inset + Bloch oscillations under a tilt |
 | `corral2d` | The IBM 1993 quantum corral — 48 Fe atoms in a ring on a 2D surface |
 | `qdot2d` | 2D quantum dot (Fock–Darwin) in a magnetic field |
+| `billiard2d` | Quantum billiard: Bunimovich stadium (chaotic) vs circle (integrable), with a time-average scar lens |
+| `anderson1d` | Anderson localization in a 1D speckle-disordered wire |
+| `carpet1d` | Quantum carpet: Talbot revivals on a free ring (T_rev = L²/π) |
+| `qpc2d` | Quantum point contact: conductance channels open one at a time as the gap widens |
+| `bouncer1d` | Quantum bouncer (GRANIT): gravity + mirror floor, Airy bound states |
+| `spin` | Electron spin on the Bloch sphere: Larmor precession, RF Rabi drive, spin echo, ensemble measurement |
+| `spins` | 16 interacting Heisenberg spins: exact 2¹⁶ state vector (GPU) vs mean-field, ferro / Néel orders |
+| `rutherford3d` | Rutherford scattering: an α packet off a repulsive Coulomb nucleus, E and Z knobs, backscatter probe |
 
 1D scenes draw ψ as a white **phasor curve** (radius ∝ \|ψ\|², twist = phase)
-with a phase-colored \|ψ\|² shadow band on the plane and the potential in red.
-2D lattice scenes render their plane through the volume path face-on.
+over a phase-colored \|ψ\|² band with the potential in red. The STM-style 2D
+scenes (corral, qdot, billiard, qpc) lift \|ψ\|² into a tilted height-map
+surface with phase-colored relief; doubleslit and landau render their plane as
+a cloud. The spin scenes place one Bloch sphere per spin.
 
 ## Layout
 
