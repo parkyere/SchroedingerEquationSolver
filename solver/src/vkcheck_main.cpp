@@ -65,6 +65,7 @@
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line256_spv.h>
+#include <fft_line512_spv.h>
 
 #include <algorithm>
 #include <array>
@@ -941,8 +942,9 @@ bool check_fp16_roundtrip(ses_vk::DeviceContext& ctx) {
 }
 
 // Radix-2 shared-memory line FFT at a baked N: forward unnormalized DFT of
-// one contiguous line vs ses::fft (CPU double); 1e-3 absolute because the
-// unnormalized spectrum magnitudes grow with N, scaling up fp32 rounding.
+// one contiguous line vs ses::fft (CPU double); 1e-3 absolute at the N=256
+// reference because the unnormalized spectrum magnitudes grow with N,
+// scaling up fp32 rounding -- so the gate rides N linearly past 256.
 bool check_line_fft(ses_vk::DeviceContext& ctx, int N, const unsigned char* spv,
                     std::size_t spv_size) {
     std::vector<std::complex<double>> line(static_cast<std::size_t>(N));
@@ -1014,7 +1016,8 @@ bool check_line_fft(ses_vk::DeviceContext& ctx, int N, const unsigned char* spv,
             max_err,
             std::abs(out[2 * i + 1] - cpu[static_cast<std::size_t>(i)].imag()));
     }
-    const bool pass = max_err < 1e-3;
+    const double tol = 1e-3 * std::max(1.0, N / 256.0);
+    const bool pass = max_err < tol;
     std::printf("line FFT N=%d (raw Vulkan): max |gpu - cpu| = %.3e  [%s]\n", N,
                 max_err, pass ? "PASS" : "FAIL");
     return pass;
@@ -1246,6 +1249,79 @@ bool check_engine_step(ses_vk::DeviceContext& ctx) {
         const bool pass = max_err < tol;
         std::printf(
             "engine 20 steps (%s): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
+            engine.vkfft_active() ? "raw Vulkan, native VkFFT"
+                                  : "raw Vulkan, line FFT",
+            max_err, tol, pass ? "PASS" : "FAIL");
+        all_pass = all_pass && pass;
+    }
+    engine.set_use_vkfft(true);
+    return all_pass;
+}
+
+// The Strang step on a PLANAR 512x512x1 grid (the 2D scenes' shape) vs
+// SplitOperator3D (CPU double oracle): the engine must accept nz = 1 with
+// the z axis held at DC, on BOTH FFT paths (native VkFFT plans 2D; the
+// hand-rolled fallback enumerates per-axis lines and skips the length-1
+// z pass). 2D harmonic well, 20 steps, coherent-state drift in x.
+bool check_engine_planar(ses_vk::DeviceContext& ctx) {
+    const ses::Grid1D axis{-16.0, 16.0, 512};
+    const ses::Grid3D g{axis, axis, ses::Grid1D{0.0, 2.0, 1}};
+    std::vector<double> v(static_cast<std::size_t>(g.size()));
+    for (int j = 0; j < g.y.n; ++j) {
+        for (int i = 0; i < g.x.n; ++i) {
+            const double x = g.x.coord(i);
+            const double y = g.y.coord(j);
+            v[static_cast<std::size_t>(g.flat(i, j, 0))] =
+                0.125 * (x * x + y * y);
+        }
+    }
+    const double dt = 0.02;
+    const ses::SplitOperator3D cpu_prop{g, v, dt};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 1.0},
+                                                 ses::Vec3d{1.5, 1.5, 1.0},
+                                                 ses::Vec3d{0.5, 0.0, 0.0});
+
+    ses_vk::EngineKernels blobs = engine_blobs_8();
+    blobs.fft = k_fft_line512_spv;
+    blobs.fft_size = k_fft_line512_spv_size;
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, blobs, v, dt, psi0.data())) {
+        std::printf("engine 20 steps 512x512x1 planar: engine init FAIL\n");
+        return false;
+    }
+
+    ses::Field3D cpu = psi0;
+    cpu_prop.step(cpu, 20);
+
+    bool all_pass = true;
+    for (int mode = 0; mode < 2; ++mode) {
+        const bool want_vkfft = (mode == 0);
+        engine.set_use_vkfft(want_vkfft);
+        if (want_vkfft && !engine.vkfft_active()) {
+            continue;  // plan unavailable: the hand-rolled pass covers it
+        }
+        engine.upload_state(psi0.data());
+        engine.step(20);
+        std::vector<float> gpu_out;
+        if (!engine.readback(gpu_out)) {
+            std::printf("engine 20 steps 512x512x1 planar: readback FAIL\n");
+            return false;
+        }
+        double max_err = 0.0;
+        double max_mag = 0.0;
+        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
+            max_err =
+                std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
+            max_err = std::max(max_err,
+                               std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
+            max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
+            max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
+        }
+        const double tol = 1e-4 + 1e-5 * max_mag;
+        const bool pass = max_err < tol;
+        std::printf(
+            "engine 20 steps 512x512x1 planar (%s): max |gpu - cpu| = %.3e "
+            "(tol %.3e)  [%s]\n",
             engine.vkfft_active() ? "raw Vulkan, native VkFFT"
                                   : "raw Vulkan, line FFT",
             max_err, tol, pass ? "PASS" : "FAIL");
@@ -2727,8 +2803,13 @@ int main() {
         check_line_fft(ctx, 256, k_fft_line256_spv, k_fft_line256_spv_size)
             ? 0
             : 1;
+    failures +=
+        check_line_fft(ctx, 512, k_fft_line512_spv, k_fft_line512_spv_size)
+            ? 0
+            : 1;
     failures += check_fft3(ctx) ? 0 : 1;
     failures += check_engine_step(ctx) ? 0 : 1;
+    failures += check_engine_planar(ctx) ? 0 : 1;
     failures += check_engine_absorber(ctx) ? 0 : 1;
     failures += check_engine_relax(ctx) ? 0 : 1;
     failures += check_engine_driven(ctx) ? 0 : 1;
