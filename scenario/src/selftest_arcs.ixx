@@ -662,6 +662,32 @@ void register_verification_arcs(ShellT* shell) {
     // operator itself (a|0> = 0) with the level untouched. Condition-polled
     // (the CPU scene ticks immediately, but the poll keeps the boot-order
     // contract explicit).
+    // Bouncer arc (main forces --scene=bouncer1d): the boot relax lands
+    // in the soft-floor Airy window; a drop from height carries E ~ g h.
+    // The exact Airy SPACING is pinned by tests/bouncer1d_test.cpp.
+    if (shell->has_arg("--selftest-bouncer")) {
+        shell->sched().after(1000, [shell] {
+            auto* bo = shell->bo();
+            if (bo == nullptr) {
+                std::fprintf(stderr, "selftest-bouncer: no api  [FAIL]\n");
+                shell->request_exit(1);
+                return;
+            }
+            const double e_g = bo->energy();  // boot = relaxed ground
+            const double e1 = bo->airy_e1();
+            bo->drop();
+            const double e_d = bo->energy();
+            const bool ground_ok = e_g < e1 && e_g > e1 - 0.35;
+            const bool drop_ok = e_d > 0.85 * 80.0 && e_d < 1.15 * 80.0;
+            const bool pass = ground_ok && drop_ok;
+            std::fprintf(stderr,
+                         "selftest-bouncer: ground %.3f (Airy %.3f, soft "
+                         "floor), drop E %.1f (g h = 80)  [%s]\n",
+                         e_g, e1, e_d, pass ? "PASS" : "FAIL");
+            shell->request_exit(pass ? 0 : 1);
+        });
+    }
+
     // QPC arc (main forces --scene=qpc2d): the staircase foot vs the
     // first channel at scene scale. The full 4-point staircase is pinned
     // by tests/qpc2d_test.cpp.

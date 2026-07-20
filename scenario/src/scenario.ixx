@@ -253,6 +253,15 @@ struct QdotApi {
     virtual void fire_displaced() = 0;  // coherent orbit / rosette
 };
 
+// Quantum bouncer: gravity + mirror, the Airy ladder.
+struct BouncerApi {
+    virtual ~BouncerApi() = default;
+    virtual void relax_ground() = 0;  // instant ITP anneal to Airy 1
+    virtual void drop() = 0;          // packet from height: bounce/revive
+    virtual double energy() const = 0;
+    virtual double airy_e1() const = 0;  // ideal hard-floor E1
+};
+
 // Quantum point contact: conductance staircase in the gap width.
 struct QpcApi {
     virtual ~QpcApi() = default;
@@ -347,6 +356,7 @@ public:
     virtual AndersonApi* anderson() { return nullptr; }
     virtual CarpetApi* carpet() { return nullptr; }
     virtual QpcApi* qpc() { return nullptr; }
+    virtual BouncerApi* bouncer() { return nullptr; }
 
     // 1D-scene overlay polylines (phasor curve + potential profile); the 3D
     // scenes return 0 and the renderer draws nothing extra.

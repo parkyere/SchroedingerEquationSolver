@@ -57,6 +57,7 @@
 #include <SDL3/SDL_main.h>
 import ses.scenario.anderson1d_director;
 import ses.scenario.billiard2d_director;
+import ses.scenario.bouncer1d_director;
 import ses.scenario.carpet1d_director;
 import ses.scenario.qpc2d_director;
 import ses.scenario.bloch1d_director;
@@ -97,8 +98,8 @@ constexpr const char* kSceneNames[] = {
     "hydrogen", "harmonic", "tunnel",  "harmonic1d",   "tunnel1d",
     "doublewell1d", "ptwell1d", "morse1d", "h2plus",   "benzene",
     "doubleslit2d", "landau2d", "bloch1d", "corral2d", "qdot2d",
-    "billiard2d", "anderson1d", "carpet1d", "qpc2d"};
-constexpr int kSceneCount = 19;
+    "billiard2d", "anderson1d", "carpet1d", "qpc2d", "bouncer1d"};
+constexpr int kSceneCount = 20;
 std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
     switch (idx) {
         case 1: return std::make_unique<ses_shell::HarmonicDirector>();
@@ -119,6 +120,7 @@ std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
         case 16: return std::make_unique<ses_shell::Anderson1DDirector>();
         case 17: return std::make_unique<ses_shell::Carpet1DDirector>();
         case 18: return std::make_unique<ses_shell::Qpc2DDirector>();
+        case 19: return std::make_unique<ses_shell::Bouncer1DDirector>();
         default: return std::make_unique<ses_shell::HydrogenDirector>();
     }
 }
@@ -158,6 +160,7 @@ constexpr ArcScene kArcScenes[] = {
     {"selftest-cat", "harmonic1d"},
     {"selftest-carpet", "carpet1d"},
     {"selftest-qpc2d", "qpc2d"},
+    {"selftest-bouncer", "bouncer1d"},
     {"selftest-h2p", "h2plus"},
     {"selftest-benzene", "benzene"},
 };
@@ -419,6 +422,10 @@ public:
                                         {{"Refire (2)", '2'}});
             } else if (auto* qpc = director_->qpc()) {
                 app::draw_qpc_panel(*this, ui_, *qpc);
+            } else if (director_->bouncer() != nullptr) {
+                app::draw_generic_panel(*this, ui_,
+                                        {{"Airy ground (2)", '2'},
+                                         {"Drop (F)", 'F'}});
             } else if (director_->tunnel() != nullptr) {
                 app::draw_generic_panel(*this, ui_, {});
             } else {
@@ -535,6 +542,7 @@ public:
     ses_shell::AndersonApi* an() { return director_->anderson(); }
     ses_shell::CarpetApi* cp() { return director_->carpet(); }
     ses_shell::QpcApi* qp() { return director_->qpc(); }
+    ses_shell::BouncerApi* bo() { return director_->bouncer(); }
     bool solving() const { return director_->solving(); }
     bool manifold_ready() const { return director_->scene_ready(); }
     void debug_set_camera_distance(double d) {
@@ -919,7 +927,7 @@ int main(int argc, char* argv[]) {
         "boot scene (hydrogen, harmonic, tunnel, harmonic1d, tunnel1d, "
         "doublewell1d, ptwell1d, morse1d, h2plus, benzene, doubleslit2d, "
         "landau2d, bloch1d, corral2d, qdot2d, billiard2d, anderson1d, "
-        "carpet1d, qpc2d)");
+        "carpet1d, qpc2d, bouncer1d)");
     add("face-z", "boot straight into the z-facing (textbook) view");
     add("flow", "start with the probability-flow streaklines on");
     for (const char* flag :
@@ -929,6 +937,7 @@ int main(int argc, char* argv[]) {
     }
     for (const char* flag :
          {"selftest-anderson", "selftest-benzene", "selftest-billiard",
+          "selftest-bouncer",
           "selftest-bloch", "selftest-carpet", "selftest-cascade",
           "selftest-cat",
           "selftest-corral", "selftest-decay", "selftest-doubleslit2d",
