@@ -191,13 +191,9 @@ public:
             const int n = pending_steps_;
             pending_steps_ = 0;
             if (exact_mode_ && gpu_ready_) {
-                // readback keeps exact_ current for CPU Bloch reduction + measurement.
+                // Evolve + Bloch-reduce on device; only 48 floats read back.
+                // exact_ is materialized on demand (measure_now).
                 gpu_.step(n);
-                const float* st = gpu_.state();
-                for (std::size_t m = 0; m < exact_.c.size(); ++m) {
-                    exact_.c[m] = std::complex<double>{st[2 * m],
-                                                       st[2 * m + 1]};
-                }
             } else {
                 for (int k = 0; k < n; ++k) {
                     if (exact_mode_) {
@@ -245,6 +241,15 @@ public:
         std::uniform_real_distribution<double> uni(0.0, 1.0);
         int plus = 0;
         if (exact_mode_) {
+            if (gpu_ready_) {
+                // exact_ is stale under GPU residency; pull the live 2^16 state.
+                gpu_.download_state();
+                const float* st = gpu_.state();
+                for (std::size_t m = 0; m < exact_.c.size(); ++m) {
+                    exact_.c[m] = std::complex<double>{st[2 * m],
+                                                       st[2 * m + 1]};
+                }
+            }
             // rotate B_hat->z, Born-measure bits sequentially (correct joint sampling), rotate back.
             const double th = std::acos(std::clamp(nz, -1.0, 1.0));
             const double axn = std::hypot(-ny, nx);
@@ -413,6 +418,14 @@ private:
     }
 
     void refresh_bloch() {
+        if (exact_mode_ && gpu_ready_) {
+            // GPU-resident: <sigma> reduced on device, only 48 floats read back.
+            const float* g = gpu_.bloch();
+            for (int i = 0; i < 3 * kSlN * kSlN; ++i) {
+                bloch_[static_cast<std::size_t>(i)] = static_cast<double>(g[i]);
+            }
+            return;
+        }
         for (int i = 0; i < kSlN * kSlN; ++i) {
             double x = 0.0;
             double y = 0.0;
