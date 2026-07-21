@@ -12,6 +12,8 @@ module;
 #include <spin_site_gate_spv.h>
 #include <spin_bond_gate_spv.h>
 #include <spin_site_bloch_spv.h>
+#include <spin_born_sample_spv.h>
+#include <spin_collapse_basis_spv.h>
 #include <spin_mf_snapshot_spv.h>
 #include <spin_mf_sweep_spv.h>
 #include <spin_mf_measure_spv.h>
@@ -74,11 +76,11 @@ public:
             return false;
         }
         const int n_sites = ses::kExactSites;
-        // 2*sites (half + full angle field) + bonds; +1 more set for the reduce.
+        // 2*sites (half+full field) + bonds; +3 sets: reduce, born-sample, collapse.
         const int n_sets = 2 * n_sites + nbonds_;
-        if (!arena_.create(ctx, static_cast<std::uint32_t>(n_sets + 1),
-                           static_cast<std::uint32_t>(n_sets + 2),
-                           static_cast<std::uint32_t>(n_sets + 1))) {
+        if (!arena_.create(ctx, static_cast<std::uint32_t>(n_sets + 3),
+                           static_cast<std::uint32_t>(n_sets + 6),
+                           static_cast<std::uint32_t>(n_sets + 3))) {
             return false;
         }
         site_ubo_.resize(static_cast<std::size_t>(n_sites));
@@ -151,6 +153,52 @@ public:
         arena_.write_buffer(ctx, reduce_set_, 2,
                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, bloch_ubo_.buf,
                             sizeof(BlochParams));
+        // Exact projective measurement: Born-sample a basis state, then collapse.
+        if (!sample_k_.create(ctx, k_spin_born_sample_spv,
+                              k_spin_born_sample_spv_size,
+                              {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                               {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                               {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !collapse_k_.create(ctx, k_spin_collapse_basis_spv,
+                                k_spin_collapse_basis_spv_size,
+                                {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                 {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                 {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}})) {
+            return false;
+        }
+        if (!ctx.create_device_buffer(sizeof(std::uint32_t), &m_dev_) ||
+            !ctx.create_host_buffer(sizeof(std::uint32_t),
+                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT, &m_host_) ||
+            !ctx.create_host_buffer(sizeof(BornParams),
+                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                    &sample_ubo_) ||
+            !ctx.create_host_buffer(sizeof(CollapseParams),
+                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                    &collapse_ubo_)) {
+            return false;
+        }
+        CollapseParams cp{};
+        cp.n = static_cast<std::uint32_t>(dim_);
+        write_ubo(collapse_ubo_, &cp, sizeof(cp));
+        sample_set_ = arena_.allocate(ctx, sample_k_.set_layout());
+        collapse_set_ = arena_.allocate(ctx, collapse_k_.set_layout());
+        if (sample_set_ == VK_NULL_HANDLE || collapse_set_ == VK_NULL_HANDLE) {
+            return false;
+        }
+        arena_.write_buffer(ctx, sample_set_, 0,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, state_.buf);
+        arena_.write_buffer(ctx, sample_set_, 1,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_dev_.buf);
+        arena_.write_buffer(ctx, sample_set_, 2,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, sample_ubo_.buf,
+                            sizeof(BornParams));
+        arena_.write_buffer(ctx, collapse_set_, 0,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, state_.buf);
+        arena_.write_buffer(ctx, collapse_set_, 1,
+                            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_dev_.buf);
+        arena_.write_buffer(ctx, collapse_set_, 2,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, collapse_ubo_.buf,
+                            sizeof(CollapseParams));
         ready_ = true;
         return true;
     }
@@ -169,11 +217,17 @@ public:
         site_k_.destroy(*ctx_);
         bond_k_.destroy(*ctx_);
         reduce_k_.destroy(*ctx_);
+        sample_k_.destroy(*ctx_);
+        collapse_k_.destroy(*ctx_);
         ctx_->destroy_buffer(&state_);
         ctx_->destroy_buffer(&staging_);
         ctx_->destroy_buffer(&bloch_dev_);
         ctx_->destroy_buffer(&bloch_host_);
         ctx_->destroy_buffer(&bloch_ubo_);
+        ctx_->destroy_buffer(&m_dev_);
+        ctx_->destroy_buffer(&m_host_);
+        ctx_->destroy_buffer(&sample_ubo_);
+        ctx_->destroy_buffer(&collapse_ubo_);
         ctx_ = nullptr;
         ready_ = false;
     }
@@ -315,6 +369,41 @@ public:
         return static_cast<const float*>(bloch_host_.mapped);
     }
 
+    // Full projective measurement along unit axis n with host draw u in [0,1):
+    // rotate n->z, Born-sample a basis state, collapse, rotate back. Returns the
+    // sampled bitstring m (bit i set = site i is -n). Refreshes bloch().
+    // NOTE: repurposes the half-field site UBOs -> caller must set_params after.
+    std::uint32_t measure_exact(double nx, double ny, double nz, double u) {
+        const double th = std::acos(std::clamp(nz, -1.0, 1.0));
+        const double axn = std::hypot(-ny, nx);
+        const double ax = axn > 1e-12 ? -ny / axn : 1.0;
+        const double ay = axn > 1e-12 ? nx / axn : 0.0;
+        apply_uniform_rotation(ax, ay, 0.0, -th);  // n -> z
+        BornParams bp{};
+        bp.u = static_cast<float>(u);
+        write_ubo(sample_ubo_, &bp, sizeof(bp));
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return 0;
+        }
+        VkCommandBuffer cb = shot.cb();
+        sample_k_.bind(cb, sample_set_);
+        vkCmdDispatch(cb, 1, 1, 1);
+        barrier_compute_to_compute(cb);
+        collapse_k_.bind(cb, collapse_set_);
+        vkCmdDispatch(cb, static_cast<std::uint32_t>((dim_ + 255) / 256), 1, 1);
+        barrier_compute_to_transfer(cb);
+        const VkBufferCopy r{0, 0, sizeof(std::uint32_t)};
+        vkCmdCopyBuffer(cb, m_dev_.buf, m_host_.buf, 1, &r);
+        barrier_transfer_to_host(cb);
+        shot.submit_and_wait(*ctx_);
+        vmaInvalidateAllocation(ctx_->allocator, m_host_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        apply_uniform_rotation(ax, ay, 0.0, th);  // z -> n
+        reduce_bloch();
+        return *static_cast<const std::uint32_t*>(m_host_.mapped);
+    }
+
 private:
     struct alignas(16) SiteParams {
         std::uint32_t half_n, site, pad0, pad1;
@@ -365,6 +454,51 @@ private:
         vkCmdCopyBuffer(cb, bloch_dev_.buf, bloch_host_.buf, 1, &r);
         barrier_transfer_to_host(cb);
     }
+    void reduce_bloch() {
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return;
+        }
+        VkCommandBuffer cb = shot.cb();
+        barrier_compute_to_compute(cb);  // prior submit's writes -> reduce read
+        record_reduce_and_copy(cb);
+        shot.submit_and_wait(*ctx_);
+        vmaInvalidateAllocation(ctx_->allocator, bloch_host_.alloc, 0,
+                                VK_WHOLE_SIZE);
+    }
+    // Uniform single-qubit rotation on every site (repurposes the site UBOs).
+    void apply_uniform_rotation(double nx, double ny, double nz, double angle) {
+        const ses::SiteGate g = ses::site_gate_matrix(nx, ny, nz, angle);
+        for (int i = 0; i < ses::kExactSites; ++i) {
+            SiteParams sp{};
+            sp.half_n = static_cast<std::uint32_t>(dim_ / 2);
+            sp.site = static_cast<std::uint32_t>(i);
+            fill_c(sp.row0, g.a00);
+            fill_c(sp.row0 + 2, g.a01);
+            fill_c(sp.row1, g.a10);
+            fill_c(sp.row1 + 2, g.a11);
+            write_ubo(site_ubo_[static_cast<std::size_t>(i)], &sp, sizeof(sp));
+        }
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return;
+        }
+        VkCommandBuffer cb = shot.cb();
+        bool first = true;
+        for (int i = 0; i < ses::kExactSites; ++i) {
+            dispatch_site(cb, i, first, site_set_);
+            first = false;
+        }
+        shot.submit_and_wait(*ctx_);
+    }
+
+    struct alignas(16) BornParams {
+        float u;
+        std::uint32_t pad0, pad1, pad2;
+    };
+    struct alignas(16) CollapseParams {
+        std::uint32_t n, pad0, pad1, pad2;
+    };
 
     DeviceContext* ctx_ = nullptr;
     std::size_t dim_ = 0;
@@ -377,6 +511,8 @@ private:
     Kernel site_k_;
     Kernel bond_k_;
     Kernel reduce_k_;
+    Kernel sample_k_;
+    Kernel collapse_k_;
     DescriptorArena arena_;
     std::vector<Buffer> site_ubo_;       // half-angle field (step-end sweeps)
     std::vector<Buffer> site_ubo_full_;  // full-angle field (merged step-boundary)
@@ -387,7 +523,13 @@ private:
     Buffer bloch_dev_{};
     Buffer bloch_host_{};
     Buffer bloch_ubo_{};
+    Buffer m_dev_{};
+    Buffer m_host_{};
+    Buffer sample_ubo_{};
+    Buffer collapse_ubo_{};
     VkDescriptorSet reduce_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet sample_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet collapse_set_ = VK_NULL_HANDLE;
     bool has_field_ = false;
     bool ready_ = false;
 };

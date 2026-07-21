@@ -1630,6 +1630,49 @@ bool check_spin_mf_measure(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// GPU exact projective measurement (rotate n->z, Born-sample a basis state,
+// collapse, rotate back). Oracle uses idempotence: a B-hat eigenstate product
+// (sites 0,5 anti-aligned, rest aligned) is |m0> in the B-hat basis, so
+// measuring must return m0 and leave the state unchanged.
+bool check_spin_measure_exact(ses_vk::DeviceContext& ctx) {
+    const double n0 = 0.36, n1 = -0.48, n2 = 0.8;  // unit axis
+    ses::SpinLattice lat;
+    lat.nx = ses::kExactSide;
+    lat.ny = ses::kExactSide;
+    lat.s.resize(ses::kExactSites);
+    for (int i = 0; i < ses::kExactSites; ++i) {
+        const double s = (i == 0 || i == 5) ? -1.0 : 1.0;  // bits 0,5 -> down
+        lat.s[static_cast<std::size_t>(i)] =
+            ses::spinor_from_bloch(s * n0, s * n1, s * n2);
+    }
+    ses::SpinState16 st = ses::exact_from_product(lat);
+    const std::uint32_t m_expect = (1u << 0) | (1u << 5);  // = 33
+
+    ses_vk::SpinEngine eng;
+    if (!eng.initialize(ctx)) {
+        std::printf("spin measure exact: init FAIL\n");
+        return false;
+    }
+    eng.set_params(0.0, 0.0, 0.0, 0.0, 0.05);
+    eng.upload(st.c);
+    const std::uint32_t m = eng.measure_exact(n0, n1, n2, 0.5);
+    eng.download_state();
+    const float* out = eng.state();
+    // Collapse fixes only the amplitudes up to a global phase, so compare
+    // magnitudes (phase-invariant): the eigenstate measurement is idempotent.
+    double max_err = 0.0;
+    for (std::size_t k = 0; k < eng.dim(); ++k) {
+        const double mag = std::hypot(out[2 * k], out[2 * k + 1]);
+        max_err = std::max(max_err, std::abs(mag - std::abs(st.c[k])));
+    }
+    eng.destroy();
+    const bool pass = (m == m_expect) && max_err < 1e-4;
+    std::printf("spin measure exact (raw Vulkan, 2^16): m=%u (want %u), "
+                "idempotent |amp| err = %.3e  [%s]\n",
+                m, m_expect, max_err, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 // 3-D forward FFT of an 8x8x8 cube: the line FFT once per axis, three
 // dispatches aliasing ONE buffer with compute-to-compute barriers between
 // axes -- the multi-axis orchestration at the heart of the engine's Strang
@@ -3410,6 +3453,7 @@ int main() {
     failures += check_spin_permute(ctx) ? 0 : 1;
     failures += check_spin_mf(ctx) ? 0 : 1;
     failures += check_spin_mf_measure(ctx) ? 0 : 1;
+    failures += check_spin_measure_exact(ctx) ? 0 : 1;
     failures += check_engine_step(ctx) ? 0 : 1;
     failures += check_engine_planar(ctx) ? 0 : 1;
     failures += check_engine_absorber(ctx) ? 0 : 1;
