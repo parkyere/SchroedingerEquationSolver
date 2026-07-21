@@ -60,6 +60,7 @@
 #include <spin_site_gate_spv.h>
 #include <spin_bond_gate_spv.h>
 #include <spin_fused_gate_spv.h>
+#include <spin_permute_spv.h>
 
 #include <algorithm>
 #include <array>
@@ -1418,6 +1419,102 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
     std::printf("spin fused gate k=%zu (raw Vulkan, 2^16): max |gpu - cpu| = "
                 "%.3e  [%s]\n",
                 k, max_err, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// GPU qubit relabel (spin_permute.comp) vs CPU ses::permute_qubits, using the
+// lattice transpose -- the local/global reorder pass of Stage 3.
+bool check_spin_permute(ses_vk::DeviceContext& ctx) {
+    struct alignas(16) PermParams {
+        std::uint32_t n, plo, phi, pad;
+    };
+    const std::size_t dim = ses::kExactDim;
+    const std::vector<int> perm = ses::lattice_transpose_perm();
+
+    ses::SpinState16 st;
+    st.c.resize(dim);
+    for (std::size_t m = 0; m < dim; ++m) {
+        st.c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
+                                       std::cos(0.17 * m) - 0.2};
+    }
+    const ses::SpinState16 cpu = ses::permute_qubits(st, perm);
+
+    std::vector<float> in(dim * 2);
+    for (std::size_t m = 0; m < dim; ++m) {
+        in[2 * m] = static_cast<float>(st.c[m].real());
+        in[2 * m + 1] = static_cast<float>(st.c[m].imag());
+    }
+    PermParams pp{};
+    pp.n = static_cast<std::uint32_t>(dim);
+    for (int b = 0; b < 8; ++b) {
+        pp.plo |= (static_cast<std::uint32_t>(perm[static_cast<std::size_t>(b)])
+                   & 0xFu)
+                  << (4u * static_cast<std::uint32_t>(b));
+    }
+    for (int b = 8; b < 16; ++b) {
+        pp.phi |= (static_cast<std::uint32_t>(perm[static_cast<std::size_t>(b)])
+                   & 0xFu)
+                  << (4u * static_cast<std::uint32_t>(b - 8));
+    }
+
+    const VkDeviceSize bytes = dim * 2 * sizeof(float);
+    ses_vk::Kernel pk;
+    ses_vk::Buffer src{}, dst{}, staging{}, ubo{};
+    Scope s(ctx);
+    s.kernels = {&pk};
+    s.buffers = {&src, &dst, &staging, &ubo};
+    if (!pk.create(ctx, k_spin_permute_spv, k_spin_permute_spv_size,
+                   {{0, kStorage}, {1, kStorage}, {2, kUniform}})) {
+        return false;
+    }
+    if (!ctx.create_device_buffer(bytes, &src) ||
+        !ctx.create_device_buffer(bytes, &dst) ||
+        !ctx.create_host_buffer(bytes,
+                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                &staging) ||
+        !ctx.create_host_buffer(sizeof(PermParams),
+                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &ubo)) {
+        return false;
+    }
+    std::memcpy(staging.mapped, in.data(), bytes);
+    flush(ctx, staging);
+    std::memcpy(ubo.mapped, &pp, sizeof(pp));
+    flush(ctx, ubo);
+    if (!s.arena.create(ctx, 1, 2, 1)) {
+        return false;
+    }
+    VkDescriptorSet set = s.arena.allocate(ctx, pk.set_layout());
+    if (set == VK_NULL_HANDLE) {
+        return false;
+    }
+    s.arena.write_buffer(ctx, set, 0, kStorage, src.buf);
+    s.arena.write_buffer(ctx, set, 1, kStorage, dst.buf);
+    s.arena.write_buffer(ctx, set, 2, kUniform, ubo.buf, sizeof(PermParams));
+
+    if (!s.shot.begin(ctx)) {
+        return false;
+    }
+    record_uploads(s.shot.cb(), staging, {{&src, 0, bytes}});
+    pk.bind(s.shot.cb(), set);
+    vkCmdDispatch(s.shot.cb(), (pp.n + 255u) / 256u, 1, 1);
+    record_readback(s.shot.cb(), dst, staging, bytes);
+    if (!s.shot.submit_and_wait(ctx)) {
+        return false;
+    }
+    invalidate(ctx, staging);
+
+    const float* out = static_cast<const float*>(staging.mapped);
+    double max_err = 0.0;
+    for (std::size_t m = 0; m < dim; ++m) {
+        max_err = std::max(max_err, std::abs(out[2 * m] - cpu.c[m].real()));
+        max_err =
+            std::max(max_err, std::abs(out[2 * m + 1] - cpu.c[m].imag()));
+    }
+    const bool pass = max_err < 1e-6;  // exact data move, only fp32 input round-off
+    std::printf("spin permute (raw Vulkan, 2^16 transpose): max |gpu - cpu| = "
+                "%.3e  [%s]\n",
+                max_err, pass ? "PASS" : "FAIL");
     return pass;
 }
 
@@ -3198,6 +3295,7 @@ int main() {
     failures += check_spin_engine_step(ctx) ? 0 : 1;
     failures += check_spin_bloch(ctx) ? 0 : 1;
     failures += check_spin_fused_gate(ctx) ? 0 : 1;
+    failures += check_spin_permute(ctx) ? 0 : 1;
     failures += check_engine_step(ctx) ? 0 : 1;
     failures += check_engine_planar(ctx) ? 0 : 1;
     failures += check_engine_absorber(ctx) ? 0 : 1;

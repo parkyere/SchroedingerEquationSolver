@@ -457,4 +457,43 @@ inline std::vector<FusedGate> fuse_gates(const std::vector<FusedGate>& gs,
     return out;
 }
 
+// ---- Qubit reordering (Stage 3: the local/global relabel mechanism) ----
+// A qubit permutation is a bijection of the 16-bit index. Reordering brings the
+// qubits a gate touches into a contiguous low window (coalesced access, no
+// fusion-window overflow) -- the single-GPU form of Intel-QS / cuStateVec's
+// local/global split. The permutation itself carries no physics; it is undone
+// (or tracked) so the evolution is unchanged.
+
+// Lattice transpose (x,y)->(y,x): an involution that turns vertical bonds
+// (bit s <-> s+4) into horizontal ones (bit-adjacent) and vice versa.
+inline std::vector<int> lattice_transpose_perm() {
+    std::vector<int> p(kExactSites);
+    for (int y = 0; y < kExactSide; ++y) {
+        for (int x = 0; x < kExactSide; ++x) {
+            p[static_cast<std::size_t>(y * kExactSide + x)] =
+                x * kExactSide + y;
+        }
+    }
+    return p;
+}
+
+// Relabel qubits so new qubit b carries old qubit perm[b]: out[j] = in[i] where
+// i sets old bit perm[b] iff new index j sets bit b. Applying a gate on new
+// qubits (a,b) then undoing the relabel == the gate on old qubits (perm[a],perm[b]).
+inline SpinState16 permute_qubits(const SpinState16& s,
+                                  const std::vector<int>& perm) {
+    SpinState16 o;
+    o.c.resize(kExactDim);
+    for (std::size_t j = 0; j < kExactDim; ++j) {
+        std::size_t i = 0;
+        for (int b = 0; b < kExactSites; ++b) {
+            if ((j >> b) & 1u) {
+                i |= std::size_t{1} << perm[static_cast<std::size_t>(b)];
+            }
+        }
+        o.c[j] = s.c[i];
+    }
+    return o;
+}
+
 }  // namespace ses

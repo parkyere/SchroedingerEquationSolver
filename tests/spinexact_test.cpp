@@ -115,6 +115,30 @@ TEST(SpinFuse, GreedyFuseReducesPassesAndMatchesExactStep) {
     EXPECT_LT(max_amp_diff(a, b), 1e-10);
 }
 
+// Stage 3: the qubit-reorder relabel is an exact bijection, and the lattice
+// transpose turns a vertical bond into a bond applied in the transposed frame.
+TEST(SpinReorder, TransposeIsInvolution) {
+    const std::vector<int> t = ses::lattice_transpose_perm();
+    const ses::SpinState16 s = seed_tilted();
+    const ses::SpinState16 back =
+        ses::permute_qubits(ses::permute_qubits(s, t), t);
+    EXPECT_LT(max_amp_diff(s, back), 1e-15);  // pure data movement
+}
+
+TEST(SpinReorder, TransposeLocalizesVerticalBond) {
+    const std::vector<int> t = ses::lattice_transpose_perm();
+    const ses::SpinState16 s = seed_tilted();
+    // Reference: vertical bond (1,5) applied directly in the original frame.
+    ses::SpinState16 ref = s;
+    ses::apply_fused(ref, ses::bond_fused_gate(1, 5, 0.19));
+    // Same physics via the transpose: act on the T-images of sites 1,5 in the
+    // transposed frame (perm[T[q]] = q since T is an involution), then undo T.
+    ses::SpinState16 v = ses::permute_qubits(s, t);
+    ses::apply_fused(v, ses::bond_fused_gate(t[1], t[5], 0.19));
+    const ses::SpinState16 back = ses::permute_qubits(v, t);
+    EXPECT_LT(max_amp_diff(ref, back), 1e-12);
+}
+
 TEST(SpinExact, ProductBootRoundTripsTheArrows) {
     ses::SpinLattice l;
     l.nx = ses::kExactSide;
