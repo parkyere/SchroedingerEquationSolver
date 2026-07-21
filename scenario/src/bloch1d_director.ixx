@@ -21,6 +21,7 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kBl1dKl = 1.0;               // kL; lattice period a = pi/kL
+constexpr double kHaToEv = 27.211386;         // atomic-unit energy -> eV
 constexpr int kBl1dPeriods = 26;              // integer -> FFT-commensurate box
 constexpr int kBl1dPoints = 4096;
 constexpr double kBl1dDt = 0.01;
@@ -111,9 +112,9 @@ protected:
 
     std::string title_suffix() override {
         std::string s = strf(
-            "  V0 = %.2f (E_R = %.2f)  F = %.3f  q = %+.2f kL  <x> = %+.1f "
+            "  V0 = %.2f eV (E_R = %.2f eV)  F = %.3f  q = %+.2f kL  <x> = %+.1f "
             "(max |dx| %.1f)",
-            v0_, 0.5 * kBl1dKl * kBl1dKl, force_,
+            v0_ * kHaToEv, 0.5 * kBl1dKl * kBl1dKl * kHaToEv, force_,
             quasimomentum() / kBl1dKl, mean_x_, excursion_);
         if (force_ > 0.0) {
             s += strf("  T_Bloch = %.0f au", bloch_period());

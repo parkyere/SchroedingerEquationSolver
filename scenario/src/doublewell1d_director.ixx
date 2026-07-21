@@ -17,6 +17,7 @@ import ses.spectrum1d;
 export namespace ses_shell {
 
 constexpr double kDw1dBox = 40.0;      // Bohr
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kDw1dPoints = 65536;
 constexpr double kDw1dA = 6.0;         // well minima at +-a
 constexpr double kDw1dBarrier = 0.12;  // Ha
@@ -61,9 +62,10 @@ protected:
     int steps_per_tick() const override { return 2; }
 
     std::string title_suffix() override {
-        return strf("  Vb = %.2f Ha  dE = %.2e Ha  transfer T = pi/dE = %.0f "
+        return strf("  Vb = %.2f eV  dE = %.2e eV  transfer T = pi/dE = %.0f "
                     "au  P_L = %.3f | P_R = %.3f",
-                    vb_, de_, 3.14159265358979 / de_, p_left_, p_right_);
+                    vb_ * kHaToEv, de_ * kHaToEv, 3.14159265358979 / de_,
+                    p_left_, p_right_);
     }
 
     void after_batch() override {

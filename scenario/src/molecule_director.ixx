@@ -477,15 +477,16 @@ protected:
         const double rep = nuclear_repulsion();
         std::string s = strf("  R = %.3f Bohr (fixed nuclei)", snap_r(param_));
         if (!atlas_.empty()) {
-            s += strf("  E_total(1sigma_g) = %.4f Ha",
-                      atlas_[0].orb.energy + rep);
+            s += strf("  E_total(1sigma_g) = %.2f eV",
+                      (atlas_[0].orb.energy + rep) * kBaseHaToEv);
         }
         if (showing_random_) {
             s += "  showing: random atlas superposition";
         } else if (cur_ >= 0 && cur_ < static_cast<int>(atlas_.size())) {
-            s += strf("  showing %s: E_elec = %.4f Ha",
+            s += strf("  showing %s: E_elec = %.2f eV",
                       atlas_[static_cast<std::size_t>(cur_)].label.c_str(),
-                      atlas_[static_cast<std::size_t>(cur_)].orb.energy);
+                      atlas_[static_cast<std::size_t>(cur_)].orb.energy *
+                          kBaseHaToEv);
         }
         s += strf("  (%d known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
@@ -626,6 +627,17 @@ public:
     void set_geometry(int /*variant*/) override {}
     void set_parameter(double /*p*/) override {}
 
+    // The ground state is a tightly-bound carbon-core orbital (E ~ -27 Ha,
+    // sub-Bohr): auto-relaxing into it on boot collapses the wide seed into a
+    // near-invisible speck, so the scene opened blank until a manual Reset put
+    // the diffuse seed back. Present the seed in real time on boot instead; the
+    // core-band states (keys 2/3/4) relax on request.
+    void on_gpu_ready() override {
+        cpu_is_truth_ = true;  // run_frame uploads + displays the seed
+        stepping_ = BaseStepping::RealTime;
+        stage_active_view();
+    }
+
     // ground + two deflated core-band members
     int exposed_states() const override { return 3; }
 
@@ -682,14 +694,14 @@ protected:
     std::string title_suffix() override {
         std::string s{"  uniform ring (the X-ray geometry)"};
         if (prepared_[0]) {
-            s += strf("  E0 = %.4f", e_[0]);
+            s += strf("  E0 = %.2f eV", e_[0] * kBaseHaToEv);
         }
         if (prepared_[1]) {
-            s += strf("  E1 = %.4f", e_[1]);
+            s += strf("  E1 = %.2f eV", e_[1] * kBaseHaToEv);
         }
         if (prepared_[2]) {
-            s += strf("  E2 = %.4f (quasi-degenerate carbon-core band)",
-                      e_[2]);
+            s += strf("  E2 = %.2f eV (quasi-degenerate carbon-core band)",
+                      e_[2] * kBaseHaToEv);
         }
         s += "  BARE nuclei: 6 C (Z=6) + 6 H (Z=1), regularized cells, "
              "lattice-snapped; C6H6^41+ first electron.  keys: 2/3/4 states";

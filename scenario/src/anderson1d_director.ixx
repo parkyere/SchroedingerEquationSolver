@@ -24,6 +24,7 @@ export namespace ses_shell {
 // SPECKLE disorder (cold-atom realization, Billy et al. 2008): overlapping
 // bumps -> smooth random field; W ~ E is the standard Anderson regime
 // (sub-E fields measured <= 36% blocking over 100 Bohr -- too transparent).
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kAn1dSpacing = 0.6;
 constexpr double kAn1dBumpSigma = 0.3;
 constexpr double kAn1dK0 = 1.2;
@@ -119,10 +120,10 @@ protected:
 
     std::string title_suffix() override {
         return strf(
-            "  W = %.2f (E = %.2f)  seed %u  transmitted %.1f%%  "
+            "  W = %.2f eV (E = %.2f eV)  seed %u  transmitted %.1f%%  "
             "on stage %.1f%%  keys: 2 refire / 5 new landscape",
-            w_, 0.5 * kAn1dK0 * kAn1dK0, seed_, 100.0 * transmitted_,
-            100.0 * survived_);
+            w_ * kHaToEv, 0.5 * kAn1dK0 * kAn1dK0 * kHaToEv, seed_,
+            100.0 * transmitted_, 100.0 * survived_);
     }
 
     // Right-cap transmission tally = the test's exact metric; no renorm

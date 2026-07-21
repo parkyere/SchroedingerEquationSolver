@@ -20,6 +20,7 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kPt1dBox = 80.0;
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kPt1dPoints = 65536;
 constexpr double kPt1dLambda = 2.0;
 constexpr double kPt1dA = 2.0;
@@ -80,11 +81,12 @@ protected:
     int steps_per_tick() const override { return 2; }
 
     std::string title_suffix() override {
-        return strf("  %s  E = %.3f Ha, depth %.2f Ha  R(k<0) = %.4f (max "
+        return strf("  %s  E = %.3f eV, depth %.2f eV  R(k<0) = %.4f (max "
                     "%.4f)  [W] swap well",
                     square_ ? "SQUARE well (equal depth/area): edges reflect"
                             : "sech^2 lambda = 2: REFLECTIONLESS",
-                    0.5 * kPt1dK0 * kPt1dK0, kPt1dV0, r_now_, r_max_);
+                    0.5 * kPt1dK0 * kPt1dK0 * kHaToEv, kPt1dV0 * kHaToEv,
+                    r_now_, r_max_);
     }
 
     // Probe at title cadence: a 64k FFT every batch is waste.

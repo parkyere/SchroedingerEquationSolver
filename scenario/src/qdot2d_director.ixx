@@ -20,6 +20,7 @@ import ses.heightfield;
 export namespace ses_shell {
 
 constexpr double kQd2dBox = 20.0;
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kQd2dN = 512;
 constexpr int kQd2dNz = 4;
 constexpr double kQd2dZHalf = 2.0;
@@ -306,8 +307,9 @@ public:
     std::string title_text() override {
         std::string s = strf(
             "2D quantum dot (Fock-Darwin)  |  t = %.1f au  w0 = %.2f  "
-            "B = %.2f  E = %.4f (Omega = %.4f)",
-            sim_time_, w0_, b_, energy_meas(), energy_pred());
+            "B = %.2f  E = %.3f eV (hbar*Omega = %.3f eV)",
+            sim_time_, w0_, b_, energy_meas() * kHaToEv,
+            energy_pred() * kHaToEv);
         if (relaxing_) {
             s += "  [relaxing...]";
         }

@@ -17,6 +17,7 @@ import ses.spectrum1d;
 export namespace ses_shell {
 
 constexpr double kMo1dBox = 100.0;  // Bohr half-extent
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kMo1dPoints = 65536;
 constexpr double kMo1dD = 0.3;      // dissociation limit (Ha)
 constexpr double kMo1dAlpha = 0.12;
@@ -107,11 +108,12 @@ protected:
         std::string s;
         if (level_ >= 0) {
             const double e = bound_[static_cast<std::size_t>(level_)].energy;
-            s = strf("  n = %d/%d  E = %.4f Ha (D = %.2f)", level_,
-                     bound_count() - 1, e, kMo1dD);
+            s = strf("  n = %d/%d  E = %.3f eV (D = %.2f eV)", level_,
+                     bound_count() - 1, e * kHaToEv, kMo1dD * kHaToEv);
             if (level_ + 1 < bound_count()) {
-                s += strf("  gap up = %.4f",
-                          bound_[static_cast<std::size_t>(level_ + 1)].energy - e);
+                s += strf("  gap up = %.3f eV",
+                          (bound_[static_cast<std::size_t>(level_ + 1)].energy -
+                           e) * kHaToEv);
             }
         } else {
             const double gap =

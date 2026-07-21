@@ -13,6 +13,8 @@ export import ses.scenario;
 
 export namespace app {
 
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
+
 struct UiState {
     float efield = 0.0f;    // au; 0 = off
     float bfield = 0.0f;    // au; 0 = off
@@ -500,16 +502,19 @@ void draw_doublewell_panel(ShellT& shell, UiState& ui,
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ImGui::SameLine();
     if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
-    if (ImGui::SliderFloat("Barrier Vb (Ha)", &ui.dw_barrier, 0.04f, 0.30f,
-                           "%.2f")) {
+    float vb_ev = ui.dw_barrier * static_cast<float>(kHaToEv);
+    if (ImGui::SliderFloat("Barrier Vb (eV)", &vb_ev,
+                           0.04f * static_cast<float>(kHaToEv),
+                           0.30f * static_cast<float>(kHaToEv), "%.2f")) {
+        ui.dw_barrier = vb_ev / static_cast<float>(kHaToEv);
         dw.set_barrier(static_cast<double>(ui.dw_barrier));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("dE is exponential in the barrier: raising it "
                           "makes the\nleft<->right oscillation crawl. Moving "
                           "the slider re-prepares\nthe left-well state "
-                          "(currently dE = %.2e Ha).",
-                          dw.splitting());
+                          "(currently dE = %.2e eV).",
+                          dw.splitting() * kHaToEv);
     }
     draw_time_scale(shell, ui);
     ImGui::Separator();
@@ -531,8 +536,8 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
     if (ImGui::BeginListBox("##h2p_orbitals", ImVec2(-1.0f, 160.0f))) {
         for (int k = 0; k < nmo; ++k) {
             char lbl[96];
-            std::snprintf(lbl, sizeof(lbl), "%2d  %-18s  E = %.4f Ha", k + 1,
-                          ml.orbital_label(k), ml.energy(k));
+            std::snprintf(lbl, sizeof(lbl), "%2d  %-18s  E = %.2f eV", k + 1,
+                          ml.orbital_label(k), ml.energy(k) * kHaToEv);
             if (ImGui::Selectable(lbl)) {
                 shell.press(static_cast<char>('2' + k));
             }
@@ -558,8 +563,8 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
     // No bond-length slider: R fixed at the physical equilibrium (~2.0 bohr,
     // rigid Born-Oppenheimer) -- a free knob would misrepresent it.
     if (ml.prepared(0)) {
-        ImGui::Text("R fixed at equilibrium; E_total(1sigma_g) = %.4f Ha",
-                    ml.energy(0) + ml.nuclear_repulsion());
+        ImGui::Text("R fixed at equilibrium; E_total(1sigma_g) = %.2f eV",
+                    (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
     }
     draw_time_scale(shell, ui);
     ImGui::Separator();
@@ -587,14 +592,14 @@ void draw_benzene_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) 
     ImGui::SameLine();
     if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
     if (ml.prepared(0)) {
-        ImGui::Text("E0 = %.3f Ha", ml.energy(0));
+        ImGui::Text("E0 = %.2f eV", ml.energy(0) * kHaToEv);
         if (ml.prepared(1)) {
             ImGui::SameLine();
-            ImGui::Text("E1 = %.3f", ml.energy(1));
+            ImGui::Text("E1 = %.2f eV", ml.energy(1) * kHaToEv);
         }
         if (ml.prepared(2)) {
             ImGui::SameLine();
-            ImGui::Text("E2 = %.3f", ml.energy(2));
+            ImGui::Text("E2 = %.2f eV", ml.energy(2) * kHaToEv);
         }
     }
     draw_time_scale(shell, ui);
@@ -1001,7 +1006,10 @@ void draw_rutherford_panel(ShellT& shell, UiState& ui,
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ui.ru_e = static_cast<float>(rf.energy());
-    if (ImGui::SliderFloat("Incident E (Ha)", &ui.ru_e, 5.0f, 80.0f, "%.1f")) {
+    float e_ev = ui.ru_e * static_cast<float>(kHaToEv);
+    if (ImGui::SliderFloat("Incident E (eV)", &e_ev, 5.0f * static_cast<float>(kHaToEv),
+                           80.0f * static_cast<float>(kHaToEv), "%.0f")) {
+        ui.ru_e = e_ev / static_cast<float>(kHaToEv);
         rf.set_energy(static_cast<double>(ui.ru_e));
     }
     if (ImGui::IsItemHovered()) {
@@ -1108,8 +1116,9 @@ void draw_qdot_panel(ShellT& shell, UiState& ui, ses_shell::QdotApi& qd) {
         ImGui::SetTooltip("Uniform B along z: the ground energy must land "
                           "at the\nFock-Darwin Omega = sqrt(w0^2 + B^2/4).");
     }
-    ImGui::Text("E = %.4f vs Omega = %.4f%s", qd.energy_meas(),
-                qd.energy_pred(), qd.relaxing() ? " (relaxing...)" : "");
+    ImGui::Text("E = %.3f eV vs hbar*Omega = %.3f eV%s",
+                qd.energy_meas() * kHaToEv, qd.energy_pred() * kHaToEv,
+                qd.relaxing() ? " (relaxing...)" : "");
     draw_ho_spectrum_strip(qd);
     draw_time_scale(shell, ui);
     ImGui::Separator();

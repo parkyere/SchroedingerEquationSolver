@@ -14,6 +14,7 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kTun1dBox = 80.0;   // Bohr
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 // oversampled (1D is cheap): phasor curve resolves ripples + evanescent decay
 constexpr int kTun1dPoints = 65536;
 constexpr double kTun1dV0 = 0.25;    // Ha
@@ -55,10 +56,10 @@ protected:
     int steps_per_tick() const override { return 2; }
 
     std::string title_suffix() override {
-        return strf("  V0 = %.2f Ha, E = %.3f Ha (forbidden)  P(x<%.0f) %.3f | "
+        return strf("  V0 = %.2f eV, E = %.3f eV (forbidden)  P(x<%.0f) %.3f | "
                     "P(x>%.0f) %.3f (max T %.3f)",
-                    kTun1dV0, 0.5 * kTun1dK0 * kTun1dK0, kTun1dXLo, p_left_,
-                    kTun1dXHi, p_right_, t_max_);
+                    kTun1dV0 * kHaToEv, 0.5 * kTun1dK0 * kTun1dK0 * kHaToEv,
+                    kTun1dXLo, p_left_, kTun1dXHi, p_right_, t_max_);
     }
 
     // probe is microseconds: safe to track T every batch

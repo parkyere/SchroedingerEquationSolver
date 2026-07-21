@@ -25,6 +25,7 @@ import ses.parallel;
 export namespace ses_shell {
 
 constexpr double kCr2dBox = 16.0;
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kCr2dN = 512;
 constexpr int kCr2dNz = 4;
 constexpr double kCr2dZHalf = 2.0;
@@ -204,7 +205,7 @@ public:
             "R = %.1f  states %d",
             sim_time_, radius_, captured());
         for (std::size_t k = 0; k < energies_.size(); ++k) {
-            s += strf("  E%zu = %.4f", k, energies_[k]);
+            s += strf("  E%zu = %.3f eV", k, energies_[k] * kHaToEv);
         }
         if (relaxing_) {
             s += "  [relaxing...]";

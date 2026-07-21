@@ -89,9 +89,9 @@ protected:
     double default_camera_distance() const override { return 45.0; }
 
     std::string title_suffix() override {
-        std::string s = strf("  w = %.2f au (T = %.1f au, E0 = %.3f Ha)",
+        std::string s = strf("  w = %.2f au (T = %.1f au, E0 = %.2f eV)",
                              kTrapOmega, 6.28318530717959 / kTrapOmega,
-                             1.5 * kTrapOmega);
+                             1.5 * kTrapOmega * kBaseHaToEv);
         if (decay_on_) {
             s += strf("  decay ON: photons %lld", photon_count_);
             if (!last_jump_.empty()) {
@@ -123,8 +123,8 @@ protected:
             atom_.collapse_onto(engine_, n);
             flush_collapse_error(n);
             write_display_texture();
-            last_measure_ = strf("%s (E = %.3f Ha)", kTrapStates[n].name,
-                                 atom_.state_energy(n));
+            last_measure_ = strf("%s (E = %.2f eV)", kTrapStates[n].name,
+                                 atom_.state_energy(n) * kBaseHaToEv);
         } else {
             // Deficit = untracked bound ladder (N > 3), not continuum.
             project_manifold_out();

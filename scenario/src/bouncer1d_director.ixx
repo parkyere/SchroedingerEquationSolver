@@ -43,6 +43,7 @@ inline std::vector<double> bouncer_potential(const ses::Grid1D& g,
 
 // dt sized by the wall's Trotter phase, not resolution: V*dt at the box
 // lip must stay << 1 rad or the ground heats (benzene dt rule).
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kBo1dZLo = -1.0;
 constexpr double kBo1dZHi = 79.0;
 constexpr int kBo1dPoints = 2048;
@@ -121,10 +122,10 @@ protected:
 
     std::string title_suffix() override {
         return strf(
-            "  g = %.1f  <H> = %.3f Ha  Airy E1 = %.3f (soft floor "
-            "-g delta ~ -0.30)  T_bounce = %.1f au  keys: 2 ground / "
+            "  g = %.1f  <H> = %.3f eV  Airy E1 = %.3f eV (soft floor "
+            "~ -8.16 eV)  T_bounce = %.1f au  keys: 2 ground / "
             "F drop",
-            kBo1dGrav, energy(), airy_e1(),
+            kBo1dGrav, energy() * kHaToEv, airy_e1() * kHaToEv,
             2.0 * std::sqrt(2.0 * kBo1dDropZ / kBo1dGrav));
     }
 

@@ -17,6 +17,7 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kHo1dOmega = 0.25;
+constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kHo1dOmegaMin = 0.05;
 // Nyquist would only bind near w ~ k_max/x_max ~ 10, past this stop.
 constexpr double kHo1dOmegaMax = 4.0;
@@ -213,13 +214,14 @@ protected:
         const double e = ses::mean_energy(psi_, potential_);
         std::string s;
         if (level_ >= 0) {
-            s = strf("  w = %.2f  n = %d (cap %d)  <H> = %.4f Ha "
-                     "((n+1/2)w = %.4f)",
-                     omega_, level_, cap_level_, e, (level_ + 0.5) * omega_);
+            s = strf("  w = %.2f  n = %d (cap %d)  <H> = %.3f eV "
+                     "((n+1/2)hw = %.3f eV)",
+                     omega_, level_, cap_level_, e * kHaToEv,
+                     (level_ + 0.5) * omega_ * kHaToEv);
         } else {
-            s = strf("  w = %.2f  superposition  <N> = %.2f  <H> = %.4f Ha  "
+            s = strf("  w = %.2f  superposition  <N> = %.2f  <H> = %.3f eV  "
                      "Var(H) = %.1e",
-                     omega_, e / omega_ - 0.5, e,
+                     omega_, e / omega_ - 0.5, e * kHaToEv,
                      ses::energy_variance(psi_, potential_));
         }
         if (kappa_ > 0.0) {
