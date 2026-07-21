@@ -256,19 +256,12 @@ public:
             nz /= bn;
         }
         std::uniform_real_distribution<double> uni(0.0, 1.0);
-        int plus = 0;
+        // Delegate the Born measurement to the quantum core (GPU engine or CPU
+        // oracle fallback); the orchestrator only chooses the axis and draws u.
         if (exact_mode_ && gpu_ready_) {
-            // Rotate n->z, Born-sample a basis state, collapse, rotate back --
-            // all on the GPU. plus = sites aligned with +n = the 0-bits of m.
-            const std::uint32_t m = gpu_.measure_exact(nx, ny, nz, uni(rng_));
-            for (int b = 0; b < kSlN * kSlN; ++b) {
-                if (((m >> b) & 1u) == 0u) {
-                    ++plus;
-                }
-            }
+            gpu_.measure_exact(nx, ny, nz, uni(rng_));
             sync_gpu_params();  // measure_exact repurposed the field site UBOs
         } else if (exact_mode_) {
-            // CPU fallback: rotate n->z, sequential Born-measure, rotate back.
             const double th = std::acos(std::clamp(nz, -1.0, 1.0));
             const double axn = std::hypot(-ny, nx);
             const double ax = axn > 1e-12 ? -ny / axn : 1.0;
@@ -277,30 +270,30 @@ public:
                 ses::exact_site_rotate(exact_, i, ax, ay, 0.0, -th);
             }
             for (int i = 0; i < kSlN * kSlN; ++i) {
-                plus += ses::exact_measure_z(exact_, i, uni(rng_)) > 0 ? 1 : 0;
+                ses::exact_measure_z(exact_, i, uni(rng_));
             }
             for (int i = 0; i < kSlN * kSlN; ++i) {
                 ses::exact_site_rotate(exact_, i, ax, ay, 0.0, th);
             }
         } else if (gpu_ready_) {
-            // Collapse on the GPU; host supplies only the uniform draws. plus is
-            // read off the displayed Bloch (== the engine's per-site <sigma>).
             float u[kSlN * kSlN];
             for (int i = 0; i < kSlN * kSlN; ++i) {
                 u[i] = static_cast<float>(uni(rng_));
-                const std::size_t o = static_cast<std::size_t>(3 * i);
-                const double pp = 0.5 * (1.0 + nx * bloch_[o] +
-                                         ny * bloch_[o + 1] + nz * bloch_[o + 2]);
-                if (static_cast<double>(u[i]) < pp) {
-                    ++plus;
-                }
             }
             gpu_mf_.measure(nx, ny, nz, u);
         } else {
             for (auto& s : lat_.s) {
-                plus += ses::spin_measure(s, nx, ny, nz, uni(rng_)) > 0
-                            ? 1
-                            : 0;
+                ses::spin_measure(s, nx, ny, nz, uni(rng_));
+            }
+        }
+        refresh_bloch();
+        // HUD tally: how many collapsed arrows point along +n. Pure geometry on
+        // the measured state -- the Born physics happened in the core above.
+        int plus = 0;
+        for (int i = 0; i < kSlN * kSlN; ++i) {
+            const std::size_t o = static_cast<std::size_t>(3 * i);
+            if (nx * bloch_[o] + ny * bloch_[o + 1] + nz * bloch_[o + 2] > 0.0) {
+                ++plus;
             }
         }
         note_ = strf("measured: %d/%d aligned", plus, kSlN * kSlN);
