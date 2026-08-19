@@ -84,6 +84,7 @@ add_executable(sesolver_tests
     spheroidal_test.cpp
     time_scale_realtime_test.cpp
     trap_ladder_test.cpp
+    view_state_test.cpp
     volume_test.cpp
     vram_budget_test.cpp
     wavepacket3_test.cpp

@@ -1,0 +1,69 @@
+// Shell view state behind the F / [ ] hotkeys and their panel widgets: flow
+// tracer toggle + Beer-Lambert fog absorbance with a clamped range and a
+// multiplicative hotkey step. Pure value type; the shell (main.cpp) and the
+// ImGui panel are thin glue over it. Contract for core/src/view_state.ixx.
+
+#include <gtest/gtest.h>
+
+import ses.view_state;
+
+namespace {
+
+using ses::ViewState;
+
+TEST(ViewState, DefaultsMatchTheShell) {
+    const ViewState v{};
+    EXPECT_FALSE(v.flow);
+    EXPECT_DOUBLE_EQ(v.absorbance, 0.68);
+}
+
+TEST(ViewState, ToggleFlowFlips) {
+    ViewState v{};
+    v.toggle_flow();
+    EXPECT_TRUE(v.flow);
+    v.toggle_flow();
+    EXPECT_FALSE(v.flow);
+}
+
+TEST(ViewState, SetAbsorbanceClampsToRange) {
+    ViewState v{};
+    v.set_absorbance(0.0);
+    EXPECT_DOUBLE_EQ(v.absorbance, ViewState::kAbsorbMin);
+    v.set_absorbance(-3.0);
+    EXPECT_DOUBLE_EQ(v.absorbance, ViewState::kAbsorbMin);
+    v.set_absorbance(1e9);
+    EXPECT_DOUBLE_EQ(v.absorbance, ViewState::kAbsorbMax);
+    v.set_absorbance(2.5);
+    EXPECT_DOUBLE_EQ(v.absorbance, 2.5);
+}
+
+TEST(ViewState, RangeIsTheHistoricalHotkeyRange) {
+    EXPECT_DOUBLE_EQ(ViewState::kAbsorbMin, 0.1);
+    EXPECT_DOUBLE_EQ(ViewState::kAbsorbMax, 50.0);
+    EXPECT_DOUBLE_EQ(ViewState::kAbsorbStep, 1.3);
+}
+
+TEST(ViewState, StepAbsorbanceIsMultiplicativeAndClamped) {
+    ViewState v{};
+    v.set_absorbance(1.0);
+    v.step_absorbance(+1);  // ']'
+    EXPECT_DOUBLE_EQ(v.absorbance, 1.3);
+    v.step_absorbance(-1);  // '['
+    EXPECT_DOUBLE_EQ(v.absorbance, 1.0);
+    // Stepping past either end saturates instead of escaping the range.
+    v.set_absorbance(ViewState::kAbsorbMax);
+    v.step_absorbance(+1);
+    EXPECT_DOUBLE_EQ(v.absorbance, ViewState::kAbsorbMax);
+    v.set_absorbance(ViewState::kAbsorbMin);
+    v.step_absorbance(-1);
+    EXPECT_DOUBLE_EQ(v.absorbance, ViewState::kAbsorbMin);
+}
+
+TEST(ViewState, StepZeroIsANoOp) {
+    ViewState v{};
+    v.set_absorbance(3.0);
+    v.step_absorbance(0);
+    EXPECT_DOUBLE_EQ(v.absorbance, 3.0);
+}
+
+}  // namespace
