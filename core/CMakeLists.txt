@@ -12,6 +12,7 @@ target_sources(sesolver_core
         src/flow.ixx
         src/cross_section.ixx
         src/camera.ixx
+        src/view_state.ixx
         src/volume.ixx
         src/emission.ixx
         src/vec.ixx

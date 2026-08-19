@@ -69,6 +69,7 @@ import ses.scenario.ptwell1d_director;
 import ses.scenario.tunneling1d_director;
 import ses.scenario.selftest_arcs;
 import ses.camera;
+import ses.view_state;
 import ses.vk.render_blobs;
 import app.imgui_ui;
 import ses.vk.present;
@@ -200,7 +201,7 @@ public:
                 needs_render_ = true;
             }
         }
-        flow_on_ = has_arg("--flow");
+        view_.flow = has_arg("--flow");
         if (has_arg("--face-z")) {
             snap_camera_z();
         }
@@ -480,11 +481,12 @@ public:
     }
     bool cloud_view() const { return director_ && director_->cloud(); }
     // Flow tracers (Key F) and fog absorbance (Keys [ ]) -- exposed so every
-    // scene panel can offer a button/slider for what the hotkeys do.
-    bool flow_on() const { return flow_on_; }
-    void toggle_flow() { flow_on_ = !flow_on_; }
-    double absorbance() const { return absorbance_; }
-    void set_absorbance(double a) { absorbance_ = std::clamp(a, 0.1, 50.0); }
+    // scene panel can offer a button/slider for what the hotkeys do. Logic
+    // lives in ses::ViewState (tests/view_state_test.cpp); this is glue.
+    bool flow_on() const { return view_.flow; }
+    void toggle_flow() { view_.toggle_flow(); }
+    double absorbance() const { return view_.absorbance; }
+    void set_absorbance(double a) { view_.set_absorbance(a); }
     // Selftest hook: z-normal slice sheet through the nucleus so lobe signs
     // read clearly.
     void enable_cross_section_demo() {
@@ -777,10 +779,10 @@ private:
                 snap_camera_z();
                 return;
             case SDLK_LEFTBRACKET:
-                set_absorbance(absorbance_ / 1.3);
+                view_.step_absorbance(-1);
                 return;
             case SDLK_RIGHTBRACKET:
-                set_absorbance(absorbance_ * 1.3);
+                view_.step_absorbance(+1);
                 return;
             default:
                 break;
@@ -818,11 +820,11 @@ private:
         in.elevation = elevation_;
         in.distance = distance_;
         in.peak = director_->peak();
-        in.absorbance = absorbance_;
+        in.absorbance = view_.absorbance;
         in.flash = director_->next_flash_intensity();
         // Flow particles (Key F): over the cloud, frozen while paused so a
         // still frame can still accumulate.
-        in.flow = flow_on_ && in.cloud;
+        in.flow = view_.flow && in.cloud;
         in.flow_animate = !paused_;
         in.clip_on = ui_.clip_on;
         in.clip_axis = ui_.clip_axis;
@@ -847,15 +849,15 @@ private:
             !volume_written && azimuth_ == acc_prev_.azimuth &&
             elevation_ == acc_prev_.elevation &&
             distance_ == acc_prev_.distance && in.peak == acc_prev_.peak &&
-            absorbance_ == acc_prev_.absorbance && in.flash == 0.0f &&
+            view_.absorbance == acc_prev_.absorbance && in.flash == 0.0f &&
             acc_prev_.flash == 0.0f && in.cloud == acc_prev_.cloud &&
             plane_tag == acc_prev_.plane_tag;
         in.accumulate = scene_static && !(in.flow && in.flow_animate);
         // Occupancy + self-shadow rebuild when the field or the absorbance
         // dial (baked into the shadow transmittance) moved.
         in.volume_changed =
-            volume_written || absorbance_ != acc_prev_.absorbance;
-        acc_prev_ = {azimuth_, elevation_, distance_, in.peak, absorbance_,
+            volume_written || view_.absorbance != acc_prev_.absorbance;
+        acc_prev_ = {azimuth_, elevation_, distance_, in.peak, view_.absorbance,
                      in.flash, in.cloud, plane_tag};
         // 1D-scene overlay polylines (phasor curve + potential); 3D scenes
         // report 0 and skip.
@@ -940,9 +942,8 @@ private:
         double plane_tag = 0.0;  // cross-section controls fingerprint
     } acc_prev_;
     long long frame_index_ = 0;
-    bool flow_on_ = false;  // Key F: probability-current flow particles
+    ses::ViewState view_;  // flow tracers (F) + fog absorbance ([ ])
     bool paused_ = false;
-    double absorbance_ = 0.68;  // Beer-Lambert opacity of the |psi|^2 fog
 
     double azimuth_ = 0.6;
     double elevation_ = 0.4;
