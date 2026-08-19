@@ -12,8 +12,8 @@ import ses.scenario.field_control;
 
 namespace {
 
-using ses::scenario::FieldControl;
-using ses::scenario::field_active;
+using ses_shell::FieldControl;
+using ses_shell::field_active;
 
 TEST(FieldControl, BothFieldsCarryAnAxisDefaultingToZ) {
     const FieldControl f{};
