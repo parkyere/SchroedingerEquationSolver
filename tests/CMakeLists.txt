@@ -36,6 +36,7 @@ add_executable(sesolver_tests
     fft3_test.cpp
     fft_test.cpp
     field3_test.cpp
+    field_control_test.cpp
     field_test.cpp
     flow_test.cpp
     grid3_test.cpp

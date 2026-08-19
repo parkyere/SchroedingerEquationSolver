@@ -54,6 +54,45 @@ TEST(MagneticPropagator, EffectivePotentialCarriesTheDiamagneticTerm) {
     }
 }
 
+// Sign of B is physical: it sets the SENSE of the Larmor precession, so a
+// negative field must be a first-class input, not clamped or abs()'d away.
+TEST(MagneticPropagator, NegativeFieldReversesTheLarmorRotation) {
+    const Grid3D g = cube(12.0, 32);
+    const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const double dt = 0.01;
+    const double b = 0.5;
+    const int n = 40;
+    Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.5, 0.0, 0.5},
+                                            ses::Vec3d{1.4, 1.4, 1.4},
+                                            ses::Vec3d{0.0, 0.4, 0.0});
+    const ses::MagneticPropagator3D neg{g, v, dt, -b};
+    Field3D mag = psi0;
+    neg.step(mag, n);
+    // Same operator identity as the +B case, rotation sense flipped.
+    Field3D ref = psi0;
+    ses::SplitOperator3D{g, neg.effective_potential(), dt}.step(ref, n);
+    ses::rotate_z(ref, -0.5 * b * (n * dt));
+    EXPECT_LT(max_abs_diff(mag, ref), 1e-4);
+    // And it is genuinely different from +B (not silently abs()'d).
+    Field3D pos = psi0;
+    ses::MagneticPropagator3D{g, v, dt, b}.step(pos, n);
+    EXPECT_GT(max_abs_diff(mag, pos), 1e-3);
+}
+
+// The diamagnetic term is even in B: flipping the sign must not change it.
+TEST(MagneticPropagator, DiamagneticTermIsEvenInB) {
+    const Grid3D g = cube(12.0, 32);
+    const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    const std::vector<double>& vp =
+        ses::MagneticPropagator3D{g, v, 0.01, 0.4}.effective_potential();
+    const std::vector<double>& vn =
+        ses::MagneticPropagator3D{g, v, 0.01, -0.4}.effective_potential();
+    ASSERT_EQ(vp.size(), vn.size());
+    for (std::size_t i = 0; i < vp.size(); ++i) {
+        EXPECT_NEAR(vp[i], vn[i], 1e-12);
+    }
+}
+
 TEST(MagneticPropagator, ZeroFieldReducesToPlainPropagator) {
     const Grid3D g = cube(12.0, 32);
     const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
