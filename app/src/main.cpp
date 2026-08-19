@@ -479,6 +479,12 @@ public:
         elevation_ = 0.0;
     }
     bool cloud_view() const { return director_ && director_->cloud(); }
+    // Flow tracers (Key F) and fog absorbance (Keys [ ]) -- exposed so every
+    // scene panel can offer a button/slider for what the hotkeys do.
+    bool flow_on() const { return flow_on_; }
+    void toggle_flow() { flow_on_ = !flow_on_; }
+    double absorbance() const { return absorbance_; }
+    void set_absorbance(double a) { absorbance_ = std::clamp(a, 0.1, 50.0); }
     // Selftest hook: z-normal slice sheet through the nucleus so lobe signs
     // read clearly.
     void enable_cross_section_demo() {
@@ -762,7 +768,7 @@ private:
                 if (director_->handle_key('F')) {
                     return;
                 }
-                flow_on_ = !flow_on_;
+                toggle_flow();
                 return;
             case SDLK_TAB:
                 toggle_view_mode();
@@ -771,10 +777,10 @@ private:
                 snap_camera_z();
                 return;
             case SDLK_LEFTBRACKET:
-                absorbance_ = std::max(0.1, absorbance_ / 1.3);
+                set_absorbance(absorbance_ / 1.3);
                 return;
             case SDLK_RIGHTBRACKET:
-                absorbance_ = std::min(50.0, absorbance_ * 1.3);
+                set_absorbance(absorbance_ * 1.3);
                 return;
             default:
                 break;

@@ -1,6 +1,7 @@
 module;
 #include <imgui.h>
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
@@ -148,6 +149,32 @@ void draw_time_scale(ShellT& shell, UiState& ui) {
     }
 }
 
+// Shell-wide view controls that mirror the global hotkeys F and [ ]: every
+// hotkey should have a widget, and these two had none.
+template <typename ShellT>
+void draw_view_controls(ShellT& shell) {
+    if (ImGui::Button(shell.flow_on() ? "Flow off (F)" : "Flow (F)")) {
+        shell.toggle_flow();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Probability-current flow tracers (Bohmian "
+                          "velocity field) over the cloud view.");
+    }
+    ImGui::SameLine();
+    float absorb = static_cast<float>(shell.absorbance());
+    // Fill the rest of the row; the label rides INSIDE the slider so it can
+    // never clip past the window edge.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderFloat("##fog", &absorb, 0.1f, 50.0f, "Fog ([ ]) %.2f",
+                           ImGuiSliderFlags_Logarithmic)) {
+        shell.set_absorbance(absorb);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Beer-Lambert absorbance of the |psi|^2 fog "
+                          "(hotkeys [ / ] step it by 1.3x).");
+    }
+}
+
 // Vertical energy spectrometer chrome: a right-side floating window with a
 // rainbow ENERGY-SCALE decoration (red = bottom/low E, violet = top/high E;
 // not physical color -- most H lines are UV/IR) and 0..emax axis ticks.
@@ -258,15 +285,19 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
     draw_scene_picker(shell);
     draw_perf_readout(shell);
 
+    // Rows kept to <=4 buttons so they fit the 430 px window without the
+    // user having to widen it (5 clipped "Face z" off the edge).
     if (ImGui::Button("Measure (M)")) shell.measure_now();
     ImGui::SameLine();
     if (ImGui::Button("Measure nlm (E)")) hy.measure_energy_now();
     ImGui::SameLine();
     if (ImGui::Button("Reset (R)")) shell.reset_simulation();
-    ImGui::SameLine();
+
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ImGui::SameLine();
     if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
+    ImGui::SameLine();
+    if (ImGui::Button("Cloud/Surface (Tab)")) shell.toggle_view_mode();
 
     if (ImGui::Button("Measure n")) hy.measure_n_shell_now();
     if (ImGui::IsItemHovered()) {
@@ -295,7 +326,7 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
     if (ImGui::Button("Relax 2p (3)")) hy.relax_to_excited();
     ImGui::SameLine();
     if (ImGui::Button("Relax 2s (4)")) hy.relax_to_2s();
-    ImGui::SameLine();
+
     if (ImGui::Button("Excite n=3/4 (5)")) hy.excite_n3();
     ImGui::SameLine();
     if (ImGui::Button("Kepler packet (K)")) hy.seed_kepler();
@@ -304,12 +335,12 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
                           "orbits the nucleus at the classical Kepler rate\n"
                           "1/n^3, disperses, and partially revives.");
     }
-
+    ImGui::SameLine();
     if (ImGui::Button("Decay (D)")) hy.toggle_decay();
     ImGui::SameLine();
     if (ImGui::Button("Laser (L)")) hy.toggle_laser();
-    ImGui::SameLine();
-    if (ImGui::Button("Cloud/Surface (Tab)")) shell.toggle_view_mode();
+
+    draw_view_controls(shell);
 
     if (ImGui::SliderFloat("E-field +z (au)", &ui.efield, 0.0f, 0.1f, "%.3f")) {
         hy.set_efield_e0(static_cast<double>(ui.efield));
@@ -392,6 +423,7 @@ void draw_generic_panel(ShellT& shell, UiState& ui,
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ImGui::SameLine();
     if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
+    draw_view_controls(shell);
     draw_time_scale(shell, ui);
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);
