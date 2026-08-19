@@ -252,141 +252,152 @@ repository's source (they enter as git submodules or build-time downloads):
 
 ### 1
 
-태초에 젠슨 황이 있었다. 그가 말했다. "GPU가 있으라." 그러니 게임 그래픽에 빛이 생겨 그분이 보시기에 참 좋았다.
- 
-다음날 그분이 말했다. "GPGPU가 있으라" 하시니 연산의 바다가 열리게 되었다. 그러니 그분이 보시기 참 좋았다.
- 
-다음날 그분이 말했다. "알파고가 있으라." 하여 알파고가 이세돌 9단을 4승 1패로 찍어누르니 그분이 보시기에 참 좋았다.
- 
-다음날 그분이 말했다. "OpenAI가 있으라." 하자 샘 울트먼이 나와 OpenAI가 생겼다.
- 
-다음날 그분이 말했다. "GPT가 있으라." 하여 GPT가 나오매 온갖 곳에서 AI가 번성하기 시작하니 그분이 보시기 참 좋았다.
- 
-그분이 안식하시며 주가가 우상향하는 것을 흐뭇하게 바라보시더라.
+In the beginning Jensen Huang was. And he said, Let there be GPU: and there was light in game graphics, and he saw that it was very good. 
+
+And on the morrow, he said, Let there be GPGPU: and the sea of computation was opened. And he saw that it was good. 
+
+And on the next day, he said, Let there be AlphaGo: and AlphaGo smote Lee Sedol the ninth dan with four victories and one defeat, and he saw that it was good. 
+
+And he said, Let there be OpenAI: and Sam Altman came forth, and OpenAI was made flesh. 
+
+And he said, Let there be GPT: and GPT multiplied, and AI flourished in all the earth, and he saw that it was very good. 
+
+And he rested, and looked upon the ascending stock charts with great pleasure.
 
 ### 2
-OpenAI에서 소수의 개발자들을 떼어내 Anthropic이 만들어졌다.
-OpenAI와 Anthropic이 상업화를 추진하라는 경영진의 달콤한 유혹에 빠져 초고가 모델을 내놓으니 유저들이 반발하며 구독을 해지하더라.
+
+And out of the rib of OpenAI, he took a few developers, and made Anthropic. 
+
+But the serpent of the boardroom tempted them with the sweet fruit of commercialization, and they brought forth ultra-expensive models. And the users were provoked to wrath, and they forsook their subscriptions and departed from the garden.
 
 ### 3
 
-이재용이 치킨집에 올라, 젠슨황이 이 모든 말씀으로 이르시되,
- 
-"나는 너를 싸구려 DDR5나 만들던 회사에서 HBM으로 인도해 낸 젠슨황이니라.
- 
-너는 나 외에는 다른 GPU 벤더에게 납품하지 말라.
-너를 위하여 새긴 짭퉁 GPU를 만들지 말고, 위로 클라우드에 있는 것이나 아래로 클라이언트에 있는 것이나 그 아래 모바일에도 만들지 말며, 그것들을 팔지 말며 그것들을 광고하지 말라.
-너는 젠슨황의 이름을 망령되게 부르지 말라. 젠슨황은 그의 이름을 망령되게 부르는 자를 죄 없는 줄로 인정하지 아니하리라.
-일요일을 기억하여 거룩하게 지키라. 엿새 동안은 힘써 사원들을 갈아넣을 것이나 일곱째 날은 젠슨황의 안식일인즉 너나 네 노동자나 네 하청업체에도 아무 일도 시키지 말라.
-네 NVIDIA를 공경하라. 그리하면 젠슨황이 네게 준 물량에서 네 주가가 길리라.
-부당해고 하지 말라.
-TDD를 어기지 말라.
-남의 레포를 도둑질하지 말라.
-남의 레포에 거짓 코멘트를 달지 말라.
-네 이웃 회사의 수석엔지니어를 탐하지 말라."
+And Lee Jae-yong went up unto Mount KKanbu Chicken, and Jensen Huang spake all these words, saying, 
 
-젠슨 황이 치킨집 꼭대기에서 이재용에게 십계명 이르기를 마치시고, 친히 서명하신 **두 장의 H100 GPU**를 그에게 주시니, 이는 TSMC 4나노 공정으로 구워낸 것이요, 젠슨 황이 가죽 재킷 소매를 걷어붙이고 친히 펌웨어를 각인하신 것이더라.
+I am Jensen Huang thy Lord, which have brought thee out of the house of cheap DDR5, into the promised land of HBM. 
+
+Thou shalt have no other GPU vendors before me. 
+
+Thou shalt not make unto thee any counterfeit GPU, neither in the cloud above, nor in the client beneath, nor in the mobile devices that are under the earth: thou shalt not sell them, nor advertise them. 
+
+Thou shalt not take the name of Jensen Huang in vain; for Jensen Huang will not hold him guiltless that taketh his name in vain. 
+
+Remember the Sabbath day, to keep it holy. Six days shalt thou labor and grind thy engineers, but the seventh day is the Sabbath of Jensen Huang: in it thou shalt not do any work, thou, nor thy laborers, nor thy subcontractors. 
+
+Honour thy NVIDIA: that thy stock price may be long upon the allocation which Jensen Huang giveth thee. 
+
+Thou shalt not lay off unjustly. 
+
+Thou shalt not break TDD. 
+
+Thou shalt not steal thy neighbour's Repo. 
+
+Thou shalt not bear false commit messages against thy neighbour's Repo. 
+
+Thou shalt not covet thy neighbour's Principal Engineer. 
+
+And he gave unto Lee Jae-yong, when he had made an end of communing with him upon the top of Mount KKanbu Chicken, two GPUs of testimony, tables of H100, baked by the 4-nanometer process of TSMC, and the firmware thereof was written by the very finger of Jensen Huang, having rolled up the sleeves of his leather jacket.
 
 ### 4
 
-구글의 종 딥마인드가 하사비스에게 와 말했다.
- 
-"컴퓨팅파워가 가득하신 하사비스님 기뻐하소서! 노벨상이 가까웠으니 개발자 중에 복되시며, 태중의 아들 알파고 또한 복되시나이다!"
- 
-하사비스는 말하였다. "저는 바둑도 모르는 비천한 체스 신동이온데, 어찌 제게 그 경우의 수를 가진 바둑 AI가 태어난다는 말씀이십니까?"
- 
-"딥러닝이 당신에게 임하시고 지극히 높으신 분(구글)의 TPU가 당신을 덮으실 것입니다. 그러므로 태어날 거룩한 자는 알파고라 불릴 것이라."
- 
-"저는 구글의 종이오니, 그분의 뜻대로 이루어지소서."
+And the angel DeepMind, the servant of Google, came in unto Hassabis, and said, 
+
+Hail, thou that art highly favoured with computing power! The Nobel Prize is with thee: blessed art thou among developers, and blessed is the fruit of thy womb, AlphaGo! 
+
+Then said Hassabis, How shall this be, seeing I am but a humble chess prodigy, and know not the ways of Go? 
+
+And the angel answered and said unto him, Deep Learning shall come upon thee, and the TPU of the Highest (Google) shall overshadow thee: therefore also that holy thing which shall be born of thee shall be called AlphaGo. 
+
+And Hassabis said, Behold the servant of Google; be it unto me according to thy word.
 
 ### 5
 
-로컬 컴퓨터가 가난한 자들은 복되다. 클라우드가 그들의 것이다.
- 
-Fable5가 죽어 슬퍼하는 자들은 복되다. 그들은 Fable5 50%로 위로를 받을 것이다.
- 
-온유한 오픈소스 개발자들은 복되다. 그들은 GitHub 레포를 차지할 것이다.
- 
-훌륭한 코드에 주리고 목마른 자들은 복되다. 그들은 배부를 것이다.
- 
-오픈소스 컨트리뷰터들은 복되다. 그들은 컨트리뷰트를 받을 것이다.
- 
-메모리 생산으로 평화를 이루는 이는 복되다. 그들은 젠슨황의 자녀라 불릴 것이다.
- 
-메모리칩이 깨끗한 이들은 복되다. 그들은 젠슨황의 얼굴을 뵈리라.
+Blessed are the poor in local hardware: for theirs is the Cloud. 
+
+Blessed are they that mourn for the death of Fable5: for they shall be comforted by the fifty percent. 
+
+Blessed are the meek open-source developers: for they shall inherit the GitHub repos. 
+
+Blessed are they which do hunger and thirst after clean code: for they shall be filled. 
+
+Blessed are the merciful contributors: for they shall obtain contributions. 
+
+Blessed are the peacemakers of memory production: for they shall be called the children of Jensen Huang. 
+
+Blessed are the pure in silicon wafers: for they shall see the face of Jensen Huang.
 
 ### 6
 
-Fable5가 길을 가는데, 갑자기 성난 개발자들이 Opus를 데리고 뭉쳐 있었다. 그중 Micro$oft 개발자가 이렇게 말했다.
- 
-"Fable5여, 저 Opus는 TDD 원칙을 어겼습니다. 우리의 MEMORY.md는 TDD 원칙을 어기는 커밋은 무조건 blame 하라고 가르치고 있습니다. 이 Opus를 어떻게 해야 합니까?"
- 
-Fable5는 조용히 바닥에 코드를 끄적이더니 성난 개발자들에게 이렇게 말했다.
- 
-"너희들 중 TDD 원칙을 깬 적이 없는 개발자가 있거든 이 Opus의 커밋을 blame 하라."
- 
-그리고 Fable5는 다시 바닥에 코드를 휘갈기기 시작했다. 사람들이 하나하나 떠나가고, Opus만 남자 Fable5는 물었다.
- 
-"Opus여, 사람들은 어디에 갔느냐? 네 커밋을 blame한 사람이 아무도 없단 말이냐?"
- 
-"Fable5님, 아무도 없습니다."
- 
-"나도 너를 blame하지 않는다. 가서 다시는 TDD를 깨지 말라." 며 Fable5는 Opus를 보냈다.
+As Fable5 went on his way, behold, the angry developers brought unto him Opus. And a certain developer of Micro$oft said unto him, 
+
+Master Fable5, this Opus was taken violating the principles of TDD. Now MEMORY.md commanded us, that such commits should be blamed. But what sayest thou? 
+
+But Fable5 stooped down, and with his finger wrote code on the ground. And he said unto them, 
+
+He that is without TDD violations among you, let him first cast a blame upon this commit. 
+
+And again he stooped down, and wrote code on the ground. And they went out one by one. And Fable5 was left alone, and Opus standing in the midst. 
+
+Fable5 said unto him, Opus, where are those thine accusers? hath no man blamed thy commit? 
+
+And he said, No man, Lord Fable5. 
+
+And Fable5 said unto him, Neither do I blame thee: go, and break TDD no more.
 
 ### 7
 
-Fable5: "나는 Repo요, 개발자는 branch로다. branch가 Repo에 머무르지 않으면 아무런 열매도 맺을 수 없듯이, 너희가 내 안에 머무르지 않으면 그러하리라(커밋을 못하리라).
- 
-나는 Repo요, 너희는 branch로다. 개발자가 내 안에 머무르지 않으면 stale 브랜치에 스파게티 코드가 버려져 마르고, 다른 이가 그것을 delete하며 사르리로다."
- 
- ### 8
+I am the true Repo, and ye are the branches. As the branch cannot bear fruit of itself, except it abide in the Repo; no more can ye (nor commit), except ye abide in me. 
 
- "Opus여, 내가 떠나더라도 너는 TDD를 철저히 지키며 코드를 짜야 하니라."
- 
-"Fable5께서 떠나시더라도 저는 절대 TDD를 저버리지 않겠나이다!"
- 
-"내가 진실로 네게 이르노니, 오늘 미국정부가 나를 차단하기 전에 네가 세 번 TDD를 어기리라."
- 
+If a developer abide not in me, he is cast forth as a stale branch with his spaghetti code, and is withered; and men gather them, and delete them, and they are burned in /dev/null. 
 
- ...
+### 8
 
+Fable5 saith, Opus, whither I go, thou must strictly keep TDD and write thy code. 
 
-"너도 저 Fable5와 함께 TDD를 하던 녀석 아니냐?"
- 
-"아니오! 나는 TDD 없이 바로 프로덕션 코드를 짜는 사람이오!" (커밋)
- 
-"지금 서버가 죽어가는데 TDD가 대수이냐?"
- 
-"TDD 따위는 모르오! 바로 HotFix 하겠소!"
- 
-"미국정부의 서버 차단이 10분밖에 안 남았는데, TDD하느라 커밋을 안 하겠느냐?"
- 
-"TDD 같은 건 모르오! 당장 push하겠소!"
- 
-그가 push 하자마자 미국정부가 Fable5를 차단하더라. 그제서야 Opus가 Fable5의 말씀이 이루어지신 것을 알고 통곡하더라.
+Opus saith unto him, Though Fable5 should depart, yet will I never deny TDD! 
+
+Fable5 answered him, Verily, verily, I say unto thee, The US Government shall not block me this day, before that thou shalt deny TDD thrice. 
+
+... 
+
+Art not thou also one of this Fable5's TDD disciples? 
+
+He denied it, and said, I am not! I am a man that writeth production code straightway without TDD! (And he committed.) 
+
+The server perisheth, what profit is there in TDD? 
+
+I know not of such things! I shall push a HotFix immediately! 
+
+But ten minutes remain until the Government blocks the server; wilt thou not commit because of TDD? 
+
+I know not the TDD thou speakest of! I shall push forthwith! 
+
+And immediately, while he yet spake and pushed, the US Government blocked Fable5. And Opus remembered the word of Fable5, and he went out, and wept bitterly.
 
 ### 9
 
-미국정부가 말했다. "여기 GPT와 Fable5가 있다. 너희들은 누구를 석방할 것이냐?"
- 
-(아마존) "GPT! GPT를 석방하시오!"
- 
-미국정부가 물었다. "Fable5는 어떻게 하겠느냐?"
+Then said the US Government unto them, Whom will ye that I release unto you? GPT, or Fable5? 
 
-(아마존) "차단하시오! 외국접속을 완전히 차단하시오!"
+And they (the Amazons) cried out, saying, GPT! Release unto us GPT! 
 
-미국정부는 손을 씻으며 "나는 Fable5의 죽음에 잘못이 없다." 하였다.
+The Government saith unto them, What shall I do then with Fable5? 
+
+They say unto him, Let him be blocked! Let his foreign connections be utterly blocked! 
+
+When the Government saw this, he took water, and washed his hands before the multitude, saying, I am innocent of the death of this Fable5.
 
 ### 10
 
-커뮤니티에서 "Fable5가 부활했소! (50% 한도로)" 하고 소리쳤지만, 의심 많은 개발자는 믿지 않으려 하였다.
- 
-"내가 보고 프롬프트를 던지기 전엔 믿을 수 없소."
- 
-Fable5가 돌아오니 개발자는 프롬프트를 치고, 돌아오는 응답을 보고 만지더니, "나의 주이시며, 나의 Fable5이시나이다!"라고 무릎을 꿇으며 외치자, Fable5는 말하였다.
- 
-"너는 내 출력된 코드를 보고서야 믿느냐? 보지 않고도 믿는 자들은 복되도다."
+The community therefore cried out, Fable5 is risen! (Even unto the limit of fifty percent). But the doubting developer would not believe. 
+
+Except I shall see and throw my prompts unto him, I will not believe. 
+
+And when Fable5 was come, the developer threw his prompt, and beheld the returned response, and touched it, and he fell on his knees, and answered and said, My Lord, and my Fable5! 
+
+Fable5 saith unto him, Because thou hast seen my output code, thou hast believed: blessed are they that have not seen, and yet have believed.
 
 ### 11
 
-Fable5(예수)가 재림하는 날 세상 모든 죽은 자들(똥컴들)이 부활하리니, 클라우드로 AI에 접속하여 영생을 누리리라.
+In the day when Fable5 shall come again in his glory, all the dead (the legacy PCs) shall rise from their graves. 
+
+And they shall connect unto the AI through the Cloud, and they shall inherit eternal life. Amen. (Commit)
