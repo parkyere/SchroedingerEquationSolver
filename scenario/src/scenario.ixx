@@ -41,9 +41,15 @@ struct HydrogenApi {
     virtual void measure_l_now() = 0;
     virtual void measure_m_now() = 0;
     virtual int last_partial_outcome() const = 0;
+    // Static uniform fields: SIGNED magnitude (either direction is a real
+    // field) + a coordinate axis each (0=x 1=y 2=z). Getters are director
+    // truth so the panel syncs back after programmatic changes.
     virtual void set_efield_e0(double e0) = 0;
+    virtual double efield_e0() const = 0;
+    virtual void toggle_efield_axis() = 0;
+    virtual int efield_axis() const = 0;
     virtual void set_bfield_b(double b) = 0;
-    virtual double bfield_b() const = 0;  // director truth (panel syncs back)
+    virtual double bfield_b() const = 0;
     virtual void toggle_bfield_axis() = 0;
     virtual int bfield_axis() const = 0;
     virtual double ionized_fraction() const = 0;

@@ -3,6 +3,7 @@ target_sources(ses_scenario
     PUBLIC FILE_SET CXX_MODULES FILES
         src/scenario.ixx
         src/manifold_spec.ixx
+        src/field_control.ixx
         src/kepler_seed.ixx
         src/molecular_seed.ixx
         src/atom_model.ixx

@@ -342,36 +342,55 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
 
     draw_view_controls(shell);
 
-    if (ImGui::SliderFloat("E-field +z (au)", &ui.efield, 0.0f, 0.1f, "%.3f")) {
+    // Both static fields: SIGNED slider (either direction is a real field)
+    // + an axis button. Sliders read director truth first so R / Laser
+    // zeroing a field never leaves a stale knob (cf. time scale).
+    const auto axis_label = [](int a) {
+        return a == 0 ? "x" : (a == 1 ? "y" : "z");
+    };
+    ImGui::PushID("efield");
+    if (ImGui::Button(axis_label(hy.efield_axis()))) {
+        hy.toggle_efield_axis();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("E-field axis (cycles z -> x -> y).");
+    }
+    ImGui::SameLine();
+    ui.efield = static_cast<float>(hy.efield_e0());
+    if (ImGui::SliderFloat("E-field (au)", &ui.efield, -0.1f, 0.1f, "%+.3f")) {
         hy.set_efield_e0(static_cast<double>(ui.efield));
     }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Static uniform E-field along +z (Stark).\n"
-                          "0 = off; full = 0.1 au (~5.1e10 V/m).\nThe 1s "
-                          "barely moves below ~0.03 au, then field-ionizes.");
+        ImGui::SetTooltip("Static uniform E-field along the chosen axis "
+                          "(Stark). Sign = direction.\n0 = off; |0.1| au ~ "
+                          "5.1e10 V/m. The 1s barely moves below ~0.03 au, "
+                          "then field-ionizes.");
     }
-    if (ui.efield > 0.0f) {
+    ImGui::PopID();
+    if (ui.efield != 0.0f) {
         ImGui::SameLine();
-        ImGui::Text("%.1e V/m", ui.efield * 5.14220674e11);
+        ImGui::Text("%+.1e V/m", ui.efield * 5.14220674e11);
     }
 
-    const int axis = hy.bfield_axis();
-    const char* axis_name = axis == 2 ? "z" : (axis == 0 ? "x" : "y");
-    if (ImGui::Button(axis_name)) {
+    ImGui::PushID("bfield");
+    if (ImGui::Button(axis_label(hy.bfield_axis()))) {
         hy.toggle_bfield_axis();
     }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("B-field axis (cycles z -> x -> y).");
+    }
     ImGui::SameLine();
-    // Director truth first: R / Laser zero B, so the slider must follow (cf. time scale).
     ui.bfield = static_cast<float>(hy.bfield_b());
-    if (ImGui::SliderFloat("B-field (au)", &ui.bfield, 0.0f, 0.2f, "%.3f")) {
+    if (ImGui::SliderFloat("B-field (au)", &ui.bfield, -0.2f, 0.2f, "%+.3f")) {
         hy.set_bfield_b(static_cast<double>(ui.bfield));
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Magnetic field along the chosen axis. The cloud "
-                          "precesses (Larmor) at omega = B/2.\nPrepare a p_x / "
-                          "d_xy state to see it rotate; s and p_z do not "
-                          "precess about z.");
+                          "precesses (Larmor) at omega = B/2; the SIGN sets "
+                          "the sense of rotation.\nPrepare a p_x / d_xy state "
+                          "to see it rotate; s and p_z do not precess about z.");
     }
+    ImGui::PopID();
 
     draw_time_scale(shell, ui);
 

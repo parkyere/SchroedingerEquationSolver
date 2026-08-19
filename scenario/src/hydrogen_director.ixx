@@ -13,6 +13,7 @@ module;
 export module ses.scenario.hydrogen_director;
 export import ses.scenario.manifold_spec;
 export import ses.scenario.kepler_seed;
+export import ses.scenario.field_control;
 export import ses.grid;
 export import ses.vec;
 export import ses.scenario.base_director;
@@ -161,7 +162,7 @@ public:
                 ses::absorbing_mask(sim_.grid(), kAbsorbWidth));
             // A slider moved before gpu_ok_ stored its value but could not
             // upload; re-apply to match the UI.
-            if (efield_e0_ > 0.0 || bfield_b_ > 0.0) {
+            if (fields_.any_active()) {
                 upload_field_tables();
             }
         } else {
@@ -369,7 +370,7 @@ public:
         free_deflation_buffers();
         drop_relax_tables();
         laser_pol_ = LaserPol::Off;
-        bfield_b_ = 0.0;
+        fields_.b = 0.0;
         upload_field_tables();    // restore the base half-potential
         reset_ionized_tally();
         cpu_is_truth_ = true;  // GPU state discarded with the reset
@@ -572,8 +573,8 @@ public:
             // Laser and B are mutually exclusive: driven_step folds diamagnetic
             // but NOT the paramagnetic Larmor rotation, so both together is an
             // inconsistent Hamiltonian. Drop B (E stays -- static potential term).
-            if (bfield_b_ > 0.0) {
-                bfield_b_ = 0.0;
+            if (fields_.b_active()) {
+                fields_.b = 0.0;
                 upload_field_tables();
             }
             laser_pol_ = LaserPol::Z;
@@ -585,38 +586,45 @@ public:
         }
     }
 
-    // Static uniform E-field along +z (au); 0 = off. GPU cloud/real-time; the
-    // laser, if on, takes precedence.
+    // Static uniform E-field along the E axis (au), SIGNED; 0 = off. GPU
+    // cloud/real-time; the laser, if on, takes precedence.
     void set_efield_e0(double e0) override {
-        efield_e0_ = e0;
-        upload_field_tables();  // fold E*z into the half-potential (with diamag if B on)
-        if (e0 > 0.0 && !solving()) {
+        fields_.e0 = e0;
+        upload_field_tables();  // fold E*x_axis into the half-potential (with diamag if B on)
+        if (fields_.e_active() && !solving()) {
             stepping_ = BaseStepping::RealTime;  // let the field actually act
         }
     }
+    double efield_e0() const override { return fields_.e0; }
 
-    // Magnetic field strength (au) along the current axis; 0 = off. Minimal
-    // coupling: diamagnetic folded into the half-potential here; per-frame
-    // magnetic_step adds only the paramagnetic rotation.
-    double bfield_b() const override { return bfield_b_; }
+    // Magnetic field strength (au) along the B axis, SIGNED (sign = Larmor
+    // sense); 0 = off. Minimal coupling: diamagnetic folded into the
+    // half-potential here; per-frame magnetic_step adds only the paramagnetic
+    // rotation.
+    double bfield_b() const override { return fields_.b; }
     void set_bfield_b(double b) override {
-        bfield_b_ = b;
-        if (b > 0.0) {
+        fields_.b = b;
+        if (fields_.b_active()) {
             laser_pol_ = LaserPol::Off;  // mutually exclusive (see toggle_laser)
         }
         upload_field_tables();
-        if (b > 0.0 && !solving()) {
+        if (fields_.b_active() && !solving()) {
             stepping_ = BaseStepping::RealTime;
         }
     }
 
-    // Cycle the field axis z->x->y; the diamagnetic term is axis-dependent, so
-    // the half-potential is rebuilt.
-    void toggle_bfield_axis() override {
-        bfield_axis_ = (bfield_axis_ == 2) ? 0 : (bfield_axis_ == 0 ? 1 : 2);
+    // Cycle a field's axis z->x->y. Both the E tilt and the diamagnetic term
+    // are axis-dependent, so the half-potential is rebuilt either way.
+    void toggle_efield_axis() override {
+        fields_.cycle_e_axis();
         upload_field_tables();
     }
-    int bfield_axis() const override { return bfield_axis_; }
+    int efield_axis() const override { return fields_.e_axis; }
+    void toggle_bfield_axis() override {
+        fields_.cycle_b_axis();
+        upload_field_tables();
+    }
+    int bfield_axis() const override { return fields_.b_axis; }
 
     // ---- selftest / verification hooks ----
 
@@ -783,14 +791,15 @@ public:
                       laser_pol_ == LaserPol::Z ? "Z" : "X", laser_omega_,
                       laser_e0_, pop_ground_, pop_excited_);
         }
-        if (efield_e0_ > 0.0 && laser_pol_ == LaserPol::Off) {
-            s += strf("  E-field +z: %.4f au (%.2e V/m)", efield_e0_,
-                      efield_e0_ * 5.14220674e11);
+        if (fields_.e_active() && laser_pol_ == LaserPol::Off) {
+            s += strf("  E-field %s: %+.4f au (%.2e V/m)",
+                      FieldControl::axis_name(fields_.e_axis), fields_.e0,
+                      fields_.e0 * 5.14220674e11);
         }
-        if (bfield_b_ > 0.0) {
-            s += strf("  B-field %s: %.4f au, omega_L %.4f au (psi evolved)",
-                      bfield_axis_ == 2 ? "z" : (bfield_axis_ == 0 ? "x" : "y"),
-                      bfield_b_, 0.5 * bfield_b_);
+        if (fields_.b_active()) {
+            s += strf("  B-field %s: %+.4f au, omega_L %.4f au (psi evolved)",
+                      FieldControl::axis_name(fields_.b_axis), fields_.b,
+                      0.5 * fields_.b);
         }
         if (absorber_on_ && 1.0 - bound_survival_ > 5e-4) {
             s += strf("  ionized %.1f%%", (1.0 - bound_survival_) * 100.0);
@@ -1159,12 +1168,13 @@ private:
             const ses::DipoleDrive d{laser_axis(), laser_e0_, laser_omega_};
             engine_.driven_step(d, sim_.time() + gpu_time_, sim_.dt(),
                                 pending_gpu_steps_, absorber_on_, true);
-        } else if (bfield_b_ > 0.0) {
+        } else if (fields_.b_active()) {
             // Minimal-coupling magnetic step: static E + diamagnetic already
             // folded into the half-potential; the paramagnetic L_axis is the
-            // exact three-shear rotation.
-            engine_.magnetic_step(bfield_axis_,
-                                  0.5 * bfield_b_ * (0.5 * sim_.dt()),
+            // exact three-shear rotation. The half-angle carries B's sign, so
+            // -B precesses the other way.
+            engine_.magnetic_step(fields_.b_axis,
+                                  0.5 * fields_.b * (0.5 * sim_.dt()),
                                   pending_gpu_steps_, absorber_on_, true);
         } else {
             // Static E-field (if any) is folded into the half-potential, so a
@@ -1352,26 +1362,32 @@ private:
         engine_.wait_async();
         // Memo: sliders re-fire every drag frame and reset calls with 0/0 --
         // skip the two 67 MB uploads when nothing changed.
-        if (efield_e0_ == uploaded_e0_ && bfield_b_ == uploaded_b_ &&
-            bfield_axis_ == uploaded_axis_) {
+        if (fields_.e0 == uploaded_e0_ && fields_.b == uploaded_b_ &&
+            fields_.e_axis == uploaded_e_axis_ &&
+            fields_.b_axis == uploaded_b_axis_) {
             return;
         }
         std::vector<double> v = sim_.potential();
-        if (efield_e0_ > 0.0) {
+        if (fields_.e_active()) {
+            // Uniform E along the chosen axis: tilt E * (coordinate along that
+            // axis). Signed E tilts the other way; the axis picks x, y or z.
             const ses::Grid3D& g = sim_.grid();
             for (int k = 0; k < g.z.n; ++k) {
-                const double ez = efield_e0_ * g.z.coord(k);
                 for (int j = 0; j < g.y.n; ++j) {
                     for (int i = 0; i < g.x.n; ++i) {
-                        v[static_cast<std::size_t>(g.flat(i, j, k))] += ez;
+                        const double c = fields_.e_axis == 0   ? g.x.coord(i)
+                                         : fields_.e_axis == 1 ? g.y.coord(j)
+                                                               : g.z.coord(k);
+                        v[static_cast<std::size_t>(g.flat(i, j, k))] +=
+                            FieldControl::e_tilt(fields_.e0, c);
                     }
                 }
             }
         }
-        if (bfield_b_ > 0.0) {
+        if (fields_.b_active()) {
             // Reuse the core diamagnetic (perpendicular to the field axis).
             const ses::MagneticPropagator3D mprop{sim_.grid(), v, sim_.dt(),
-                                                  bfield_b_, bfield_axis_};
+                                                  fields_.b, fields_.b_axis};
             v = mprop.effective_potential();
         }
         // The half-potential AND the Ehrenfest gradient must stay in sync (a
@@ -1384,9 +1400,10 @@ private:
             gpu_ok_ = false;
             return;
         }
-        uploaded_e0_ = efield_e0_;
-        uploaded_b_ = bfield_b_;
-        uploaded_axis_ = bfield_axis_;
+        uploaded_e0_ = fields_.e0;
+        uploaded_b_ = fields_.b;
+        uploaded_e_axis_ = fields_.e_axis;
+        uploaded_b_axis_ = fields_.b_axis;
     }
 
     // Free the OWNED transient deflation buffers (synthesized at relax-start).
@@ -1588,7 +1605,8 @@ private:
     // starts at 0/0.
     double uploaded_e0_ = 0.0;
     double uploaded_b_ = 0.0;
-    int uploaded_axis_ = 2;
+    int uploaded_e_axis_ = 2;
+    int uploaded_b_axis_ = 2;
 
     // Partial-measurement bookkeeping (n-shell / l / m buttons).
     PartialBasis pending_partial_ = PartialBasis::None;
@@ -1619,9 +1637,9 @@ private:
     LaserPol laser_pol_ = LaserPol::Off;
     double laser_omega_ = 0.0;
     double laser_e0_ = 0.0;
-    double efield_e0_ = 0.0;  // static +z electric field magnitude (au); 0 = off
-    double bfield_b_ = 0.0;      // magnetic field strength (au); 0 = off
-    int bfield_axis_ = 2;        // field direction: 2=z, 0=x, 1=y
+    // Static uniform E / B: SIGNED magnitude + axis each (either direction is
+    // a real field; FieldControl, tests/field_control_test.cpp).
+    FieldControl fields_;
     double grid_energy_1s_ = 0.0;  // <H>_grid of 1s from the h-audit; the
                                    // laser drives THIS resonance (cusp gap)
     double pop_ground_ = 0.0;
