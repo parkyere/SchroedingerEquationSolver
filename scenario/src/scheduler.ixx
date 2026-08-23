@@ -28,7 +28,8 @@ public:
     void cancel(int id) {
         for (Entry& e : entries_) {
             if (e.id == id) {
-                e.fn = nullptr;  // reaped on the next poll
+                e.fn = nullptr;    // reaped on the next poll
+                e.period_ms = 0;   // and never re-armed mid-call
             }
         }
     }
@@ -38,17 +39,26 @@ public:
         // Cached n: callbacks may push_back; those entries run next poll, not now.
         const std::size_t n = entries_.size();
         for (std::size_t i = 0; i < n; ++i) {
-            Entry& e = entries_[i];
-            if (!e.fn || e.due > now_ms) {
+            if (!entries_[i].fn || entries_[i].due > now_ms) {
                 continue;
             }
-            if (e.period_ms > 0) {
-                e.due = now_ms + e.period_ms;
-                e.fn();
-            } else {
-                auto fn = std::move(e.fn);
-                e.fn = nullptr;
-                fn();
+            // Move the callable out BEFORE invoking: the callback may cancel
+            // its own id or push_back (reallocating entries_) mid-call.
+            const int id = entries_[i].id;
+            const std::uint64_t period = entries_[i].period_ms;
+            auto fn = std::move(entries_[i].fn);
+            entries_[i].fn = nullptr;
+            fn();
+            if (period > 0) {
+                // Re-arm by id lookup (the vector may have moved); a cancel
+                // during the call zeroed period_ms, leaving the entry reaped.
+                for (Entry& e : entries_) {
+                    if (e.id == id && e.period_ms > 0) {
+                        e.due = now_ms + period;
+                        e.fn = std::move(fn);
+                        break;
+                    }
+                }
             }
         }
         std::erase_if(entries_, [](const Entry& e) { return !e.fn; });
