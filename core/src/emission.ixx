@@ -175,9 +175,10 @@ inline double flash_intensity(int ticks_left, int ticks_total) noexcept {
                            : 0.0;
 }
 
-// Up to kMaxPhotonFlights concurrent streaks; a spawn beyond capacity evicts
-// the most-spent flight (largest progress).
-inline constexpr int kMaxPhotonFlights = 4;
+// Concurrent streak capacity: a 5-photon Yrast cascade (6h->...->1s) times
+// three overlapping bursts fits; ~= emission rate x the 48 s softest-line
+// life. Renderer holds 64 overlay slots, so eviction is a safety valve only.
+inline constexpr int kMaxPhotonFlights = 16;
 
 struct PhotonFlightPool {
     struct Flight {
