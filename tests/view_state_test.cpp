@@ -66,4 +66,22 @@ TEST(ViewState, StepZeroIsANoOp) {
     EXPECT_DOUBLE_EQ(v.absorbance, 3.0);
 }
 
+// Streak advection step follows the pacing dial: x1 keeps the readable-crawl
+// baseline, xN moves the tracers N times as far per frame.
+TEST(FlowAdvectDt, BaselineCrawlAtRealTime) {
+    EXPECT_DOUBLE_EQ(ses::flow_advect_dt(1), ses::kFlowCrawlDt);
+}
+
+TEST(FlowAdvectDt, ScalesLinearlyWithTheTimeScaleDial) {
+    for (int s = 2; s <= 16; ++s) {
+        EXPECT_DOUBLE_EQ(ses::flow_advect_dt(s),
+                         static_cast<double>(s) * ses::kFlowCrawlDt);
+    }
+}
+
+TEST(FlowAdvectDt, NonPositiveDialFallsBackToBaseline) {
+    EXPECT_DOUBLE_EQ(ses::flow_advect_dt(0), ses::kFlowCrawlDt);
+    EXPECT_DOUBLE_EQ(ses::flow_advect_dt(-3), ses::kFlowCrawlDt);
+}
+
 }  // namespace
