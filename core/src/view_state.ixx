@@ -4,10 +4,18 @@ export module ses.view_state;
 
 // Shell view state behind the F / [ ] hotkeys and their panel widgets: flow
 // tracer toggle + Beer-Lambert fog absorbance (clamped, multiplicative hotkey
-// step). Pure value type; the shell and ImGui panel are glue over it.
-// Contract: tests/view_state_test.cpp.
+// step) + streakline advection step. Pure value type; the shell and ImGui
+// panel are glue over it. Contract: tests/view_state_test.cpp.
 
 export namespace ses {
+
+// Streakline advection step per rendered frame (au): x1 readable-crawl
+// baseline scaled by the pacing dial (tracer speed tracks sim speed).
+inline constexpr double kFlowCrawlDt = 0.18;
+
+inline constexpr double flow_advect_dt([[maybe_unused]] int time_scale) noexcept {
+    return kFlowCrawlDt;  // stub (red): dial-blind fixed crawl
+}
 
 struct ViewState {
     static constexpr double kAbsorbMin = 0.1;
