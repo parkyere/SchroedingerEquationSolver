@@ -155,6 +155,25 @@ TEST(ConditionedAmplitudes, ObliqueDetectionIsTheExactSuperposition) {
     EXPECT_NEAR(n2, 1.0, 1e-12);
 }
 
+TEST(ConditionedAmplitudes, HelicityFixesThePhaseForAngularMomentum) {
+    // 3d_z2 -> 2p (tesseral D: -x, -y, +2z up to scale). Same n = +z, either
+    // helicity: c_y = -i lam c_x, so <L_z> = 2 Im(c_x* c_y) = -lam — the atom
+    // loses exactly the +lam hbar the photon carries.
+    const std::vector<DipoleMatrixElement> dip{
+        DipoleMatrixElement{{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}},
+        DipoleMatrixElement{{0.0, 0.0}, {-1.0, 0.0}, {0.0, 0.0}},
+        DipoleMatrixElement{{0.0, 0.0}, {0.0, 0.0}, {2.0, 0.0}}};
+    for (const int lam : {+1, -1}) {
+        const auto c =
+            ses::conditioned_amplitudes(dip, Vec3d{0.0, 0.0, 1.0}, lam);
+        ASSERT_EQ(c.size(), 3u);
+        EXPECT_NEAR(std::abs(c[2]), 0.0, 1e-12);          // pi silent on-axis
+        EXPECT_NEAR(std::abs(c[0]), std::abs(c[1]), 1e-12);
+        const double lz = 2.0 * std::imag(std::conj(c[0]) * c[1]);
+        EXPECT_NEAR(lz, -lam, 1e-12);
+    }
+}
+
 TEST(ConditionedAmplitudes, AllZeroDipolesStayZero) {
     const std::vector<DipoleMatrixElement> dip{DipoleMatrixElement{},
                                                DipoleMatrixElement{}};
