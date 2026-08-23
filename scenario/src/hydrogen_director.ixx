@@ -184,13 +184,13 @@ public:
         // Photon streak: wall-frame flight clock + this frame's polyline
         // (overlay pointers stay valid until the next run_frame).
         if (photon_flight_.age_frames >= 0) {
-            if (++photon_flight_.age_frames > ses::kPhotonFlightTicks) {
+            if (++photon_flight_.age_frames > photon_flight_.total_frames) {
                 photon_flight_.age_frames = -1;
                 streak_xyz_.clear();
             } else {
                 const double progress =
                     static_cast<double>(photon_flight_.age_frames) /
-                    ses::kPhotonFlightTicks;
+                    photon_flight_.total_frames;
                 const std::vector<ses::Vec3d> pts =
                     ses::photon_streak_vertices(photon_flight_.rec,
                                                 photon_flight_.delta_e,
@@ -1294,11 +1294,10 @@ private:
                                             // must not read as ionization
                     flush_collapse_error(fin.to);
                     flash_ticks_ = kFlashTicks;
+                    const double gap_e = atom_.state_energy(fin.from) -
+                                         atom_.state_energy(fin.to);
                     photon_flight_ = PhotonFlight{
-                        rec,
-                        atom_.state_energy(fin.from) -
-                            atom_.state_energy(fin.to),
-                        0};
+                        rec, gap_e, 0, ses::photon_flight_frames(gap_e)};
                     for (const int c : fired) {
                         const ShellChannel& ch =
                             atom_.channels()[static_cast<std::size_t>(c)];
@@ -1731,6 +1730,8 @@ private:
         ses::PhotonRecord rec{};
         double delta_e = 0.0;
         int age_frames = -1;  // -1 = none in flight
+        // Constant display speed: soft photons fly farther AND longer.
+        int total_frames = ses::kPhotonFlightTicks;
     };
     PhotonFlight photon_flight_{};
     std::vector<float> streak_xyz_;

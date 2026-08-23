@@ -68,7 +68,7 @@ inline constexpr double larmor_power(const Vec3d& dipole_accel) noexcept {
 
 // ---- QED photon record: E1 direction + helicity conditioning ----
 // Detecting the photon as a plane wave (n, lambda) projects the atom onto
-// c_m ∝ conj(e_lambda(n)) . D_m over the degenerate destination sublevels;
+// c_m ~ conj(e_lambda(n)) . D_m over the degenerate destination sublevels;
 // angular momentum bookkeeping is automatic in this coupling.
 
 struct PhotonRecord {
@@ -92,7 +92,7 @@ inline DipoleMatrixElement helicity_vector(const Vec3d& n, int lambda) noexcept 
                                {th.z * s2, l * ph.z * s2}};
 }
 
-// c_m ∝ conj(e_lambda(n)) . D_m, normalized; all-zero dipoles stay all-zero.
+// c_m ~ conj(e_lambda(n)) . D_m, normalized; all-zero dipoles stay all-zero.
 inline std::vector<std::complex<double>> conditioned_amplitudes(
     const std::vector<DipoleMatrixElement>& dipoles, const Vec3d& n,
     int lambda) {
@@ -137,30 +137,31 @@ inline constexpr int kPhotonFlightTicks = 120;      // ~2 s at 60 fps
 inline constexpr double kPhotonTravel = 160.0;      // Bohr; exits the +-80 box
 inline constexpr double kPhotonWaveScale = 9.375;   // lambda = scale/dE (Lyman-alpha -> 25)
 inline constexpr double kPhotonStreakRadius = 4.0;  // Bohr
-inline constexpr double kPhotonTail = 60.0;         // Bohr of visible trail
 inline constexpr int kPhotonStreakPoints = 96;      // body + tip vertex
 
 inline constexpr double kPhotonTipLen = 8.0;  // Bohr; on-axis arrowhead reach
 inline constexpr double kPhotonTurns = 4.0;   // visible tail = 4 wavelengths
 
+inline constexpr double kPhotonRefDeltaE = 0.375;  // Lyman-alpha baseline
+
+// Display wavelength: relative energies honest (true lambda >> box).
+inline double photon_display_wavelength(double delta_e) noexcept {
+    return delta_e > 0.0 ? kPhotonWaveScale / delta_e : kPhotonTravel;
+}
+
 // Flight distance: base box-exit travel + the 4-wavelength tail unspools
 // fully before the fade completes.
 inline double photon_travel(double delta_e) noexcept {
-    (void)delta_e;
-    return kPhotonTravel;  // stub (red)
+    return kPhotonTravel + kPhotonTurns * photon_display_wavelength(delta_e);
 }
 
 // Flight lifetime in frames: Lyman-alpha (2p->1s) = kPhotonFlightTicks (2 s),
 // every other photon flies at the SAME display speed (frames scale with
 // travel).
 inline int photon_flight_frames(double delta_e) noexcept {
-    (void)delta_e;
-    return kPhotonFlightTicks;  // stub (red)
-}
-
-// Display wavelength: relative energies honest (true lambda >> box).
-inline double photon_display_wavelength(double delta_e) noexcept {
-    return delta_e > 0.0 ? kPhotonWaveScale / delta_e : kPhotonTravel;
+    return static_cast<int>(
+        std::lround(kPhotonFlightTicks * photon_travel(delta_e) /
+                    photon_travel(kPhotonRefDeltaE)));
 }
 
 // 1 through most of the flight, linear fade to 0 at the end.
@@ -170,10 +171,10 @@ inline double photon_streak_alpha(double progress) noexcept {
     return p <= kFadeStart ? 1.0 : (1.0 - p) / (1.0 - kFadeStart);
 }
 
-// Body helix trails the head by kPhotonTail (clamped at the nucleus); the
-// last vertex is the on-axis arrow tip ahead of the body. Transverse frame =
-// helicity_vector's (theta_hat, phi_hat) and phase = k(s - s_head), so the
-// spring twists AND rotates in flight with sense = helicity.
+// Body helix trails the head by kPhotonTurns wavelengths (clamped at the
+// nucleus); the last vertex is the on-axis arrow tip ahead of the body.
+// Transverse frame = helicity_vector's (theta_hat, phi_hat) and phase =
+// k(s - s_head), so the spring twists AND rotates in flight, sense = helicity.
 inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
                                                  double delta_e,
                                                  double progress) {
@@ -183,10 +184,12 @@ inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
     const double sph = st > 0.0 ? n.y / st : 0.0;
     const Vec3d th{n.z * cph, n.z * sph, -st};
     const Vec3d fi{-sph, cph, 0.0};
-    const double sh = std::clamp(progress, 0.0, 1.0) * kPhotonTravel;
-    const double s0 = std::max(0.0, sh - kPhotonTail);
+    const double lam_len = photon_display_wavelength(delta_e);
+    const double sh =
+        std::clamp(progress, 0.0, 1.0) * photon_travel(delta_e);
+    const double s0 = std::max(0.0, sh - kPhotonTurns * lam_len);
     constexpr double kPi = 3.14159265358979323846;
-    const double k = 2.0 * kPi / photon_display_wavelength(delta_e);
+    const double k = 2.0 * kPi / lam_len;
     const double lam = ph.helicity >= 0 ? 1.0 : -1.0;
     std::vector<Vec3d> v(static_cast<std::size_t>(kPhotonStreakPoints));
     const int nb = kPhotonStreakPoints - 1;
@@ -207,7 +210,7 @@ inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
     return v;
 }
 
-// Joint (n, lambda) sample from P ∝ Sum_m |conj(e_lambda(n)) . D_m|^2 by
+// Joint (n, lambda) sample from P ~ Sum_m |conj(e_lambda(n)) . D_m|^2 by
 // rejection against the bound Sum_m |D_m|^2 (transverse projector never
 // exceeds it); u01() supplies uniforms in [0,1).
 template <class U01>
