@@ -79,7 +79,7 @@ TEST(LarmorPower, ExactFactorAndQuadraticScaling) {
 }
 
 // QED photon record: detecting the E1 photon as a plane wave (n, lambda)
-// projects the atom onto c_m ∝ conj(e_lambda(n)).D_m -- angular momentum
+// projects the atom onto c_m ~ conj(e_lambda(n)).D_m -- angular momentum
 // conservation lives in this coupling.
 
 using ses::DipoleMatrixElement;
@@ -157,8 +157,8 @@ TEST(ConditionedAmplitudes, ObliqueDetectionIsTheExactSuperposition) {
 
 TEST(ConditionedAmplitudes, HelicityFixesThePhaseForAngularMomentum) {
     // 3d_z2 -> 2p (tesseral D: -x, -y, +2z up to scale). Same n = +z, either
-    // helicity: c_y = -i lam c_x, so <L_z> = 2 Im(c_x* c_y) = -lam — the atom
-    // loses exactly the +lam hbar the photon carries.
+    // helicity: c_y = -i lam c_x, so <L_z> = 2 Im(c_x* c_y) = -lam -- the
+    // atom loses exactly the +lam hbar the photon carries.
     const std::vector<DipoleMatrixElement> dip{
         DipoleMatrixElement{{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}},
         DipoleMatrixElement{{0.0, 0.0}, {-1.0, 0.0}, {0.0, 0.0}},
