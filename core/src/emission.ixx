@@ -1,5 +1,6 @@
 module;
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -163,6 +164,48 @@ inline int photon_flight_frames(double delta_e) noexcept {
         std::lround(kPhotonFlightTicks * photon_travel(delta_e) /
                     photon_travel(kPhotonRefDeltaE)));
 }
+
+// Photon flash: linear decay, peak capped at 1/3 (full bright hurt the eye).
+inline constexpr double kFlashPeak = 1.0 / 3.0;
+
+inline double flash_intensity(int ticks_left, int ticks_total) noexcept {
+    // stub (red): today's full-bright ramp
+    return ticks_total > 0 ? static_cast<double>(ticks_left) /
+                                 static_cast<double>(ticks_total)
+                           : 0.0;
+}
+
+// Up to kMaxPhotonFlights concurrent streaks; a spawn beyond capacity evicts
+// the most-spent flight (largest progress).
+inline constexpr int kMaxPhotonFlights = 4;
+
+struct PhotonFlightPool {
+    struct Flight {
+        PhotonRecord rec{};
+        double delta_e = 0.0;
+        int age_frames = -1;  // -1 = free slot
+        int total_frames = 1;
+    };
+    std::array<Flight, kMaxPhotonFlights> slots{};
+
+    // stub (red): single-slot semantics (today's behavior)
+    void spawn(const PhotonRecord& rec, double delta_e, int total_frames) {
+        slots[0] = Flight{rec, delta_e, 0, total_frames};
+    }
+    void advance() {
+        if (slots[0].age_frames >= 0 &&
+            ++slots[0].age_frames > slots[0].total_frames) {
+            slots[0].age_frames = -1;
+        }
+    }
+    int count() const {
+        return slots[0].age_frames >= 0 ? 1 : 0;
+    }
+    // i-th ACTIVE flight in slot order; nullptr past count().
+    const Flight* active(int i) const {
+        return i == 0 && slots[0].age_frames >= 0 ? &slots[0] : nullptr;
+    }
+};
 
 // 1 through most of the flight, linear fade to 0 at the end.
 inline double photon_streak_alpha(double progress) noexcept {
