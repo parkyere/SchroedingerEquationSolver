@@ -250,13 +250,14 @@ protected:
             return;
         }
         if (gpu_title_due_) {
-            if (std::abs(stats.energy - relax_prev_energy_) < 5e-5) {
+            if (std::abs(stats.energy - relax_prev_energy_) <
+                kBaseRelaxPlateauEps) {
                 ++relax_plateau_;
             } else {
                 relax_plateau_ = 0;
             }
             relax_prev_energy_ = stats.energy;
-            if (relax_plateau_ >= 12) {
+            if (relax_plateau_ >= kBaseRelaxPlateauPolls) {
                 relax_plateau_ = 0;
                 enter_fine_polish();
             }

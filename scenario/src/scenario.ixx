@@ -371,10 +371,10 @@ struct RutherfordApi {
 // most one tick's steps run per rendered frame. CONTRACT:
 // tests/time_scale_realtime_test.cpp.
 inline constexpr int clamp_time_scale(int scale) noexcept {
-    return scale;  // stub (red)
+    return std::clamp(scale, 1, 16);
 }
 inline constexpr int pending_after_tick(int pending, int per_tick) noexcept {
-    return pending + per_tick;  // stub (red): bundles catch-up
+    return std::min(pending + per_tick, per_tick);
 }
 
 // A 1D-scene overlay primitive: packed (x, y, z) world-space triples; LINE_STRIP,

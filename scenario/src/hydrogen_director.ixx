@@ -42,23 +42,21 @@ export namespace ses_shell {
 enum class LaserPol { Off, Z, X };
 enum class PartialBasis { None, NShell, LTotal, MZ };
 
-constexpr int kStepsPerTick = 1;
-constexpr int kRelaxStepsPerTick = 1;
-constexpr double kRelaxDtau = 0.05;
+constexpr double kRelaxDtau = kBaseRelaxDtau;
 // Post-collapse flush budgets (contract: tests/eigenstate_flush_test.cpp).
 // Excited tau=0.3 clears cusp junk (~92% of the <H> offset), negligible 1s
 // drain; longer becomes non-radiative decay. 1s is the ITP fixed point, so
 // tau=1.2 reaches the grid ground state.
 constexpr int kFlushSteps = 6;
 constexpr int kFlushStepsGround = 24;
-constexpr double kIsoFraction = 0.25;
-constexpr double kMeasureSigma = 1.25;  // Bohr; back-action 3/(8 sigma^2)=0.24
-                                        // Ha stays under the 0.5 Ha binding
-                                        // (tighter ionizes on nearly every click)
+constexpr double kIsoFraction = kBaseIsoFraction;
+// Back-action 3/(8 sigma^2)=0.24 Ha stays under the 0.5 Ha binding (tighter
+// ionizes on nearly every click).
+constexpr double kMeasureSigma = kBaseMeasureSigma;
 // Display decay rate: tau_display ~ 8 au (~3 s wall); true lifetimes ~1e8 au.
 constexpr double kDecayGammaDisplay = 0.125;
-constexpr double kHaToEv = 27.211386;
-constexpr double kAuToFs = 2.4188843e-2;
+constexpr double kHaToEv = kBaseHaToEv;
+constexpr double kAuToFs = kBaseAuToFs;
 constexpr double kAbsorbWidth = 10.0;  // Bohr; interior +-70 untouched, real-time only
 // Target Rabi frequency: E0 = kRabiTargetOmega / |<2p|z|1s>|; carrier tuned to
 // the GRID resonance, not textbook 0.375 (see toggle_laser).
@@ -278,7 +276,7 @@ public:
             if (pending_gpu_steps_ > 0) {
                 if (stepping_ == BaseStepping::RealTime) {
                     // Mask + bridge ride the step submission (batch tail).
-                    run_real_time_batch();
+                    run_atom_real_time_batch();
                     if (mode_ == BaseViewMode::Cloud) {
                         volume_written_ = true;
                     } else {
@@ -306,35 +304,7 @@ public:
         }
     }
 
-    // ---- the timer tick: accumulate work / CPU fallback stepping ----
-    void tick() override {
-        if (use_gpu_path()) {
-            // Steps execute in run_frame (once per paint): ONE tick's supply
-            // per frame, so a slow frame never bundles catch-up ticks.
-            // time_scale_ is the ONLY pacing dial -- no mode may add a hidden
-            // multiplier (unified contract).
-            const int per_tick = kStepsPerTick * time_scale_;
-            pending_gpu_steps_ =
-                std::min(pending_gpu_steps_ + per_tick, per_tick);
-            if (++ticks_ % 10 == 0) {
-                gpu_title_due_ = true;
-            }
-            return;
-        }
-        ensure_cpu_current();
-        // CPU fallback: deliberately NOT time-scaled -- synchronous steps would
-        // stall the UI.
-        if (stepping_ == BaseStepping::RealTime) {
-            sim_.advance(kStepsPerTick);
-        } else {
-            sim_.relax(kRelaxStepsPerTick, kRelaxDtau);
-        }
-        stage_active_view();
-        if (++ticks_ % 10 == 0) {
-            norm_display_ = ses::norm_sq(sim_.psi());
-            title_dirty_ = true;
-        }
-    }
+    // tick() is BaseDirector's verbatim (same pacing contract + CPU fallback).
 
     // MCWF no-jump damping toggle (see apply_mcwf_damping).
     void set_mcwf_damping(bool on) override { mcwf_damping_ = on; }
@@ -859,14 +829,7 @@ public:
     }
 
 private:
-    static std::string strf(const char* fmt, ...) {
-        char buf[192];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof buf, fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
+    // strf: BaseDirector's protected helper (the former private copy shadowed it).
 
     ses::Vec3d laser_axis() const {
         return laser_pol_ == LaserPol::X ? ses::Vec3d{1.0, 0.0, 0.0}
@@ -1182,7 +1145,7 @@ private:
 
     // One real-time step batch: propagate (driven/magnetic/plain), absorb, then
     // title-cadence readouts and trials.
-    void run_real_time_batch() {
+    void run_atom_real_time_batch() {
         if (gpu_title_due_) {
             // GPU-reduced norm+peak (2 KB readback), taken BEFORE enqueueing
             // new steps so the implicit sync waits on long-finished work.
@@ -1345,7 +1308,7 @@ private:
     // One imaginary-time batch: renormalized every step; the ITP estimator gives
     // the convergence readout free. The excited flavor deflates states below the
     // target.
-    void run_relax_batch() {
+    void run_relax_batch() override {
         const ses_vk::Engine::RelaxStats stats =
             (stepping_ == BaseStepping::RelaxingExcited &&
              !relax_deflate_.empty())
@@ -1361,13 +1324,14 @@ private:
         // Auto-complete: when the ITP energy plateaus, return to real time
         // so the lifetimes act.
         if (gpu_title_due_) {
-            if (std::abs(stats.energy - relax_prev_energy_) < 5e-5) {
+            if (std::abs(stats.energy - relax_prev_energy_) <
+                kBaseRelaxPlateauEps) {
                 ++relax_plateau_;
             } else {
                 relax_plateau_ = 0;
             }
             relax_prev_energy_ = stats.energy;
-            if (relax_plateau_ >= 12) {  // ~2 s of stable readout
+            if (relax_plateau_ >= kBaseRelaxPlateauPolls) {
                 relax_plateau_ = 0;
                 stepping_ = BaseStepping::RealTime;
                 std::fprintf(stderr,
@@ -1679,22 +1643,7 @@ private:
         }
     }
 
-    // Transient relax tables: built/uploaded on demand, freed on completion --
-    // avoids a large resident allocation.
-    bool ensure_relax_tables() {
-        if (engine_.relax_tables_ready()) {
-            return true;
-        }
-        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
-                                                     kRelaxDtau};
-        if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
-                                      relaxer.kinetic_weight(), kRelaxDtau,
-                                      sim_.grid().cell_volume())) {
-            std::fprintf(stderr, "engine: relax table upload failed\n");
-            return false;
-        }
-        return true;
-    }
+    // ensure_relax_tables: BaseDirector's (relax_dtau() hook == kRelaxDtau).
     void drop_relax_tables() { engine_.release_relax_tables(); }
 
     // BaseDirector pure-virtual hooks: never actually called (HydrogenDirector

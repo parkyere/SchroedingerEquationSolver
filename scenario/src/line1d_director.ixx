@@ -65,7 +65,7 @@ public:
     void tick() override {
         // Drop catch-up ticks instead of bundling (BaseDirector pacing).
         const int per_tick = steps_per_tick() * time_scale_;
-        pending_steps_ = std::min(pending_steps_ + per_tick, per_tick);
+        pending_steps_ = pending_after_tick(pending_steps_, per_tick);
         if (++ticks_ % 10 == 0) {
             title_due_ = true;
         }
@@ -91,7 +91,7 @@ public:
     bool scene_ready() const override { return true; }
 
     void set_time_scale(int scale) override {
-        time_scale_ = std::clamp(scale, 1, 16);
+        time_scale_ = clamp_time_scale(scale);
     }
     int time_scale() const override { return time_scale_; }
     double sim_time() const override { return sim_time_; }

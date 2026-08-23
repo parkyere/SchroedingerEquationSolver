@@ -236,7 +236,7 @@ public:
     void tick() override {
         const int base = exact_mode_ ? kSlExactSteps : kSlStepsPerTick;
         const int per_tick = base * time_scale_;
-        pending_steps_ = std::min(pending_steps_ + per_tick, per_tick);
+        pending_steps_ = pending_after_tick(pending_steps_, per_tick);
     }
 
     void do_set_real_time() override {}
@@ -325,7 +325,7 @@ public:
     bool solving() const override { return false; }
     bool scene_ready() const override { return true; }
     void set_time_scale(int scale) override {
-        time_scale_ = std::clamp(scale, 1, 16);
+        time_scale_ = clamp_time_scale(scale);
     }
     int time_scale() const override { return time_scale_; }
     double sim_time() const override { return sim_time_; }

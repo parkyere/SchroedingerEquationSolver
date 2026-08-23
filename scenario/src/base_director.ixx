@@ -44,6 +44,9 @@ constexpr double kBaseIsoFraction = 0.25;
 constexpr double kBaseMeasureSigma = 1.25;  // Bohr
 constexpr double kBaseHaToEv = 27.211386;
 constexpr double kBaseAuToFs = 2.4188843e-2;
+// ITP auto-complete plateau: energy step below eps for N title-cadence polls.
+constexpr double kBaseRelaxPlateauEps = 5e-5;  // Ha
+constexpr int kBaseRelaxPlateauPolls = 12;     // ~2 s of stable readout
 
 class BaseDirector : public ScenarioDirector {
 public:
@@ -137,10 +140,11 @@ public:
 
     void tick() override {
         if (use_gpu_path()) {
-            // Clamp drops catch-up ticks: at most one tick's steps per rendered frame.
+            // ONE tick's supply per frame (catch-up drops); time_scale_ is the
+            // ONLY pacing dial -- no mode may add a hidden multiplier.
             const int per_tick = steps_per_tick() * time_scale_;
             pending_gpu_steps_ =
-                std::min(pending_gpu_steps_ + per_tick, per_tick);
+                pending_after_tick(pending_gpu_steps_, per_tick);
             if (++ticks_ % 10 == 0) {
                 gpu_title_due_ = true;
             }
@@ -162,7 +166,7 @@ public:
 
     // steps per tick, not dt.
     void set_time_scale(int scale) override {
-        time_scale_ = std::clamp(scale, 1, 16);
+        time_scale_ = clamp_time_scale(scale);
     }
     int time_scale() const override { return time_scale_; }
 
@@ -368,13 +372,14 @@ protected:
         norm_display_ = 1.0;  // pinned by per-step renormalization
         // Auto-complete on the ITP energy plateau.
         if (gpu_title_due_) {
-            if (std::abs(stats.energy - relax_prev_energy_) < 5e-5) {
+            if (std::abs(stats.energy - relax_prev_energy_) <
+                kBaseRelaxPlateauEps) {
                 ++relax_plateau_;
             } else {
                 relax_plateau_ = 0;
             }
             relax_prev_energy_ = stats.energy;
-            if (relax_plateau_ >= 12) {
+            if (relax_plateau_ >= kBaseRelaxPlateauPolls) {
                 relax_plateau_ = 0;
                 stepping_ = BaseStepping::RealTime;
                 engine_.release_relax_tables();
@@ -389,9 +394,13 @@ protected:
         const double dtau = relax_dtau();
         const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
                                                      dtau};
-        return engine_.set_relax_tables(relaxer.half_potential_weight(),
-                                        relaxer.kinetic_weight(), dtau,
-                                        sim_.grid().cell_volume());
+        if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
+                                      relaxer.kinetic_weight(), dtau,
+                                      sim_.grid().cell_volume())) {
+            std::fprintf(stderr, "engine: relax table upload failed\n");
+            return false;
+        }
+        return true;
     }
 
     // Deep wells override: V*dtau must stay moderate or the ITP fixed point is a
