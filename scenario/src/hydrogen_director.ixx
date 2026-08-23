@@ -1,6 +1,7 @@
 module;
 #include <cstddef>
 #include <complex>
+#include <span>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -30,7 +31,7 @@ export import ses.decay;
 export import ses.field;
 export import ses.potential;
 export import ses.vram_budget;
-export import ses.emission;
+export import ses.photon_display;
 
 
 // The hydrogen ScenarioDirector: CPU-truth session + ses_vk engine + AtomModel
@@ -509,38 +510,11 @@ public:
         if (mode_ != BaseViewMode::Cloud) {
             mode_ = BaseViewMode::Cloud;
         }
-        const auto c = kepler_coefficients(kKeplerNBar, kKeplerSigmaN);
-        bool anchored = false;
-        for (int s = 0; s < kNumStates; ++s) {
-            if (std::norm(c[static_cast<std::size_t>(s)]) < 1e-18) {
-                continue;
-            }
-            const int buf = atom_.synth_transient(engine_, s);
-            if (buf < 0) {
-                continue;
-            }
-            const std::complex<double> z = c[static_cast<std::size_t>(s)];
-            if (!anchored) {
-                // First circular cos entry: real positive by construction.
-                engine_.copy_into_psi(buf);
-                engine_.scale(static_cast<float>(z.real()));
-                anchored = true;
-            } else {
-                engine_.add_state_into_psi(buf, z.real(), z.imag());
-            }
-            engine_.release_state(buf);
-        }
-        if (!anchored) {
+        if (!superpose_manifold(
+                kepler_coefficients(kKeplerNBar, kKeplerSigmaN))) {
             return;
         }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 0.0) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-            peak_ = np.peak / np.sum;
-        }
-        norm_display_ = 1.0;
         reset_ionized_tally();
-        cpu_is_truth_ = false;
         stepping_ = BaseStepping::RealTime;
         write_display_texture();
         volume_dirty_ = false;
@@ -719,18 +693,13 @@ public:
             b >= kNumStates || a == b) {
             return;
         }
-        atom_.collapse_onto(engine_, a);
-        const int buf = atom_.synth_transient(engine_, b);
-        if (buf >= 0) {
-            engine_.add_state_into_psi(buf, 1.0, 0.0);
-            engine_.release_state(buf);
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 0.0) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
+        const std::array<int, 2> states{a, b};
+        const std::array<std::complex<double>, 2> c{
+            std::complex<double>{1.0, 0.0}, std::complex<double>{1.0, 0.0}};
+        if (!superpose_into_psi(states, c)) {
+            return;
         }
         reset_ionized_tally();
-        cpu_is_truth_ = false;
         stepping_ = BaseStepping::RealTime;
     }
 
@@ -998,48 +967,10 @@ private:
     // anchor coefficient is real (engine scale() is real), overwrite psi with
     // the anchor, then add the rest.
     void rebuild_psi_from(const std::array<std::complex<double>, kNumStates>& keep) {
-        int anchor = 0;
-        for (int s = 1; s < kNumStates; ++s) {
-            if (std::norm(keep[static_cast<std::size_t>(s)]) >
-                std::norm(keep[static_cast<std::size_t>(anchor)])) {
-                anchor = s;
-            }
-        }
-        // std::abs (hypot) not sqrt(norm): overflow-safe, and the extra cost is
-        // free (CPU is oracle-only now).
-        const double mag = std::abs(keep[static_cast<std::size_t>(anchor)]);
-        if (mag <= 0.0) {
+        if (!superpose_manifold(keep)) {
             return;  // empty subspace cannot be sampled (prob > 0 gate)
         }
-        const std::complex<double> rot =
-            std::complex<double>{keep[static_cast<std::size_t>(anchor)].real(),
-                                 -keep[static_cast<std::size_t>(anchor)].imag()} /
-            mag;
-        atom_.collapse_onto(engine_, anchor);
-        engine_.scale(static_cast<float>(mag));
-        for (int s = 0; s < kNumStates; ++s) {
-            if (s == anchor) {
-                continue;
-            }
-            const std::complex<double> c =
-                rot * keep[static_cast<std::size_t>(s)];
-            if (std::norm(c) < 1e-14) {
-                continue;
-            }
-            const int buf = atom_.synth_transient(engine_, s);
-            if (buf >= 0) {
-                engine_.add_state_into_psi(buf, c.real(), c.imag());
-                engine_.release_state(buf);
-            }
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 1e-12) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-            peak_ = np.peak / np.sum;
-        }
-        norm_display_ = 1.0;
         reset_ionized_tally();
-        cpu_is_truth_ = false;
         write_display_texture();
     }
 
@@ -1257,7 +1188,7 @@ private:
                         dip, [&] { return uniform(rng_); });
                     const std::vector<std::complex<double>> cond =
                         ses::conditioned_amplitudes(dip, rec.n, rec.helicity);
-                    if (!collapse_onto_shell(shell_states, cond)) {
+                    if (!superpose_into_psi(shell_states, cond)) {
                         atom_.collapse_onto(engine_, fin.to);  // guard fallback
                     }
                     reset_ionized_tally();  // BEFORE the flush: its renorm
@@ -1540,60 +1471,31 @@ private:
             return;
         }
         // Complex-Gaussian coefficients = uniform on the state sphere after
-        // renorm; c[0]'s phase is folded out (global).
+        // renorm (superpose_into_psi folds the anchor phase out).
         std::normal_distribution<double> gauss(0.0, 1.0);
         std::array<std::complex<double>, kNumStates> c{};
         for (auto& z : c) {
             z = std::complex<double>{gauss(rng_), gauss(rng_)};
         }
-        const double mag0 = std::abs(c[0]);  // hypot: overflow-safe |c[0]|
-        if (mag0 > 0.0) {
-            const std::complex<double> rot{c[0].real() / mag0,
-                                           -c[0].imag() / mag0};
-            for (auto& z : c) {
-                z = z * rot;  // c[0] is now real >= 0
-            }
-        }
-        int buf = atom_.synth_transient(engine_, 0);
-        if (buf < 0) {
-            cpu_is_truth_ = true;
+        if (!superpose_manifold(c)) {
+            cpu_is_truth_ = true;  // fallback: resume the CPU packet
             return;
         }
-        engine_.copy_into_psi(buf);
-        engine_.release_state(buf);
-        engine_.scale(static_cast<float>(c[0].real()));
-        for (int s = 1; s < kNumStates; ++s) {
-            buf = atom_.synth_transient(engine_, s);
-            if (buf < 0) {
-                continue;  // member missing: superpose the rest
-            }
-            engine_.add_state_into_psi(buf, c[s].real(), c[s].imag());
-            engine_.release_state(buf);
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 0.0) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-            peak_ = np.peak / np.sum;
-        }
-        norm_display_ = 1.0;
         reset_ionized_tally();  // fresh preparation
-        cpu_is_truth_ = false;  // the GPU state is the seed
         write_display_texture();
         volume_dirty_ = false;
     }
 
-    // Post-collapse eigenstate-error flush: collapse targets are SAMPLED radial
-    // eigenstates, not grid eigenstates, so kFlushSteps of imaginary time flush
-    // high-frequency junk before real time resumes (parity pinned by vkcheck's
-    // collapse-flush check). Skipped while the laser drives. Tables stay
-    // resident while decay is armed (rebuilding per photon costs more than the
-    // burst); a one-off flush drops them again.
-    // Overwrite psi with sum_i c_i |states_i| within ONE degenerate shell;
-    // mirrors seed_kepler's synth-accumulate loop. The anchor's phase is
-    // rotated out (global phase unphysical) so the real-only engine scale
-    // is exact; relative phases ride add_state_into_psi.
-    bool collapse_onto_shell(const std::vector<int>& states,
-                             const std::vector<std::complex<double>>& c) {
+    // THE synth-accumulate idiom (kepler/random seeds, partial-measure
+    // rebuild, debug pairs, shell collapse): overwrite psi with
+    // sum_i c_i |states_i>. The first significant member anchors with its
+    // phase rotated out (global phase unphysical; the real-only engine scale
+    // stays exact), relative phases ride add_state_into_psi; near-zero and
+    // failed-synth members are skipped. Renormalizes, refreshes
+    // peak_/norm_display_, invalidates cpu_is_truth_. False = nothing anchored
+    // (psi untouched).
+    bool superpose_into_psi(std::span<const int> states,
+                            std::span<const std::complex<double>> c) {
         bool anchored = false;
         std::complex<double> phase{1.0, 0.0};
         for (std::size_t i = 0; i < states.size(); ++i) {
@@ -1628,6 +1530,22 @@ private:
         return true;
     }
 
+    // Whole-manifold convenience: states = 0..kNumStates-1.
+    bool superpose_manifold(
+        const std::array<std::complex<double>, kNumStates>& c) {
+        std::array<int, kNumStates> idx{};
+        for (int s = 0; s < kNumStates; ++s) {
+            idx[static_cast<std::size_t>(s)] = s;
+        }
+        return superpose_into_psi(idx, c);
+    }
+
+    // Post-collapse eigenstate-error flush: collapse targets are SAMPLED radial
+    // eigenstates, not grid eigenstates, so kFlushSteps of imaginary time flush
+    // high-frequency junk before real time resumes (parity pinned by vkcheck's
+    // collapse-flush check). Skipped while the laser drives. Tables stay
+    // resident while decay is armed (rebuilding per photon costs more than the
+    // burst); a one-off flush drops them again.
     void flush_collapse_error(int target) {
         if (laser_pol_ != LaserPol::Off || !ensure_relax_tables()) {
             return;

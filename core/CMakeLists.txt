@@ -15,6 +15,7 @@ target_sources(sesolver_core
         src/view_state.ixx
         src/volume.ixx
         src/emission.ixx
+        src/photon_display.ixx
         src/vec.ixx
         src/grid.ixx
         src/spectral.ixx

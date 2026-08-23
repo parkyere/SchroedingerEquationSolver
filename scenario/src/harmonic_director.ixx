@@ -10,7 +10,7 @@ module;
 export module ses.scenario.harmonic_director;
 export import ses.scenario.base_director;
 import ses.scenario.atom_model;
-import ses.emission;
+import ses.photon_display;
 import ses.projection;
 import ses.measurement;
 
