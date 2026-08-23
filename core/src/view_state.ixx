@@ -17,6 +17,15 @@ inline constexpr double flow_advect_dt(int time_scale) noexcept {
     return kFlowCrawlDt * static_cast<double>(std::max(time_scale, 1));
 }
 
+// Temporal-accumulation gate: average only while NOTHING moves on screen --
+// animating flow streaks AND in-flight overlay curves (photon streaks) must
+// break the freeze, or their motion smears into the average.
+inline constexpr bool accumulate_frame(bool scene_static, bool flow_animating,
+                                       int overlay_curves) noexcept {
+    (void)overlay_curves;
+    return scene_static && !flow_animating;  // stub (red): overlay-blind
+}
+
 struct ViewState {
     static constexpr double kAbsorbMin = 0.1;
     static constexpr double kAbsorbMax = 50.0;
