@@ -63,6 +63,7 @@ add_executable(sesolver_tests
     observables_test.cpp
     parallel_test.cpp
     phasor_test.cpp
+    photon_display_test.cpp
     pick_test.cpp
     spin_test.cpp
     spinexact_test.cpp
