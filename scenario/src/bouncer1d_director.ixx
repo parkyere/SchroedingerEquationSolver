@@ -43,7 +43,6 @@ inline std::vector<double> bouncer_potential(const ses::Grid1D& g,
 
 // dt sized by the wall's Trotter phase, not resolution: V*dt at the box
 // lip must stay << 1 rad or the ground heats (benzene dt rule).
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kBo1dZLo = -1.0;
 constexpr double kBo1dZHi = 79.0;
 constexpr int kBo1dPoints = 2048;

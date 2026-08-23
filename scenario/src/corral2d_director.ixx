@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
@@ -26,7 +27,6 @@ import ses.vk.engine_blobs;
 export namespace ses_shell {
 
 constexpr double kCr2dBox = 16.0;
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kCr2dN = 512;
 constexpr int kCr2dNz = 4;
 constexpr double kCr2dZHalf = 2.0;
@@ -161,7 +161,7 @@ public:
                 double w = 1.0;
                 if (r > radius_) {
                     const double t = (r - radius_) / (2.0 * kCr2dBumpSigma);
-                    w = t >= 1.0 ? 0.0 : std::cos(0.5 * 3.14159265358979323846 * t);
+                    w = t >= 1.0 ? 0.0 : std::cos(0.5 * std::numbers::pi * t);
                     w *= w;
                 }
                 psi_(i, j, 0) = w * std::cyl_bessel_j(0.0, kf * r);
@@ -220,7 +220,7 @@ public:
 
     int marker_count() const override { return kCr2dAtoms; }
     SceneMarker marker(int i) const override {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         const double th = 2.0 * pi * i / kCr2dAtoms;
         return {static_cast<float>(radius_ * std::cos(th)),
                 static_cast<float>(radius_ * std::sin(th)),
@@ -390,7 +390,7 @@ private:
     }
 
     void rebuild_potential() {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         std::vector<double> v(
             static_cast<std::size_t>(phys_grid_.size()), 0.0);
         for (int a = 0; a < kCr2dAtoms; ++a) {

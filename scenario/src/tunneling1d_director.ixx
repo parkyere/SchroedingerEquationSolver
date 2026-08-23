@@ -14,7 +14,6 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kTun1dBox = 80.0;   // Bohr
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 // oversampled (1D is cheap): phasor curve resolves ripples + evanescent decay
 constexpr int kTun1dPoints = 65536;
 constexpr double kTun1dV0 = 0.25;    // Ha

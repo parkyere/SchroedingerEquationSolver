@@ -42,8 +42,8 @@ constexpr int kBaseRelaxStepsPerTick = 1;
 constexpr double kBaseRelaxDtau = 0.05;
 constexpr double kBaseIsoFraction = 0.25;
 constexpr double kBaseMeasureSigma = 1.25;  // Bohr
-constexpr double kBaseHaToEv = 27.211386;
-constexpr double kBaseAuToFs = 2.4188843e-2;
+constexpr double kBaseHaToEv = kHaToEv;
+constexpr double kBaseAuToFs = kAuToFs;
 // ITP auto-complete plateau: energy step below eps for N title-cadence polls.
 constexpr double kBaseRelaxPlateauEps = 5e-5;  // Ha
 constexpr int kBaseRelaxPlateauPolls = 12;     // ~2 s of stable readout
@@ -331,14 +331,6 @@ protected:
     virtual int steps_per_tick() const { return kBaseStepsPerTick; }
     virtual bool relax_allowed() const { return true; }
 
-    static std::string strf(const char* fmt, ...) {
-        char buf[192];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof buf, fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
 
     void run_real_time_batch() {
         if (gpu_title_due_) {

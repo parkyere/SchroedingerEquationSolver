@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
@@ -28,7 +29,7 @@ inline std::vector<double> qpc_potential(const ses::Grid3D& g, double w,
                                          double wall_lo, double wall_hi,
                                          double v0, double lip) {
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
-    const double pi = 3.14159265358979323846;
+    const double pi = std::numbers::pi;
     for (int j = 0; j < g.y.n; ++j) {
         const double ay = std::abs(g.y.coord(j));
         double f = 1.0;
@@ -132,7 +133,7 @@ public:
     }
     double transmitted() const override { return transmitted_; }
     int open_channels() const override {
-        return static_cast<int>(gap_ * kQp2dK0 / 3.14159265358979323846);
+        return static_cast<int>(gap_ * kQp2dK0 / std::numbers::pi);
     }
 
     void reset_simulation() override { fire(); }
@@ -173,7 +174,7 @@ public:
             "Quantum point contact  |  t = %.1f au  gap = %.1f "
             "(lambda/2 = %.2f, channels %d)  transmitted %.1f%%  "
             "keys: 2 fire",
-            sim_time_, gap_, 3.14159265358979323846 / kQp2dK0,
+            sim_time_, gap_, std::numbers::pi / kQp2dK0,
             open_channels(), 100.0 * transmitted_);
     }
 

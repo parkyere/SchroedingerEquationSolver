@@ -20,7 +20,6 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kPt1dBox = 80.0;
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kPt1dPoints = 65536;
 constexpr double kPt1dLambda = 2.0;
 constexpr double kPt1dA = 2.0;

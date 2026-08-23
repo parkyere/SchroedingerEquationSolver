@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -225,7 +226,7 @@ public:
         return no_colors_;
     }
     std::string title_text() override {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         return strf(
             "Electron double slit + Aharonov-Bohm (2D lattice)  |  t = %.1f "
             "au (%dx%d, dt %.2g)  d = %.1f  w = %.1f  Phi = %.2f pi  "
@@ -465,7 +466,7 @@ private:
 
         // Solenoid: core circle + z arrow, signed length ~ Phi.
         solenoid_curve_.clear();
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         const float xs = static_cast<float>(solenoid_x());
         auto put = [&](float x, float y, float z) {
             solenoid_curve_.push_back(x);
@@ -522,14 +523,6 @@ private:
         }
     }
 
-    static std::string strf(const char* fmt, ...) {
-        char buf[512];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
 
     ses::Grid3D phys_grid_;
     ses::Grid3D disp_grid_;

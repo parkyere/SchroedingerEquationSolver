@@ -14,7 +14,7 @@ export import ses.scenario;
 
 export namespace app {
 
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
+constexpr double kHaToEv = ses_shell::kHaToEv;
 
 struct UiState {
     float efield = 0.0f;    // au; 0 = off

@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <complex>
 #include <cmath>
 #include <cstddef>
@@ -19,7 +20,7 @@ export namespace ses {
 // Y_lm norms hoisted: MSVC /fp:precise won't constant-fold sqrt(literal),
 // so inlining would cost one libm call per grid point.
 namespace ynorm {
-inline constexpr double kPi = 3.14159265358979323846;
+inline constexpr double kPi = std::numbers::pi;
 inline const double sqrt_pi = std::sqrt(kPi);                    // l = 0
 inline const double s3_4pi = std::sqrt(3.0 / (4.0 * kPi));       // l = 1
 inline const double s15_pi = std::sqrt(15.0 / kPi);              // l = 2

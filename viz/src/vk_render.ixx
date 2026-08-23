@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <volk.h>
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -2021,7 +2022,7 @@ private:
             std::max(std::abs(grid_.z.xmin), std::abs(grid_.z.xmax));
         const double box_reach = std::sqrt(bx * bx + by * by + bz * bz);
         const double zfar = in.distance + box_reach + 1.0;
-        const double kPi = 3.14159265358979323846;
+        const double kPi = std::numbers::pi;
         const ses::Mat4 proj =
             ses::perspective(45.0 * kPi / 180.0, aspect, 0.1, zfar);
         const ses::Vec3d eye =

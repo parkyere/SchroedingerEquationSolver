@@ -4,6 +4,7 @@ module;
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdarg>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -365,6 +366,21 @@ struct RutherfordApi {
     virtual double closest_approach() const = 0;    // min <r> seen (arc)
     virtual double backscattered_fraction() const = 0;  // returned upstream
 };
+
+// Atomic-unit display conversions (single source; per-director copies removed).
+inline constexpr double kHaToEv = 27.211386;
+inline constexpr double kAuToFs = 2.4188843e-2;
+
+// printf-into-std::string: the director title/readout helper (one copy; the
+// eight per-class statics it replaces were byte-identical).
+inline std::string strf(const char* fmt, ...) {
+    char buf[512];  // the 1D scenes' long titles need the headroom
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, args);
+    va_end(args);
+    return std::string{buf};
+}
 
 // Pacing invariants shared by every director (the sticky-x16 contract):
 // the dial clamps to [1,16]; catch-up ticks DROP instead of bundling -- at

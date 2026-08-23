@@ -24,7 +24,6 @@ export namespace ses_shell {
 // SPECKLE disorder (cold-atom realization, Billy et al. 2008): overlapping
 // bumps -> smooth random field; W ~ E is the standard Anderson regime
 // (sub-E fields measured <= 36% blocking over 100 Bohr -- too transparent).
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kAn1dSpacing = 0.6;
 constexpr double kAn1dBumpSigma = 0.3;
 constexpr double kAn1dK0 = 1.2;

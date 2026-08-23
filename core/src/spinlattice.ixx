@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -28,7 +29,7 @@ inline Spinor spinor_from_bloch(double x, double y, double z) {
     if (axn > 1e-12) {
         spin_rotate(s, -y / axn, x / axn, 0.0, th);
     } else if (z < 0.0) {
-        spin_rotate(s, 1.0, 0.0, 0.0, 3.14159265358979323846);
+        spin_rotate(s, 1.0, 0.0, 0.0, std::numbers::pi);
     }
     return s;
 }

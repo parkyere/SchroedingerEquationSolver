@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -21,7 +22,6 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kBl1dKl = 1.0;               // kL; lattice period a = pi/kL
-constexpr double kHaToEv = 27.211386;         // atomic-unit energy -> eV
 constexpr int kBl1dPeriods = 26;              // integer -> FFT-commensurate box
 constexpr int kBl1dPoints = 4096;
 constexpr double kBl1dDt = 0.01;
@@ -135,7 +135,7 @@ protected:
 private:
     static ses::Grid1D box_grid() {
         const double half =
-            0.5 * kBl1dPeriods * 3.14159265358979323846 / kBl1dKl;
+            0.5 * kBl1dPeriods * std::numbers::pi / kBl1dKl;
         return ses::Grid1D{-half, half, kBl1dPoints};
     }
 

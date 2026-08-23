@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -116,7 +117,7 @@ class ScaledChain {
           p_(static_cast<std::size_t>(g.n), 0.0),
           c_(static_cast<std::size_t>(g.n)),
           e_(static_cast<std::size_t>(g.n), 0) {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         const double a0 = std::pow(omega / pi, 0.25);
         parallel_for(g.n, [&](int i) {
             const std::size_t s = static_cast<std::size_t>(i);
@@ -277,7 +278,7 @@ inline int ho_level_cap(const Grid1D& g, double omega) {
     // failure, so a generous bound only guards the loop. Grid-derived so fine
     // grids (ceiling in the thousands) are not clipped.
     const double x_edge = std::min(std::abs(g.xmin), std::abs(g.xmax));
-    const double k_max = 3.14159265358979323846 / g.spacing();
+    const double k_max = std::numbers::pi / g.spacing();
     const double n_box = 0.5 * omega * x_edge * x_edge;
     const double n_nyq = 0.5 * k_max * k_max / omega;
     const int bound = std::max(

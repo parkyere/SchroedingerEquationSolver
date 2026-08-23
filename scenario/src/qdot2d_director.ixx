@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -20,7 +21,6 @@ import ses.heightfield;
 export namespace ses_shell {
 
 constexpr double kQd2dBox = 20.0;
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kQd2dN = 512;
 constexpr int kQd2dNz = 4;
 constexpr double kQd2dZHalf = 2.0;
@@ -236,7 +236,7 @@ public:
     }
     double spectrum_ev(int i) override {
         ensure_spectrum();
-        return spec_[static_cast<std::size_t>(i)].first * 27.211386;
+        return spec_[static_cast<std::size_t>(i)].first * kHaToEv;
     }
     double spectrum_weight(int i) override {
         ensure_spectrum();
@@ -378,7 +378,7 @@ private:
         }
         spec_dirty_ = false;
         spec_ = ses::fock_darwin_spectrum(psi_, w0_, b_,
-                                          200.0 / 27.211386);
+                                          200.0 / kHaToEv);
     }
 
     void rebuild_prop() {
@@ -409,7 +409,7 @@ private:
     // Triangle-strip rings; z uses the well's e-scale so stiffer w0 visibly narrows it.
     void rebuild_paraboloid() {
         para_.clear();
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         const double r_top = std::min(
             0.95 * kQd2dBox,
             std::sqrt(2.0 * kQd2dParaTop / (kQd2dEScale * w0_ * w0_)));

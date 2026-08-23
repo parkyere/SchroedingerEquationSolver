@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -458,7 +459,7 @@ void register_verification_arcs(ShellT* shell) {
                 double z_hi = 0.0;
             };
             auto ob = std::make_shared<Orbit>();
-            const double pi = 3.14159265358979323846;
+            const double pi = std::numbers::pi;
             const int probe = shell->sched().every(1500, [shell, ob, pi] {
                 const double x = shell->hy()->mean_x();
                 const double y = shell->hy()->mean_y();
@@ -661,7 +662,7 @@ void register_verification_arcs(ShellT* shell) {
                 return;
             }
             shell->set_time_scale(16);
-            const double t_quarter = 0.25 * 2.0 * 3.14159265358979323846 /
+            const double t_quarter = 0.25 * 2.0 * std::numbers::pi /
                                      0.5;  // omega_L = |B| = 0.5
             selftest_wait_sim_time(shell, t_quarter, 0, [shell](bool ok1) {
                 const double y_quarter = shell->sp()->bloch_y();
@@ -1142,7 +1143,7 @@ void register_verification_arcs(ShellT* shell) {
                     shell->request_exit(1);
                     return;
                 }
-                const double pi = 3.14159265358979323846;
+                const double pi = std::numbers::pi;
                 // First dark fringe: path difference lambda/2, y = lambda L /
                 // (2 d). One electron per shot, k0 = 1 (long wavelength);
                 // transit ~80 au + tail.
@@ -1207,7 +1208,7 @@ void register_verification_arcs(ShellT* shell) {
                     shell->request_exit(1);
                     return;
                 }
-                const double pi = 3.14159265358979323846;
+                const double pi = std::numbers::pi;
                 const double r = la->radius_pred();
                 const double period = 2.0 * pi / la->omega_c();
                 shell->set_time_scale(16);

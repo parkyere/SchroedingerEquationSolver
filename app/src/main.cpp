@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cmath>
+#include <numbers>
 #include <complex>
 #include <condition_variable>
 #include <cstdarg>
@@ -739,7 +740,7 @@ private:
         if (w <= 0 || h <= 0) {
             return false;
         }
-        const double kPi = 3.14159265358979323846;
+        const double kPi = std::numbers::pi;
         const double ndc_x = 2.0 * mx / w - 1.0;
         const double ndc_y = 1.0 - 2.0 * my / h;
         return ses::unproject_to_z0(azimuth_, elevation_, distance_,

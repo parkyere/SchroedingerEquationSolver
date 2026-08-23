@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -22,7 +23,7 @@ import ses.parallel;
 export namespace ses_shell {
 
 inline double carpet_revival_time(double l) {
-    return l * l / 3.14159265358979323846;
+    return l * l / std::numbers::pi;
 }
 
 constexpr double kCp1dHalf = 20.0;

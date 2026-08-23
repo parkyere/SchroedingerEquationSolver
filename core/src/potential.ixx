@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -207,7 +208,7 @@ inline std::vector<double> absorbing_mask(const Grid1D& g, double width) {
             continue;
         }
         const double t = d / width;
-        const double s = std::sin(0.5 * 3.14159265358979323846 * t);
+        const double s = std::sin(0.5 * std::numbers::pi * t);
         m[static_cast<std::size_t>(i)] = s * s;
     }
     return m;

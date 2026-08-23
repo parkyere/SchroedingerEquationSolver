@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <cmath>
 #include <complex>
@@ -17,7 +18,6 @@ import ses.spectrum1d;
 export namespace ses_shell {
 
 constexpr double kMo1dBox = 100.0;  // Bohr half-extent
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr int kMo1dPoints = 65536;
 constexpr double kMo1dD = 0.3;      // dissociation limit (Ha)
 constexpr double kMo1dAlpha = 0.12;
@@ -121,7 +121,7 @@ protected:
                 bound_[static_cast<std::size_t>(base_)].energy;
             s = strf("  pair (%d, %d)  beat T = 2pi/gap = %.0f au (slows "
                      "up the ladder)",
-                     base_, base_ + 1, 2.0 * 3.14159265358979 / gap);
+                     base_, base_ + 1, 2.0 * std::numbers::pi / gap);
         }
         if (!note_.empty()) {
             s += "  [" + note_ + "]";

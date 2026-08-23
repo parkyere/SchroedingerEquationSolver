@@ -205,14 +205,6 @@ protected:
         }
     }
 
-    static std::string strf(const char* fmt, ...) {
-        char buf[512];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
 
     ses::Grid3D phys_grid_;
     ses::Grid3D disp_grid_;

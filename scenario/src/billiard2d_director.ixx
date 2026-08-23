@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -298,7 +299,7 @@ private:
     }
 
     void rebuild_outline(double hl) {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         outline_.clear();
         auto put = [&](double th, double cx) {
             outline_.push_back(

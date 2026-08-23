@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -275,7 +276,7 @@ public:
     double default_camera_distance() const override { return 55.0; }
 
 private:
-    static constexpr double kPi = 3.14159265358979323846;
+    static constexpr double kPi = std::numbers::pi;
 
     double bmag() const {
         return std::sqrt(b_[0] * b_[0] + b_[1] * b_[1] + b_[2] * b_[2]);
@@ -489,14 +490,6 @@ private:
         }
     }
 
-    static std::string strf(const char* fmt, ...) {
-        char buf[512];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
 
     ses::Grid3D grid_{ses::Grid1D{-20.0, 20.0, 2},
                       ses::Grid1D{-20.0, 20.0, 2},

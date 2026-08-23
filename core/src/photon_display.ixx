@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -143,7 +144,7 @@ inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
     const double sh =
         std::clamp(progress, 0.0, 1.0) * photon_travel(delta_e);
     const double s0 = std::max(0.0, sh - kPhotonTurns * lam_len);
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kPi = std::numbers::pi;
     const double k = 2.0 * kPi / lam_len;
     const double lam = ph.helicity >= 0 ? 1.0 : -1.0;
     std::vector<Vec3d> v(static_cast<std::size_t>(kPhotonStreakPoints));

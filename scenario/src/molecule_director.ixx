@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <utility>
 #include <algorithm>
 #include <cmath>
@@ -712,7 +713,7 @@ protected:
 private:
     static std::vector<ses::Vec3d> snapped_ring(const ses::Grid3D& g,
                                                 double radius) {
-        const double kPi = 3.14159265358979323846;
+        const double kPi = std::numbers::pi;
         std::vector<ses::Vec3d> c;
         for (int i = 0; i < 6; ++i) {
             const double th = kPi / 3.0 * i;

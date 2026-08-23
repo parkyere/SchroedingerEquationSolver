@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -38,7 +39,7 @@ struct H2plusOrbital {
 
 namespace spheroidal_detail {
 
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 constexpr int kNeta = 400;
 constexpr int kNxi = 1200;       // covers the wide box + high MOs
 constexpr double kXiReach = 40.0;  // radial reach (bohr)

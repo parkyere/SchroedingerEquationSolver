@@ -56,8 +56,6 @@ constexpr double kIsoFraction = kBaseIsoFraction;
 constexpr double kMeasureSigma = kBaseMeasureSigma;
 // Display decay rate: tau_display ~ 8 au (~3 s wall); true lifetimes ~1e8 au.
 constexpr double kDecayGammaDisplay = 0.125;
-constexpr double kHaToEv = kBaseHaToEv;
-constexpr double kAuToFs = kBaseAuToFs;
 constexpr double kAbsorbWidth = 10.0;  // Bohr; interior +-70 untouched, real-time only
 // Target Rabi frequency: E0 = kRabiTargetOmega / |<2p|z|1s>|; carrier tuned to
 // the GRID resonance, not textbook 0.375 (see toggle_laser).

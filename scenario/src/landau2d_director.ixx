@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <algorithm>
 #include <cmath>
@@ -258,7 +259,7 @@ public:
         return no_colors_;
     }
     std::string title_text() override {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         return strf(
             "Landau levels / cyclotron (2D lattice, uniform B)  |  t = %.1f "
             "au  B = %.2f  k0 = %.2f  r = %.2f (pred %.2f)  T = %.1f  "
@@ -377,7 +378,7 @@ private:
     }
 
     void record_crossings() {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         const double period = 2.0 * pi / b_;
         const double r = radius_pred();
         if (antipode_dist_ < 0.0 && sim_time_ >= 0.5 * period) {
@@ -398,7 +399,7 @@ private:
     }
 
     void rebuild_orbit_overlay() {
-        const double pi = 3.14159265358979323846;
+        const double pi = std::numbers::pi;
         orbit_curve_.clear();
         auto put = [&](double x, double y) {
             orbit_curve_.push_back(static_cast<float>(x));
@@ -452,14 +453,6 @@ private:
         }
     }
 
-    static std::string strf(const char* fmt, ...) {
-        char buf[512];
-        va_list args;
-        va_start(args, fmt);
-        std::vsnprintf(buf, sizeof(buf), fmt, args);
-        va_end(args);
-        return std::string{buf};
-    }
 
     ses::Grid3D phys_grid_;
     ses::Grid3D disp_grid_;

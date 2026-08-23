@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <cstddef>
 #include <array>
 #include <cmath>
@@ -91,7 +92,7 @@ protected:
 
     std::string title_suffix() override {
         std::string s = strf("  w = %.2f au (T = %.1f au, E0 = %.2f eV)",
-                             kTrapOmega, 6.28318530717959 / kTrapOmega,
+                             kTrapOmega, (2.0 * std::numbers::pi) / kTrapOmega,
                              1.5 * kTrapOmega * kBaseHaToEv);
         if (decay_on_) {
             s += strf("  decay ON: photons %lld", photon_count_);

@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 
 #include <cmath>
@@ -143,7 +144,7 @@ inline PhotonRecord sample_photon_emission(
     if (bound <= 0.0) {
         return PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1};  // forbidden guard
     }
-    constexpr double kPi = 3.14159265358979323846;
+    constexpr double kPi = std::numbers::pi;
     for (;;) {
         const double ct = 1.0 - 2.0 * u01();
         const double st = std::sqrt(std::max(0.0, 1.0 - ct * ct));

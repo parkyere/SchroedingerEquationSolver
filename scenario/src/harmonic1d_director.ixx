@@ -17,7 +17,6 @@ import ses.wavepacket;
 export namespace ses_shell {
 
 constexpr double kHo1dOmega = 0.25;
-constexpr double kHaToEv = 27.211386;  // atomic-unit energy -> eV
 constexpr double kHo1dOmegaMin = 0.05;
 // Nyquist would only bind near w ~ k_max/x_max ~ 10, past this stop.
 constexpr double kHo1dOmegaMax = 4.0;
@@ -168,7 +167,7 @@ public:
     }
     double spectrum_ev(int i) override {
         ensure_spectrum();
-        return spec_[static_cast<std::size_t>(i)].first * 27.211386;
+        return spec_[static_cast<std::size_t>(i)].first * kHaToEv;
     }
     double spectrum_weight(int i) override {
         ensure_spectrum();
@@ -273,7 +272,7 @@ private:
             return;
         }
         spec_dirty_ = false;
-        spec_ = ses::ho1d_spectrum(psi_, omega_, 200.0 / 27.211386);
+        spec_ = ses::ho1d_spectrum(psi_, omega_, 200.0 / kHaToEv);
     }
 
     // no-jump damping ITP depends on omega & kappa; rebuild on change

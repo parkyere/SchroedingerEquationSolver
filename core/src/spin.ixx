@@ -1,4 +1,5 @@
 module;
+#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -68,7 +69,7 @@ inline int spin_measure(Spinor& s, double nx, double ny, double nz,
     if (axn > 1e-12) {
         spin_rotate(eig, -ty / axn, tx / axn, 0.0, th);
     } else if (tz < 0.0) {
-        spin_rotate(eig, 1.0, 0.0, 0.0, 3.14159265358979323846);
+        spin_rotate(eig, 1.0, 0.0, 0.0, std::numbers::pi);
     }
     s = eig;
     return outcome;
