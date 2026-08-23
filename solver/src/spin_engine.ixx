@@ -52,7 +52,7 @@ public:
     ~SpinEngine() { destroy(); }
 
     // false => caller stays on CPU.
-    bool initialize(DeviceContext& ctx) {
+    [[nodiscard]] bool initialize(DeviceContext& ctx) {
         ctx_ = &ctx;
         dim_ = ses::kExactDim;
         half_groups_ =
@@ -770,7 +770,7 @@ public:
     static constexpr int kSites = 16;
     static constexpr int kBlochFloats = 3 * kSites;
 
-    bool initialize(DeviceContext& ctx) {
+    [[nodiscard]] bool initialize(DeviceContext& ctx) {
         ctx_ = &ctx;
         if (!snap_k_.create(ctx, k_spin_mf_snapshot_spv,
                             k_spin_mf_snapshot_spv_size,

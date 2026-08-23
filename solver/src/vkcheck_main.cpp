@@ -99,6 +99,29 @@ namespace {
 constexpr VkDescriptorType kStorage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 constexpr VkDescriptorType kUniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 
+// The shared GPU-vs-oracle verdict: max |gpu - cpu| over interleaved rg32f
+// against the complex double reference, tolerance riding the reference
+// magnitude (formerly copy-pasted per check).
+struct ErrStats {
+    double max_err = 0.0;
+    double max_mag = 0.0;
+    double tol() const { return 1e-4 + 1e-5 * max_mag; }
+};
+
+template <class GpuVec, class CpuVec>
+ErrStats compare_interleaved(const GpuVec& gpu, const CpuVec& cpu) {
+    ErrStats s;
+    for (std::size_t i = 0; i < cpu.size(); ++i) {
+        s.max_err = std::max(s.max_err,
+                             std::abs(gpu[2 * i] - cpu[i].real()));
+        s.max_err = std::max(s.max_err,
+                             std::abs(gpu[2 * i + 1] - cpu[i].imag()));
+        s.max_mag = std::max(s.max_mag, std::abs(cpu[i].real()));
+        s.max_mag = std::max(s.max_mag, std::abs(cpu[i].imag()));
+    }
+    return s;
+}
+
 std::vector<float> to_rg32f(const std::vector<std::complex<double>>& src) {
     std::vector<float> out(2 * src.size());
     for (std::size_t i = 0; i < src.size(); ++i) {
@@ -2224,17 +2247,9 @@ bool check_engine_step(ses_vk::DeviceContext& ctx) {
             std::printf("engine 20 steps (raw Vulkan): readback FAIL\n");
             return false;
         }
-        double max_err = 0.0;
-        double max_mag = 0.0;
-        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-            max_err =
-                std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-            max_err = std::max(max_err,
-                               std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-        }
-        const double tol = 1e-4 + 1e-5 * max_mag;
+        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+        const double max_err = cmp.max_err;
+        const double tol = cmp.tol();
         const bool pass = max_err < tol;
         std::printf(
             "engine 20 steps (%s): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
@@ -2295,17 +2310,9 @@ bool check_engine_planar(ses_vk::DeviceContext& ctx) {
             std::printf("engine 20 steps 512x512x1 planar: readback FAIL\n");
             return false;
         }
-        double max_err = 0.0;
-        double max_mag = 0.0;
-        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-            max_err =
-                std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-            max_err = std::max(max_err,
-                               std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-        }
-        const double tol = 1e-4 + 1e-5 * max_mag;
+        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+        const double max_err = cmp.max_err;
+        const double tol = cmp.tol();
         const bool pass = max_err < tol;
         std::printf(
             "engine 20 steps 512x512x1 planar (%s): max |gpu - cpu| = %.3e "
@@ -2364,17 +2371,9 @@ bool check_engine_planar_mass(ses_vk::DeviceContext& ctx) {
             std::printf("engine planar m*=0.38: readback FAIL\n");
             return false;
         }
-        double max_err = 0.0;
-        double max_mag = 0.0;
-        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-            max_err = std::max(max_err,
-                               std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-            max_err = std::max(
-                max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-        }
-        const double tol = 1e-4 + 1e-5 * max_mag;
+        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+        const double max_err = cmp.max_err;
+        const double tol = cmp.tol();
         const bool pass = max_err < tol;
         std::printf("engine 20 steps 512x512x1 planar m*=0.38 (%s): "
                     "max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
@@ -2420,17 +2419,9 @@ bool check_engine_step_async(ses_vk::DeviceContext& ctx) {
         std::printf("engine step_async (raw Vulkan): readback FAIL\n");
         return false;
     }
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err =
-            std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err = std::max(max_err,
-                           std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool view_ok = engine.volume_view() != VK_NULL_HANDLE;
     const bool pass = max_err < tol && view_ok;
     std::printf(
@@ -2473,17 +2464,9 @@ bool check_engine_absorber(ses_vk::DeviceContext& ctx) {
             cpu.data()[i] = cpu.data()[i] * std::complex<double>{mask[i], 0.0};
         }
     }
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err,
-                           std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err = std::max(
-            max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool pass = max_err < tol;
     std::printf(
         "engine absorber per-step (real mask): max |gpu - cpu| = %.3e "
@@ -2741,16 +2724,9 @@ bool check_engine_relax(ses_vk::DeviceContext& ctx) {
     ses::Field3D cpu = psi0;
     cpu_relaxer.relax(cpu, 50);
 
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool pass = max_err < tol;
     std::printf(
         "relax 50 steps (raw Vulkan): max |gpu - cpu| = %.3e (tol %.3e), "
@@ -2822,17 +2798,9 @@ bool check_engine_collapse_flush(ses_vk::DeviceContext& ctx) {
     cpu_relaxer.relax(cpu, 6);
     cpu_prop.step(cpu, 3);
 
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err =
-            std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err = std::max(max_err,
-                           std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool pass = max_err < tol;
     std::printf(
         "collapse flush 2s + 6 ITP + 3 async steps (raw Vulkan): max "
@@ -2894,16 +2862,9 @@ bool check_engine_deflation(ses_vk::DeviceContext& ctx) {
     }
     ses::Field3D cpu = guess;
     cpu_relaxer.relax_deflated(cpu, {&ground}, 50);
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool relax_ok = max_err < tol;
     std::printf(
         "  deflated relax 50 steps (raw Vulkan): max |gpu - cpu| = %.3e "
@@ -2971,16 +2932,9 @@ bool check_engine_driven(ses_vk::DeviceContext& ctx) {
     ses::Field3D cpu = psi0;
     ses::driven_step(cpu, cpu_prop, drive, 1.3, 20);
 
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-4 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol();
     const bool pass = max_err < tol;
     std::printf(
         "driven 20 steps (raw Vulkan): max |gpu - cpu| = %.3e (tol %.3e)  "

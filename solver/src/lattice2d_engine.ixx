@@ -47,7 +47,7 @@ public:
     ~Lattice2DEngine() { destroy(); }
 
     // false => caller stays on CPU.
-    bool initialize(DeviceContext& ctx) {
+    [[nodiscard]] bool initialize(DeviceContext& ctx) {
         ctx_ = &ctx;
         const std::initializer_list<BindingDesc> ssb_ssb_ubo = {
             {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},

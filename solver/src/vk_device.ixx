@@ -144,7 +144,7 @@ struct DeviceContext {
 
     // `extra_exts` = window-system surface extensions; the GUI shell creates its
     // VkSurfaceKHR between this and create_device().
-    Boot create_instance(bool want_validation,
+    [[nodiscard]] Boot create_instance(bool want_validation,
                          const std::vector<const char*>& extra_exts) {
         if (volkInitialize() != VK_SUCCESS) {
             return Boot::no_driver;
@@ -215,7 +215,7 @@ struct DeviceContext {
 
     // Non-null `present_surface` => presenting device: the queue family must
     // support present and VK_KHR_swapchain is enabled (headless passes null).
-    Boot create_device(VkSurfaceKHR present_surface) {
+    [[nodiscard]] Boot create_device(VkSurfaceKHR present_surface) {
         // Prefer a discrete GPU, else the first.
         std::uint32_t dev_count = 0;
         vkEnumeratePhysicalDevices(instance, &dev_count, nullptr);
@@ -372,7 +372,7 @@ struct DeviceContext {
 
     // Device-local storage buffer; `extra` adds usage (vertex/indirect for the
     // GPU mesh path).
-    bool create_device_buffer(VkDeviceSize size, Buffer* out,
+    [[nodiscard]] bool create_device_buffer(VkDeviceSize size, Buffer* out,
                               VkBufferUsageFlags extra = 0,
                               bool share_across_queues = false) {
         VkBufferCreateInfo bci{};
@@ -398,7 +398,7 @@ struct DeviceContext {
                                nullptr) == VK_SUCCESS;
     }
 
-    bool create_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+    [[nodiscard]] bool create_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                             Buffer* out) {
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -434,7 +434,7 @@ struct DeviceContext {
         VmaAllocation alloc = VK_NULL_HANDLE;
     };
 
-    bool create_storage_image_3d(std::uint32_t w, std::uint32_t h,
+    [[nodiscard]] bool create_storage_image_3d(std::uint32_t w, std::uint32_t h,
                                  std::uint32_t d, VkFormat format,
                                  Image* out,
                                  bool share_across_queues = false) {

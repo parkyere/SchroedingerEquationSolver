@@ -37,7 +37,7 @@ public:
     Kernel(const Kernel&) = delete;
     Kernel& operator=(const Kernel&) = delete;
 
-    bool create(DeviceContext& ctx, const unsigned char* spv,
+    [[nodiscard]] bool create(DeviceContext& ctx, const unsigned char* spv,
                 std::size_t spv_size, std::initializer_list<BindingDesc> spec) {
         VkShaderModuleCreateInfo smci{};
         smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -141,7 +141,7 @@ public:
     DescriptorArena(const DescriptorArena&) = delete;
     DescriptorArena& operator=(const DescriptorArena&) = delete;
 
-    bool create(DeviceContext& ctx, std::uint32_t max_sets,
+    [[nodiscard]] bool create(DeviceContext& ctx, std::uint32_t max_sets,
                 std::uint32_t storage_descs, std::uint32_t uniform_descs,
                 std::uint32_t dynamic_uniform_descs = 0,
                 std::uint32_t storage_images = 0,
@@ -279,13 +279,13 @@ public:
     OneShot& operator=(const OneShot&) = delete;
 
     // Main (graphics) queue's scratch set.
-    bool begin(DeviceContext& ctx) {
+    [[nodiscard]] bool begin(DeviceContext& ctx) {
         return begin_on(ctx, ctx.oneshot_pool, ctx.oneshot_cb,
                         ctx.oneshot_fence, ctx.queue_family, ctx.queue);
     }
 
     // Compute queue's scratch set (compute-only family if present, else main).
-    bool begin_compute(DeviceContext& ctx) {
+    [[nodiscard]] bool begin_compute(DeviceContext& ctx) {
         return begin_on(ctx, ctx.compute_oneshot_pool, ctx.compute_oneshot_cb,
                         ctx.compute_oneshot_fence, ctx.compute_family,
                         ctx.compute_queue);
@@ -330,7 +330,7 @@ public:
     void destroy(DeviceContext&) { cb_ = VK_NULL_HANDLE; }
 
 private:
-    bool begin_on(DeviceContext& ctx, VkCommandPool& pool,
+    [[nodiscard]] bool begin_on(DeviceContext& ctx, VkCommandPool& pool,
                   VkCommandBuffer& cb, VkFence& fence, std::uint32_t family,
                   VkQueue queue) {
         if (pool == VK_NULL_HANDLE) {

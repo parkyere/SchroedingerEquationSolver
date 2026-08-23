@@ -170,7 +170,7 @@ public:
     // every transformed axis (x/y share n, z is n or 1; a length-1 axis is
     // skipped, its DFT the identity). Phases are computed in-shader from the
     // R32 potential + three 1D k^2 tables, so no complex phase tables.
-    bool initialize(DeviceContext& ctx, const ses::Grid3D& grid,
+    [[nodiscard]] bool initialize(DeviceContext& ctx, const ses::Grid3D& grid,
                     const EngineKernels& blobs,
                     const std::vector<double>& potential, double dt,
                     const std::vector<std::complex<double>>& psi0,
