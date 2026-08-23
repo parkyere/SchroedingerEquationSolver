@@ -141,6 +141,22 @@ inline constexpr double kPhotonTail = 60.0;         // Bohr of visible trail
 inline constexpr int kPhotonStreakPoints = 96;      // body + tip vertex
 
 inline constexpr double kPhotonTipLen = 8.0;  // Bohr; on-axis arrowhead reach
+inline constexpr double kPhotonTurns = 4.0;   // visible tail = 4 wavelengths
+
+// Flight distance: base box-exit travel + the 4-wavelength tail unspools
+// fully before the fade completes.
+inline double photon_travel(double delta_e) noexcept {
+    (void)delta_e;
+    return kPhotonTravel;  // stub (red)
+}
+
+// Flight lifetime in frames: Lyman-alpha (2p->1s) = kPhotonFlightTicks (2 s),
+// every other photon flies at the SAME display speed (frames scale with
+// travel).
+inline int photon_flight_frames(double delta_e) noexcept {
+    (void)delta_e;
+    return kPhotonFlightTicks;  // stub (red)
+}
 
 // Display wavelength: relative energies honest (true lambda >> box).
 inline double photon_display_wavelength(double delta_e) noexcept {
