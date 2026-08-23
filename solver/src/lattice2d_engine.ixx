@@ -115,7 +115,7 @@ public:
             free_lattice();
             n_cells_ = cells;
             if (!alloc_lattice(cells)) {
-                n_cells_ = 0;
+                free_lattice();  // reclaim the partial alloc; also zeroes n_cells_
                 return;
             }
             allocate_sets();
@@ -357,6 +357,9 @@ private:
 
     void upload_complex(Buffer& dst,
                         const std::vector<std::complex<double>>& src) {
+        if (staging_.mapped == nullptr) {
+            return;  // alloc_lattice failed: nothing to write into
+        }
         float* p = static_cast<float*>(staging_.mapped);
         for (std::size_t i = 0; i < src.size(); ++i) {
             p[2 * i] = static_cast<float>(src[i].real());
@@ -377,6 +380,9 @@ private:
     }
 
     void upload_real(Buffer& dst, const std::vector<double>& src) {
+        if (staging_.mapped == nullptr) {
+            return;  // alloc_lattice failed: nothing to write into
+        }
         float* p = static_cast<float*>(staging_.mapped);
         for (std::size_t i = 0; i < src.size(); ++i) {
             p[i] = static_cast<float>(src[i]);
@@ -486,10 +492,9 @@ private:
                             aux);
     }
 
+    // Unconditional: destroy_buffer is null-safe, so a PARTIAL alloc_lattice
+    // failure is reclaimed too (the old n_cells_ guard leaked it forever).
     void free_lattice() {
-        if (n_cells_ == 0) {
-            return;
-        }
         for (Buffer* b : {&state_, &link_x_, &link_y_, &hv_rt_, &hv_it_,
                           &partials_, &renorm_, &mask_, &staging_, &phase_ubo_,
                           &np_ubo_, &nf_ubo_, &sc_ubo_, &sx_ubo_[0], &sx_ubo_[1],

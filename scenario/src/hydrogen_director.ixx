@@ -487,6 +487,14 @@ public:
             return;
         }
         if (!decay_on_) {
+            // Without the projection index every trial reads zero populations:
+            // arming would show "decay ON" that can never fire (init-time policy).
+            if (!proj_ready_) {
+                std::fprintf(stderr,
+                             "toggle_decay: projection tables missing -- "
+                             "decay stays off\n");
+                return;
+            }
             if (mode_ != BaseViewMode::Cloud) {
                 mode_ = BaseViewMode::Cloud;  // jump trials run on the GPU path only
             }

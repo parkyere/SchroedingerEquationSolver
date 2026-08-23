@@ -22,8 +22,7 @@ inline constexpr double flow_advect_dt(int time_scale) noexcept {
 // break the freeze, or their motion smears into the average.
 inline constexpr bool accumulate_frame(bool scene_static, bool flow_animating,
                                        int overlay_curves) noexcept {
-    (void)overlay_curves;
-    return scene_static && !flow_animating;  // stub (red): overlay-blind
+    return scene_static && !flow_animating && overlay_curves == 0;
 }
 
 struct ViewState {

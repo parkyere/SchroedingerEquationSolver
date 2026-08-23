@@ -854,15 +854,8 @@ private:
             view_.absorbance == acc_prev_.absorbance && in.flash == 0.0f &&
             acc_prev_.flash == 0.0f && in.cloud == acc_prev_.cloud &&
             plane_tag == acc_prev_.plane_tag;
-        in.accumulate = scene_static && !(in.flow && in.flow_animate);
-        // Occupancy + self-shadow rebuild when the field or the absorbance
-        // dial (baked into the shadow transmittance) moved.
-        in.volume_changed =
-            volume_written || view_.absorbance != acc_prev_.absorbance;
-        acc_prev_ = {azimuth_, elevation_, distance_, in.peak, view_.absorbance,
-                     in.flash, in.cloud, plane_tag};
-        // 1D-scene overlay polylines (phasor curve + potential); 3D scenes
-        // report 0 and skip.
+        // Overlay polylines (1D phasor curves, photon streaks); queried BEFORE
+        // the accumulation gate: in-flight curves must break the freeze.
         const int nov = std::min(director_->overlay_curve_count(),
                                  ses_vk::SceneRenderer::kMaxOverlayCurves);
         for (int c = 0; c < nov; ++c) {
@@ -871,6 +864,14 @@ private:
                              oc.b,   oc.a,     oc.fill, oc.rgba};
         }
         in.overlay_count = nov;
+        in.accumulate = ses::accumulate_frame(
+            scene_static, in.flow && in.flow_animate, nov);
+        // Occupancy + self-shadow rebuild when the field or the absorbance
+        // dial (baked into the shadow transmittance) moved.
+        in.volume_changed =
+            volume_written || view_.absorbance != acc_prev_.absorbance;
+        acc_prev_ = {azimuth_, elevation_, distance_, in.peak, view_.absorbance,
+                     in.flash, in.cloud, plane_tag};
         const int nmk = std::min(director_->marker_count(),
                                  ses_vk::SceneRenderer::kMaxMarkers);
         for (int m = 0; m < nmk; ++m) {

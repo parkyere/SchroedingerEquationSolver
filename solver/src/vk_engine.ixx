@@ -2837,9 +2837,11 @@ private:
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
-    // Lazily create the async batch's pool/cb/fence (compute family).
+    // Lazily create the async batch's pool/cb/fence (compute family). The
+    // memo is the LAST resource (fence): a partial failure unwinds fully, so
+    // no retry ever passes the guard with a null fence or leaks a pool.
     bool ensure_async() {
-        if (async_cb_ != VK_NULL_HANDLE) {
+        if (async_fence_ != VK_NULL_HANDLE) {
             return true;
         }
         VkCommandPoolCreateInfo cpci{};
@@ -2848,6 +2850,7 @@ private:
         cpci.queueFamilyIndex = ctx_->compute_family;
         if (vkCreateCommandPool(ctx_->device, &cpci, nullptr, &async_pool_) !=
             VK_SUCCESS) {
+            async_pool_ = VK_NULL_HANDLE;
             return false;
         }
         VkCommandBufferAllocateInfo cbai{};
@@ -2855,14 +2858,19 @@ private:
         cbai.commandPool = async_pool_;
         cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cbai.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(ctx_->device, &cbai, &async_cb_) !=
-            VK_SUCCESS) {
-            return false;
-        }
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        return vkCreateFence(ctx_->device, &fci, nullptr, &async_fence_) ==
-               VK_SUCCESS;
+        if (vkAllocateCommandBuffers(ctx_->device, &cbai, &async_cb_) !=
+                VK_SUCCESS ||
+            vkCreateFence(ctx_->device, &fci, nullptr, &async_fence_) !=
+                VK_SUCCESS) {
+            vkDestroyCommandPool(ctx_->device, async_pool_, nullptr);
+            async_pool_ = VK_NULL_HANDLE;
+            async_cb_ = VK_NULL_HANDLE;
+            async_fence_ = VK_NULL_HANDLE;
+            return false;
+        }
+        return true;
     }
 
     // Called at a HOST-OBSERVED completion point of a bridge write: the
