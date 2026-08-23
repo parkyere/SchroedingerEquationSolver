@@ -238,6 +238,68 @@ TEST(ShellDipoleVectors, ForbiddenShellIsAllZero) {
     }
 }
 
+// Flash: linear decay with the peak capped at 1/3 (full bright hurt the eye).
+
+TEST(FlashIntensity, PeakIsOneThirdAndDecaysLinearly) {
+    EXPECT_NEAR(ses::flash_intensity(25, 25), 1.0 / 3.0, 1e-12);
+    EXPECT_NEAR(ses::flash_intensity(12, 24), 1.0 / 6.0, 1e-12);
+    EXPECT_DOUBLE_EQ(ses::flash_intensity(0, 25), 0.0);
+    EXPECT_DOUBLE_EQ(ses::flash_intensity(5, 0), 0.0);  // guard
+}
+
+// Flight pool: up to 4 concurrent streaks; overflow evicts the most-spent.
+
+TEST(PhotonFlightPool, HoldsUpToFourConcurrentFlights) {
+    ses::PhotonFlightPool pool;
+    for (int i = 0; i < ses::kMaxPhotonFlights; ++i) {
+        pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.375, 120);
+        EXPECT_EQ(pool.count(), i + 1);
+    }
+}
+
+TEST(PhotonFlightPool, OverflowEvictsTheMostSpentFlight) {
+    ses::PhotonFlightPool pool;
+    // Tag flights by delta_e; ages diverge via interleaved advances.
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.1, 100);
+    for (int t = 0; t < 50; ++t) {
+        pool.advance();  // flight 0.1 at progress 0.5
+    }
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.2, 100);
+    for (int t = 0; t < 10; ++t) {
+        pool.advance();  // 0.1 -> 0.6, 0.2 -> 0.1
+    }
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.3, 100);
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.4, 100);
+    ASSERT_EQ(pool.count(), 4);
+    // Fifth spawn: 0.1 is the most spent and must be the one evicted.
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.5, 100);
+    ASSERT_EQ(pool.count(), 4);
+    bool saw_01 = false;
+    bool saw_05 = false;
+    for (int i = 0; i < pool.count(); ++i) {
+        const ses::PhotonFlightPool::Flight* f = pool.active(i);
+        ASSERT_NE(f, nullptr);
+        saw_01 = saw_01 || f->delta_e == 0.1;
+        saw_05 = saw_05 || f->delta_e == 0.5;
+    }
+    EXPECT_FALSE(saw_01);
+    EXPECT_TRUE(saw_05);
+}
+
+TEST(PhotonFlightPool, AdvanceExpiresFlightsPastTheirTotal) {
+    ses::PhotonFlightPool pool;
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.375, 2);
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, -1}, 0.375, 120);
+    pool.advance();
+    pool.advance();
+    EXPECT_EQ(pool.count(), 2);  // age == total: still drawn
+    pool.advance();
+    EXPECT_EQ(pool.count(), 1);  // short flight expired past its total
+    const ses::PhotonFlightPool::Flight* f = pool.active(0);
+    ASSERT_NE(f, nullptr);
+    EXPECT_EQ(f->rec.helicity, -1);  // the long flight survives
+}
+
 // Photon streak: helix e^{i lambda k s} in the (theta_hat, phi_hat) frame,
 // comoving phase (crests ride with the head), ~2 s wall flight, late fade.
 
