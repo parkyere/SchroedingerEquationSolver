@@ -366,6 +366,17 @@ struct RutherfordApi {
     virtual double backscattered_fraction() const = 0;  // returned upstream
 };
 
+// Pacing invariants shared by every director (the sticky-x16 contract):
+// the dial clamps to [1,16]; catch-up ticks DROP instead of bundling -- at
+// most one tick's steps run per rendered frame. CONTRACT:
+// tests/time_scale_realtime_test.cpp.
+inline constexpr int clamp_time_scale(int scale) noexcept {
+    return scale;  // stub (red)
+}
+inline constexpr int pending_after_tick(int pending, int per_tick) noexcept {
+    return pending + per_tick;  // stub (red): bundles catch-up
+}
+
 // A 1D-scene overlay primitive: packed (x, y, z) world-space triples; LINE_STRIP,
 // or with `fill` a TRIANGLE_STRIP sheet. `rgba` (premultiplied) REPLACES the
 // constant color. Both pointers stay valid until the next run_frame().
