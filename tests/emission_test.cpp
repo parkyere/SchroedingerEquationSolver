@@ -185,6 +185,91 @@ TEST(PhotonSampling, PiDipoleGivesSinSquaredPatternAndBalancedHelicity) {
     EXPECT_NEAR(hel / n, 0.0, 0.03);
 }
 
+// Photon streak: helix e^{i lambda k s} in the (theta_hat, phi_hat) frame,
+// comoving phase (crests ride with the head), ~2 s wall flight, late fade.
+
+TEST(PhotonStreak, FlightConstantsMatchTheUserSpec) {
+    EXPECT_EQ(ses::kPhotonFlightTicks, 120);  // ~2 s at 60 fps
+    // Must exit the +-80 box even along the corner diagonal.
+    EXPECT_GE(ses::kPhotonTravel, std::sqrt(3.0) * 80.0);
+}
+
+TEST(PhotonStreak, WavelengthIsInverseInEnergy) {
+    EXPECT_DOUBLE_EQ(ses::photon_display_wavelength(0.375), 25.0);
+    EXPECT_DOUBLE_EQ(ses::photon_display_wavelength(0.75), 12.5);
+}
+
+TEST(PhotonStreak, AlphaHoldsThenFadesToZero) {
+    EXPECT_DOUBLE_EQ(ses::photon_streak_alpha(0.0), 1.0);
+    EXPECT_DOUBLE_EQ(ses::photon_streak_alpha(0.5), 1.0);
+    EXPECT_LT(ses::photon_streak_alpha(0.95), ses::photon_streak_alpha(0.75));
+    EXPECT_DOUBLE_EQ(ses::photon_streak_alpha(1.0), 0.0);
+    double prev = 1.0;
+    for (int i = 0; i <= 20; ++i) {
+        const double a = ses::photon_streak_alpha(i / 20.0);
+        EXPECT_LE(a, prev + 1e-12);
+        prev = a;
+    }
+}
+
+TEST(PhotonStreak, HelixTwistSenseFollowsHelicity) {
+    const double de = 0.375;  // lambda_display = 25 Bohr
+    const double k = 2.0 * 3.14159265358979323846 / 25.0;
+    for (const int lam : {+1, -1}) {
+        const ses::PhotonRecord ph{Vec3d{0.0, 0.0, 1.0}, lam};
+        const auto v = ses::photon_streak_vertices(ph, de, 0.5);
+        ASSERT_EQ(v.size(),
+                  static_cast<std::size_t>(ses::kPhotonStreakPoints));
+        const double sh = 0.5 * ses::kPhotonTravel;
+        const std::size_t body = v.size() - 1;
+        double prev_s = -1.0;
+        for (std::size_t i = 0; i < body; ++i) {
+            const double s = v[i].z;  // n = z: axial coordinate
+            EXPECT_GT(s, prev_s);
+            prev_s = s;
+            const double tr =
+                std::sqrt(v[i].x * v[i].x + v[i].y * v[i].y);
+            EXPECT_NEAR(tr, ses::kPhotonStreakRadius, 1e-9);
+        }
+        // Comoving phase: at the head s = sh the transverse is +R x_hat...
+        const Vec3d& head = v[body - 1];
+        EXPECT_NEAR(head.z, sh, 1e-9);
+        EXPECT_NEAR(head.x, ses::kPhotonStreakRadius, 1e-9);
+        EXPECT_NEAR(head.y, 0.0, 1e-9);
+        // ...and a quarter display-wavelength behind it sits at -lambda R y_hat.
+        for (std::size_t i = 0; i < body; ++i) {
+            if (std::abs(v[i].z - (sh - 25.0 / 4.0)) < 1e-6) {
+                EXPECT_NEAR(v[i].x, 0.0, 1e-9);
+                EXPECT_NEAR(v[i].y, -lam * ses::kPhotonStreakRadius, 1e-9);
+            }
+        }
+        // Twist sense: consecutive transverse vectors rotate with sign lam.
+        for (std::size_t i = 0; i + 1 < body; ++i) {
+            const double cross = v[i].x * v[i + 1].y - v[i].y * v[i + 1].x;
+            EXPECT_GT(lam * cross, 0.0);
+        }
+        (void)k;
+    }
+}
+
+TEST(PhotonStreak, TipIsOnAxisAheadAndTailAnchorsAtTheNucleus) {
+    const ses::PhotonRecord ph{Vec3d{0.0, 0.0, 1.0}, +1};
+    // Early flight: the tail is still anchored at the nucleus.
+    const auto early = ses::photon_streak_vertices(ph, 0.375, 0.1);
+    ASSERT_FALSE(early.empty());
+    EXPECT_NEAR(early.front().z, 0.0, 1e-9);
+    // The tip is on-axis, strictly ahead of every body vertex.
+    const Vec3d tip = early.back();
+    EXPECT_NEAR(std::sqrt(tip.x * tip.x + tip.y * tip.y), 0.0, 1e-9);
+    for (std::size_t i = 0; i + 1 < early.size(); ++i) {
+        EXPECT_LT(early[i].z, tip.z);
+    }
+    // Full flight reaches past the box.
+    const auto done = ses::photon_streak_vertices(ph, 0.375, 1.0);
+    ASSERT_FALSE(done.empty());
+    EXPECT_GE(done.back().z, ses::kPhotonTravel);
+}
+
 TEST(PhotonSampling, CircularDipoleCorrelatesHelicityWithHemisphere) {
     const std::vector<DipoleMatrixElement> dip{dip_sigma_plus()};
     std::mt19937 rng(9781u);

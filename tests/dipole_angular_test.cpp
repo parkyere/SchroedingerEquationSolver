@@ -135,6 +135,87 @@ TEST(TesseralE1, FactorizationMatchesNumeric3DIntegral) {
     }
 }
 
+// Signed factor: squares to the constexpr table on the full swept range.
+TEST(TesseralE1, SignedAxisSquaresToTheTable) {
+    for (int lf = 0; lf <= 4; ++lf) {
+        for (int mf = -lf; mf <= lf; ++mf) {
+            for (int lt = 0; lt <= 4; ++lt) {
+                for (int mt = -lt; mt <= lt; ++mt) {
+                    for (int axis = 0; axis < 3; ++axis) {
+                        const double s =
+                            ses::tesseral_e1_axis(axis, lt, mt, lf, mf);
+                        EXPECT_NEAR(
+                            s * s,
+                            ses::tesseral_e1_axis_sq(axis, lt, mt, lf, mf),
+                            1e-14)
+                            << "axis=" << axis << " " << lf << "," << mf
+                            << " -> " << lt << "," << mt;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Sign oracle: the signed factor must match the numeric 3D integral WITH sign
+// (ratio +1, not just magnitude) against the same synthesis convention the
+// app collapses onto. Pairs cover cos, sin-up, sin-down and y-sector flips.
+TEST(TesseralE1, SignedFactorMatchesNumeric3DIntegralWithSign) {
+    const Grid3D g{Grid1D{-8.0, 8.0, 64}, Grid1D{-8.0, 8.0, 64},
+                   Grid1D{-8.0, 8.0, 64}};
+    const RadialGrid rg{8.0, 1599};
+    std::vector<double> u(static_cast<std::size_t>(rg.n));
+    double n2 = 0.0;
+    for (int i = 0; i < rg.n; ++i) {
+        const double r = rg.r(i);
+        u[static_cast<std::size_t>(i)] = r * std::exp(-2.0 * (r - 3.0) * (r - 3.0));
+        n2 += u[static_cast<std::size_t>(i)] * u[static_cast<std::size_t>(i)] * rg.h();
+    }
+    for (double& v : u) {
+        v /= std::sqrt(n2);
+    }
+    const double rint = ses::radial_dipole_integral(rg, u, u);
+
+    struct Pair {
+        int l_to, m_to, l_from, m_from;
+    };
+    const Pair pairs[] = {{0, 0, 1, 0},   {0, 0, 1, 1},  {0, 0, 1, -1},
+                          {1, 0, 2, 0},   {1, 1, 2, 0},  {1, -1, 2, 0},
+                          {1, 1, 2, 2},   {2, 2, 3, 1},  {2, -2, 3, 1},
+                          {1, -1, 2, -2}, {2, 0, 3, 1},  {3, -2, 4, -3}};
+    for (const Pair& p : pairs) {
+        const Field3D to = ses::synthesize_orbital(g, rg, u, p.l_to, p.m_to);
+        const Field3D from =
+            ses::synthesize_orbital(g, rg, u, p.l_from, p.m_from);
+        for (int axis = 0; axis < 3; ++axis) {
+            double num = 0.0;
+            for (int k = 0; k < g.z.n; ++k) {
+                for (int j = 0; j < g.y.n; ++j) {
+                    for (int i = 0; i < g.x.n; ++i) {
+                        const double q = axis == 0   ? g.x.coord(i)
+                                         : axis == 1 ? g.y.coord(j)
+                                                     : g.z.coord(k);
+                        num += to(i, j, k).real() * q * from(i, j, k).real();
+                    }
+                }
+            }
+            num *= g.cell_volume();
+            const double predicted =
+                rint * ses::tesseral_e1_axis(axis, p.l_to, p.m_to, p.l_from,
+                                             p.m_from);
+            if (predicted != 0.0) {
+                EXPECT_NEAR(num / predicted, 1.0, 0.02)
+                    << "axis=" << axis << " pair " << p.l_from << ","
+                    << p.m_from << " -> " << p.l_to << "," << p.m_to;
+            } else {
+                EXPECT_LT(num * num, 1e-4 * rint * rint)
+                    << "axis=" << axis << " pair " << p.l_from << ","
+                    << p.m_from << " -> " << p.l_to << "," << p.m_to;
+            }
+        }
+    }
+}
+
 TEST(TesseralE1, FactorizedEinsteinAReproducesTextbook2pLifetime) {
     // Bare -1/r solve (app's table source) vs textbook A(2p->1s) = 1.5155e-8 /au (tau = 1.6 ns).
     const RadialGrid rg{20.0, 3999};
