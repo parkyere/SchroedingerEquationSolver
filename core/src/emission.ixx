@@ -10,8 +10,9 @@ import ses.vec;
 import ses.grid;
 
 
-// Semiclassical (Larmor) dipole emission, atomic units. Coherent-superposition
-// only: P == 0 for a pure eigenstate (its decay = Einstein-A jumps, ses.decay).
+// Semiclassical (Larmor) dipole emission + QED photon record (direction,
+// helicity) conditioning, atomic units. Larmor: coherent-superposition only,
+// P == 0 for a pure eigenstate (its decay = Einstein-A jumps, ses.decay).
 // P = (2/3) alpha^3 |d_ddot|^2, d_ddot = <grad V> (Ehrenfest).
 
 
@@ -61,6 +62,44 @@ inline constexpr double larmor_power(const Vec3d& dipole_accel) noexcept {
     const double a3 = kFineStructureConstant * kFineStructureConstant *
                       kFineStructureConstant;
     return (2.0 / 3.0) * a3 * dot(dipole_accel, dipole_accel);
+}
+
+// ---- QED photon record: E1 direction + helicity conditioning ----
+// Detecting the photon as a plane wave (n, lambda) projects the atom onto
+// c_m ∝ conj(e_lambda(n)) . D_m over the degenerate destination sublevels;
+// angular momentum bookkeeping is automatic in this coupling.
+
+struct PhotonRecord {
+    Vec3d n;       // propagation direction (unit)
+    int helicity;  // +1 / -1 along n
+};
+
+// e_lambda(n) = (theta_hat + i lambda phi_hat)/sqrt2; e_+(z_hat) =
+// (x_hat + i y_hat)/sqrt2 pins the convention (sigma+ along +z).
+inline DipoleMatrixElement helicity_vector(const Vec3d& n, int lambda) noexcept {
+    (void)n;
+    (void)lambda;
+    return DipoleMatrixElement{};  // stub (red)
+}
+
+// c_m ∝ conj(e_lambda(n)) . D_m, normalized; all-zero dipoles stay all-zero.
+inline std::vector<std::complex<double>> conditioned_amplitudes(
+    const std::vector<DipoleMatrixElement>& dipoles, const Vec3d& n,
+    int lambda) {
+    (void)dipoles;
+    (void)n;
+    (void)lambda;
+    return {};  // stub (red)
+}
+
+// Joint (n, lambda) sample from P ∝ Sum_m |conj(e_lambda(n)) . D_m|^2 by
+// rejection against the bound Sum_m |D_m|^2; u01() supplies uniforms in [0,1).
+template <class U01>
+inline PhotonRecord sample_photon_emission(
+    const std::vector<DipoleMatrixElement>& dipoles, U01&& u01) {
+    (void)dipoles;
+    (void)u01;
+    return PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1};  // stub (red)
 }
 
 }  // namespace ses
