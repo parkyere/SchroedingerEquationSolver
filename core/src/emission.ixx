@@ -124,28 +124,55 @@ inline constexpr double kPhotonStreakRadius = 4.0;  // Bohr
 inline constexpr double kPhotonTail = 60.0;         // Bohr of visible trail
 inline constexpr int kPhotonStreakPoints = 96;      // body + tip vertex
 
+inline constexpr double kPhotonTipLen = 8.0;  // Bohr; on-axis arrowhead reach
+
 // Display wavelength: relative energies honest (true lambda >> box).
 inline double photon_display_wavelength(double delta_e) noexcept {
-    (void)delta_e;
-    return 0.0;  // stub (red)
+    return delta_e > 0.0 ? kPhotonWaveScale / delta_e : kPhotonTravel;
 }
 
 // 1 through most of the flight, linear fade to 0 at the end.
 inline double photon_streak_alpha(double progress) noexcept {
-    (void)progress;
-    return 0.0;  // stub (red)
+    constexpr double kFadeStart = 0.7;
+    const double p = std::clamp(progress, 0.0, 1.0);
+    return p <= kFadeStart ? 1.0 : (1.0 - p) / (1.0 - kFadeStart);
 }
 
 // Body helix trails the head by kPhotonTail (clamped at the nucleus); the
 // last vertex is the on-axis arrow tip ahead of the body. Transverse frame =
-// helicity_vector's (theta_hat, phi_hat), so twist sense == helicity.
+// helicity_vector's (theta_hat, phi_hat) and phase = k(s - s_head), so the
+// spring twists AND rotates in flight with sense = helicity.
 inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
                                                  double delta_e,
                                                  double progress) {
-    (void)ph;
-    (void)delta_e;
-    (void)progress;
-    return {};  // stub (red)
+    const Vec3d n = ph.n;
+    const double st = std::sqrt(std::max(0.0, n.x * n.x + n.y * n.y));
+    const double cph = st > 0.0 ? n.x / st : 1.0;  // poles: phi = 0
+    const double sph = st > 0.0 ? n.y / st : 0.0;
+    const Vec3d th{n.z * cph, n.z * sph, -st};
+    const Vec3d fi{-sph, cph, 0.0};
+    const double sh = std::clamp(progress, 0.0, 1.0) * kPhotonTravel;
+    const double s0 = std::max(0.0, sh - kPhotonTail);
+    constexpr double kPi = 3.14159265358979323846;
+    const double k = 2.0 * kPi / photon_display_wavelength(delta_e);
+    const double lam = ph.helicity >= 0 ? 1.0 : -1.0;
+    std::vector<Vec3d> v(static_cast<std::size_t>(kPhotonStreakPoints));
+    const int nb = kPhotonStreakPoints - 1;
+    for (int i = 0; i < nb; ++i) {
+        const double s =
+            s0 + (sh - s0) * static_cast<double>(i) / (nb - 1);
+        const double a = k * (s - sh);
+        const double cx = std::cos(a) * kPhotonStreakRadius;
+        const double cy = lam * std::sin(a) * kPhotonStreakRadius;
+        v[static_cast<std::size_t>(i)] =
+            Vec3d{n.x * s + th.x * cx + fi.x * cy,
+                  n.y * s + th.y * cx + fi.y * cy,
+                  n.z * s + th.z * cx + fi.z * cy};
+    }
+    const double tip = sh + kPhotonTipLen;
+    v[static_cast<std::size_t>(nb)] =
+        Vec3d{n.x * tip, n.y * tip, n.z * tip};
+    return v;
 }
 
 // Joint (n, lambda) sample from P ∝ Sum_m |conj(e_lambda(n)) . D_m|^2 by

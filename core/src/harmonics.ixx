@@ -261,7 +261,33 @@ constexpr double tesseral_e1_axis_sq(int axis, int l_to, int m_to, int l_from,
 // tests/dipole_angular_test.cpp (synthesize_orbital 3D integral).
 inline double tesseral_e1_axis(int axis, int l_to, int m_to, int l_from,
                                int m_from) noexcept {
-    return tesseral_e1_axis_sq(axis, l_to, m_to, l_from, m_from);  // stub (red)
+    const double sq = tesseral_e1_axis_sq(axis, l_to, m_to, l_from, m_from);
+    if (sq == 0.0) {
+        return 0.0;
+    }
+    double sign = 1.0;
+    if (axis != 2) {
+        // theta: sin P_l^mu = [P_{l+1}^{mu+1} - P_{l-1}^{mu+1}]/(2l+1) (CS-free
+        // basis, this file's Cartesian forms) -> mu-raised side on the LOWER l
+        // reads the minus branch.
+        const int mu_to = m_to < 0 ? -m_to : m_to;
+        const int mu_from = m_from < 0 ? -m_from : m_from;
+        const int l_hi_mu = mu_to > mu_from ? l_to : l_from;
+        const int l_lo_mu = mu_to > mu_from ? l_from : l_to;
+        if (l_hi_mu == l_lo_mu - 1) {
+            sign = -sign;
+        }
+        // phi (y): sin phi sin(s phi) = [cos((s-1)phi) - cos((s+1)phi)]/2 ->
+        // positive iff the sin-sector order is one above the cos-sector order.
+        if (axis == 1) {
+            const int mu_sin = m_to < 0 ? mu_to : mu_from;
+            const int mu_cos = m_to < 0 ? mu_from : mu_to;
+            if (mu_sin != mu_cos + 1) {
+                sign = -sign;
+            }
+        }
+    }
+    return sign * std::sqrt(sq);
 }
 
 // Polarization sum; Einstein A input per channel.
