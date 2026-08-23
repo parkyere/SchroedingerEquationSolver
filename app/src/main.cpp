@@ -237,9 +237,9 @@ public:
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             fatal_shell_error("SDL init", SDL_GetError());
         }
-        // 2048 wide: keeps the ImGui panel clear of the centered cloud.
+        // 1920: FHD-standard width; the ImGui panel stays clear of the cloud.
         window_ = SDL_CreateWindow(
-            "Electron wavepacket near a hydrogen nucleus", 2048, 768,
+            "Electron wavepacket near a hydrogen nucleus", 1920, 768,
             SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
                 SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (window_ == nullptr) {
