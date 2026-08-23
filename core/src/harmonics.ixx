@@ -255,6 +255,15 @@ constexpr double tesseral_e1_axis_sq(int axis, int l_to, int m_to, int l_from,
     return theta * phi;
 }
 
+// SIGNED E1 angular factor <Y_to|r_q/r|Y_from> (real tesseral basis);
+// squares to tesseral_e1_axis_sq. Relative signs feed the (n, lambda)
+// photon conditioning; convention pinned by the numeric oracle in
+// tests/dipole_angular_test.cpp (synthesize_orbital 3D integral).
+inline double tesseral_e1_axis(int axis, int l_to, int m_to, int l_from,
+                               int m_from) noexcept {
+    return tesseral_e1_axis_sq(axis, l_to, m_to, l_from, m_from);  // stub (red)
+}
+
 // Polarization sum; Einstein A input per channel.
 constexpr double tesseral_e1_sq(int l_to, int m_to, int l_from,
                                 int m_from) noexcept {

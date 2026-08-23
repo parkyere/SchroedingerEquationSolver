@@ -1,4 +1,5 @@
 module;
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -110,6 +111,41 @@ inline std::vector<std::complex<double>> conditioned_amplitudes(
         }
     }
     return c;
+}
+
+// ---- photon streak display -----------------------------------------------
+// Helix e^{i lambda k s} around the flight axis (1D phasor grammar: twist
+// sense = helicity); wall-clock flight, ~2 s to exit the box at 60 fps.
+
+inline constexpr int kPhotonFlightTicks = 120;      // ~2 s at 60 fps
+inline constexpr double kPhotonTravel = 160.0;      // Bohr; exits the +-80 box
+inline constexpr double kPhotonWaveScale = 9.375;   // lambda = scale/dE (Lyman-alpha -> 25)
+inline constexpr double kPhotonStreakRadius = 4.0;  // Bohr
+inline constexpr double kPhotonTail = 60.0;         // Bohr of visible trail
+inline constexpr int kPhotonStreakPoints = 96;      // body + tip vertex
+
+// Display wavelength: relative energies honest (true lambda >> box).
+inline double photon_display_wavelength(double delta_e) noexcept {
+    (void)delta_e;
+    return 0.0;  // stub (red)
+}
+
+// 1 through most of the flight, linear fade to 0 at the end.
+inline double photon_streak_alpha(double progress) noexcept {
+    (void)progress;
+    return 0.0;  // stub (red)
+}
+
+// Body helix trails the head by kPhotonTail (clamped at the nucleus); the
+// last vertex is the on-axis arrow tip ahead of the body. Transverse frame =
+// helicity_vector's (theta_hat, phi_hat), so twist sense == helicity.
+inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
+                                                 double delta_e,
+                                                 double progress) {
+    (void)ph;
+    (void)delta_e;
+    (void)progress;
+    return {};  // stub (red)
 }
 
 // Joint (n, lambda) sample from P ∝ Sum_m |conj(e_lambda(n)) . D_m|^2 by
