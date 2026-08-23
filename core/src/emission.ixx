@@ -75,31 +75,77 @@ struct PhotonRecord {
 };
 
 // e_lambda(n) = (theta_hat + i lambda phi_hat)/sqrt2; e_+(z_hat) =
-// (x_hat + i y_hat)/sqrt2 pins the convention (sigma+ along +z).
+// (x_hat + i y_hat)/sqrt2 pins the convention (sigma+ along +z). n unit.
 inline DipoleMatrixElement helicity_vector(const Vec3d& n, int lambda) noexcept {
-    (void)n;
-    (void)lambda;
-    return DipoleMatrixElement{};  // stub (red)
+    const double st = std::sqrt(std::max(0.0, n.x * n.x + n.y * n.y));
+    const double cph = st > 0.0 ? n.x / st : 1.0;  // poles: phi = 0
+    const double sph = st > 0.0 ? n.y / st : 0.0;
+    const double ct = n.z;
+    const Vec3d th{ct * cph, ct * sph, -st};
+    const Vec3d ph{-sph, cph, 0.0};
+    const double s2 = std::sqrt(0.5);
+    const double l = lambda >= 0 ? 1.0 : -1.0;
+    return DipoleMatrixElement{{th.x * s2, l * ph.x * s2},
+                               {th.y * s2, l * ph.y * s2},
+                               {th.z * s2, l * ph.z * s2}};
 }
 
 // c_m ∝ conj(e_lambda(n)) . D_m, normalized; all-zero dipoles stay all-zero.
 inline std::vector<std::complex<double>> conditioned_amplitudes(
     const std::vector<DipoleMatrixElement>& dipoles, const Vec3d& n,
     int lambda) {
-    (void)dipoles;
-    (void)n;
-    (void)lambda;
-    return {};  // stub (red)
+    const DipoleMatrixElement e = helicity_vector(n, lambda);
+    std::vector<std::complex<double>> c(dipoles.size());
+    double n2 = 0.0;
+    for (std::size_t m = 0; m < dipoles.size(); ++m) {
+        const DipoleMatrixElement& d = dipoles[m];
+        c[m] = std::conj(e.x) * d.x + std::conj(e.y) * d.y +
+               std::conj(e.z) * d.z;
+        n2 += std::norm(c[m]);
+    }
+    if (n2 > 0.0) {
+        const double inv = 1.0 / std::sqrt(n2);
+        for (std::complex<double>& z : c) {
+            z *= inv;
+        }
+    }
+    return c;
 }
 
 // Joint (n, lambda) sample from P ∝ Sum_m |conj(e_lambda(n)) . D_m|^2 by
-// rejection against the bound Sum_m |D_m|^2; u01() supplies uniforms in [0,1).
+// rejection against the bound Sum_m |D_m|^2 (transverse projector never
+// exceeds it); u01() supplies uniforms in [0,1).
 template <class U01>
 inline PhotonRecord sample_photon_emission(
     const std::vector<DipoleMatrixElement>& dipoles, U01&& u01) {
-    (void)dipoles;
-    (void)u01;
-    return PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1};  // stub (red)
+    double bound = 0.0;
+    for (const DipoleMatrixElement& d : dipoles) {
+        bound += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
+    }
+    if (bound <= 0.0) {
+        return PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1};  // forbidden guard
+    }
+    constexpr double kPi = 3.14159265358979323846;
+    for (;;) {
+        const double ct = 1.0 - 2.0 * u01();
+        const double st = std::sqrt(std::max(0.0, 1.0 - ct * ct));
+        const double phi = 2.0 * kPi * u01();
+        const Vec3d n{st * std::cos(phi), st * std::sin(phi), ct};
+        double w[2];  // lambda = +1, -1
+        for (int i = 0; i < 2; ++i) {
+            const DipoleMatrixElement e = helicity_vector(n, i == 0 ? +1 : -1);
+            double s = 0.0;
+            for (const DipoleMatrixElement& d : dipoles) {
+                s += std::norm(std::conj(e.x) * d.x + std::conj(e.y) * d.y +
+                               std::conj(e.z) * d.z);
+            }
+            w[i] = s;
+        }
+        const double f = w[0] + w[1];
+        if (u01() * bound < f) {
+            return PhotonRecord{n, u01() * f < w[0] ? +1 : -1};
+        }
+    }
 }
 
 }  // namespace ses
