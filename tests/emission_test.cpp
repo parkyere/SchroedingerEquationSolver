@@ -247,9 +247,11 @@ TEST(FlashIntensity, PeakIsOneThirdAndDecaysLinearly) {
     EXPECT_DOUBLE_EQ(ses::flash_intensity(5, 0), 0.0);  // guard
 }
 
-// Flight pool: up to 4 concurrent streaks; overflow evicts the most-spent.
+// Flight pool: 16 concurrent streaks (3 overlapping 5-photon cascades);
+// overflow evicts the most-spent.
 
-TEST(PhotonFlightPool, HoldsUpToFourConcurrentFlights) {
+TEST(PhotonFlightPool, CapacityCoversThreeOverlappingCascades) {
+    EXPECT_EQ(ses::kMaxPhotonFlights, 16);  // 3 x 5-photon Yrast + margin
     ses::PhotonFlightPool pool;
     for (int i = 0; i < ses::kMaxPhotonFlights; ++i) {
         pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.375, 120);
@@ -268,12 +270,14 @@ TEST(PhotonFlightPool, OverflowEvictsTheMostSpentFlight) {
     for (int t = 0; t < 10; ++t) {
         pool.advance();  // 0.1 -> 0.6, 0.2 -> 0.1
     }
-    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.3, 100);
-    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.4, 100);
-    ASSERT_EQ(pool.count(), 4);
-    // Fifth spawn: 0.1 is the most spent and must be the one evicted.
+    for (int i = 2; i < ses::kMaxPhotonFlights; ++i) {
+        pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1},
+                   0.01 * static_cast<double>(i), 100);
+    }
+    ASSERT_EQ(pool.count(), ses::kMaxPhotonFlights);
+    // Overflow spawn: 0.1 is the most spent and must be the one evicted.
     pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.5, 100);
-    ASSERT_EQ(pool.count(), 4);
+    ASSERT_EQ(pool.count(), ses::kMaxPhotonFlights);
     bool saw_01 = false;
     bool saw_05 = false;
     for (int i = 0; i < pool.count(); ++i) {
