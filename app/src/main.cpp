@@ -826,6 +826,8 @@ private:
         // still frame can still accumulate.
         in.flow = view_.flow && in.cloud;
         in.flow_animate = !paused_;
+        in.flow_dt =
+            static_cast<float>(ses::flow_advect_dt(director_->time_scale()));
         in.clip_on = ui_.clip_on;
         in.clip_axis = ui_.clip_axis;
         in.clip_sign = ui_.clip_sign;

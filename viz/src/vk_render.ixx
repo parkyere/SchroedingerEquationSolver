@@ -33,6 +33,7 @@ export import ses.sphere;
 export import ses.camera;
 export import ses.colormap;
 export import ses.volume;
+import ses.view_state;
 
 
 // SceneRenderer draws the whole scene with raw Vulkan into an offscreen color
@@ -134,6 +135,8 @@ public:
         float frame_index = 0.0f;  // temporal jitter/dither rotation
         bool flow = false;          // draw the probability-flow particles
         bool flow_animate = false;  // advance the advection (false = paused)
+        // au/frame, shell-computed ses::flow_advect_dt (crawl x pacing dial).
+        float flow_dt = static_cast<float>(ses::kFlowCrawlDt);
         bool volume_changed = false;  // psi/absorbance changed: rebuild aux
         // Nucleus marker balls, and a potential slab [lo, hi) on x (the
         // barrier) raymarch-composited with the cloud.
@@ -315,7 +318,7 @@ public:
                 fp.box_max[0] = static_cast<float>(grid_.x.xmax);
                 fp.box_max[1] = static_cast<float>(grid_.y.xmax);
                 fp.box_max[2] = static_cast<float>(grid_.z.xmax);
-                fp.dt = 0.18f;  // slow crawl: readable streaks
+                fp.dt = in.flow_dt;
                 fp.inv_peak =
                     static_cast<float>(in.peak > 0.0 ? 1.0 / in.peak : 0.0);
                 fp.lifetime = 600.0f;

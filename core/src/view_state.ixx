@@ -13,8 +13,8 @@ export namespace ses {
 // baseline scaled by the pacing dial (tracer speed tracks sim speed).
 inline constexpr double kFlowCrawlDt = 0.18;
 
-inline constexpr double flow_advect_dt([[maybe_unused]] int time_scale) noexcept {
-    return kFlowCrawlDt;  // stub (red): dial-blind fixed crawl
+inline constexpr double flow_advect_dt(int time_scale) noexcept {
+    return kFlowCrawlDt * static_cast<double>(std::max(time_scale, 1));
 }
 
 struct ViewState {
