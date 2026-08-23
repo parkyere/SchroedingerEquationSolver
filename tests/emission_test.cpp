@@ -204,6 +204,40 @@ TEST(PhotonSampling, PiDipoleGivesSinSquaredPatternAndBalancedHelicity) {
     EXPECT_NEAR(hel / n, 0.0, 0.03);
 }
 
+// Shell dipole vectors: signed tesseral angular factors per destination
+// sublevel; radial factor omitted (cancels in conditioning/sampling).
+
+TEST(ShellDipoleVectors, TwoPzToOneS) {
+    const auto d = ses::shell_dipole_vectors(1, 0, 0, {0});
+    ASSERT_EQ(d.size(), 1u);
+    EXPECT_NEAR(d[0].z.real(), 1.0 / std::sqrt(3.0), 1e-12);
+    EXPECT_NEAR(std::abs(d[0].x) + std::abs(d[0].y), 0.0, 1e-12);
+}
+
+TEST(ShellDipoleVectors, ThreeDz2ToTwoPShellHasTheSinDownSigns) {
+    // 3d_z2 -> (2p_z, 2p_x, 2p_y): D = (2z, -x, -y)/sqrt(15).
+    const auto d = ses::shell_dipole_vectors(2, 0, 1, {0, 1, -1});
+    ASSERT_EQ(d.size(), 3u);
+    const double s15 = 1.0 / std::sqrt(15.0);
+    EXPECT_NEAR(d[0].z.real(), 2.0 * s15, 1e-12);
+    EXPECT_NEAR(d[1].x.real(), -s15, 1e-12);
+    EXPECT_NEAR(d[2].y.real(), -s15, 1e-12);
+    double sum = 0.0;
+    for (const auto& v : d) {
+        sum += std::norm(v.x) + std::norm(v.y) + std::norm(v.z);
+    }
+    EXPECT_NEAR(sum, 2.0 / 5.0, 1e-12);  // tesseral_e1_sq shell sum
+}
+
+TEST(ShellDipoleVectors, ForbiddenShellIsAllZero) {
+    const auto d = ses::shell_dipole_vectors(1, 0, 1, {0, 1, -1});
+    ASSERT_EQ(d.size(), 3u);
+    for (const auto& v : d) {
+        EXPECT_NEAR(std::abs(v.x) + std::abs(v.y) + std::abs(v.z), 0.0,
+                    1e-15);
+    }
+}
+
 // Photon streak: helix e^{i lambda k s} in the (theta_hat, phi_hat) frame,
 // comoving phase (crests ride with the head), ~2 s wall flight, late fade.
 
