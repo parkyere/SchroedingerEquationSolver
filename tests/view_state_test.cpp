@@ -84,4 +84,17 @@ TEST(FlowAdvectDt, NonPositiveDialFallsBackToBaseline) {
     EXPECT_DOUBLE_EQ(ses::flow_advect_dt(-3), ses::kFlowCrawlDt);
 }
 
+// Accumulation gate: any on-screen motion -- animating flow streaks OR
+// in-flight overlay curves (photon streaks) -- must break the freeze.
+TEST(AccumulateFrame, FreezesOnlyWhenTrulyStatic) {
+    EXPECT_TRUE(ses::accumulate_frame(true, false, 0));
+    EXPECT_FALSE(ses::accumulate_frame(false, false, 0));
+    EXPECT_FALSE(ses::accumulate_frame(true, true, 0));
+}
+
+TEST(AccumulateFrame, InFlightOverlaysBreakTheFreeze) {
+    EXPECT_FALSE(ses::accumulate_frame(true, false, 1));
+    EXPECT_FALSE(ses::accumulate_frame(true, false, 16));
+}
+
 }  // namespace
