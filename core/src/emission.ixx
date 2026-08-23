@@ -119,11 +119,14 @@ inline std::vector<std::complex<double>> conditioned_amplitudes(
 // and in direction sampling). Signs from tesseral_e1_axis.
 inline std::vector<DipoleMatrixElement> shell_dipole_vectors(
     int l_from, int m_from, int l_to, const std::vector<int>& m_to) {
-    (void)l_from;
-    (void)m_from;
-    (void)l_to;
-    (void)m_to;
-    return {};  // stub (red)
+    std::vector<DipoleMatrixElement> d(m_to.size());
+    for (std::size_t i = 0; i < m_to.size(); ++i) {
+        d[i] = DipoleMatrixElement{
+            {tesseral_e1_axis(0, l_to, m_to[i], l_from, m_from), 0.0},
+            {tesseral_e1_axis(1, l_to, m_to[i], l_from, m_from), 0.0},
+            {tesseral_e1_axis(2, l_to, m_to[i], l_from, m_from), 0.0}};
+    }
+    return d;
 }
 
 // ---- photon streak display -----------------------------------------------

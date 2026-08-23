@@ -49,6 +49,23 @@ void selftest_scene_wait_running(ShellT* shell, const char* name, int polls,
     });
 }
 
+// Poll (300 ms) until the photon streak overlay shows; flips *seen once.
+// The streak lives ~2 s, so the final checkpoint cannot observe it directly.
+template <typename ShellT>
+void selftest_watch_streak(ShellT* shell, int polls,
+                           std::shared_ptr<bool> seen) {
+    if (*seen || polls >= 100) {
+        return;
+    }
+    if (shell->director().overlay_curve_count() > 0) {
+        *seen = true;
+        return;
+    }
+    shell->sched().after(300, [shell, polls, seen] {
+        selftest_watch_streak(shell, polls + 1, seen);
+    });
+}
+
 template <typename ShellT, typename Done>
 void selftest_wait_sim_time(ShellT* shell, double t_target, int polls,
                             Done done) {
@@ -296,7 +313,9 @@ void register_verification_arcs(ShellT* shell) {
                 const long long baseline = shell->hy()->photon_count();
                 shell->set_real_time();
                 shell->hy()->toggle_decay();  // ON: the window starts NOW
-                shell->sched().after(30000, [shell, baseline] {
+                auto streak = std::make_shared<bool>(false);
+                selftest_watch_streak(shell, 0, streak);
+                shell->sched().after(30000, [shell, baseline, streak] {
                     const long long fresh = shell->hy()->photon_count() - baseline;
                     // Spectrometer must record the 2p->1s line at Lyman-alpha 10.20 eV.
                     const int nl = shell->hy()->spectro_count();
@@ -304,11 +323,13 @@ void register_verification_arcs(ShellT* shell) {
                         nl > 0 ? shell->hy()->spectro_ev(nl - 1) : 0.0;
                     const bool line_ok =
                         fresh < 1 || std::abs(ev - 10.20) < 0.15;
-                    const bool pass = fresh >= 1 && line_ok;
+                    // The jump must also launch the photon streak overlay.
+                    const bool pass = fresh >= 1 && line_ok && *streak;
                     std::fprintf(stderr,
                                  "selftest-decay: photons = %lld, last line "
-                                 "%.2f eV  [%s]\n",
-                                 fresh, ev, pass ? "PASS" : "FAIL");
+                                 "%.2f eV, streak %d  [%s]\n",
+                                 fresh, ev, *streak ? 1 : 0,
+                                 pass ? "PASS" : "FAIL");
                     shell->request_exit(pass ? 0 : 1);
                 });
             });
