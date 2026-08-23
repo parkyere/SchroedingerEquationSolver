@@ -169,10 +169,11 @@ inline int photon_flight_frames(double delta_e) noexcept {
 inline constexpr double kFlashPeak = 1.0 / 3.0;
 
 inline double flash_intensity(int ticks_left, int ticks_total) noexcept {
-    // stub (red): today's full-bright ramp
-    return ticks_total > 0 ? static_cast<double>(ticks_left) /
-                                 static_cast<double>(ticks_total)
-                           : 0.0;
+    if (ticks_total <= 0 || ticks_left <= 0) {
+        return 0.0;
+    }
+    return kFlashPeak * static_cast<double>(ticks_left) /
+           static_cast<double>(ticks_total);
 }
 
 // Concurrent streak capacity: a 5-photon Yrast cascade (6h->...->1s) times
@@ -189,22 +190,49 @@ struct PhotonFlightPool {
     };
     std::array<Flight, kMaxPhotonFlights> slots{};
 
-    // stub (red): single-slot semantics (today's behavior)
+    // Free slot first; else evict the most-spent flight (largest progress).
     void spawn(const PhotonRecord& rec, double delta_e, int total_frames) {
-        slots[0] = Flight{rec, delta_e, 0, total_frames};
+        int pick = 0;
+        double worst = -1.0;
+        for (int i = 0; i < kMaxPhotonFlights; ++i) {
+            const Flight& f = slots[static_cast<std::size_t>(i)];
+            if (f.age_frames < 0) {
+                pick = i;
+                break;
+            }
+            const double spent = static_cast<double>(f.age_frames) /
+                                 static_cast<double>(f.total_frames);
+            if (spent > worst) {
+                worst = spent;
+                pick = i;
+            }
+        }
+        slots[static_cast<std::size_t>(pick)] =
+            Flight{rec, delta_e, 0, total_frames < 1 ? 1 : total_frames};
     }
+    // Ages every active flight; expires past its own total.
     void advance() {
-        if (slots[0].age_frames >= 0 &&
-            ++slots[0].age_frames > slots[0].total_frames) {
-            slots[0].age_frames = -1;
+        for (Flight& f : slots) {
+            if (f.age_frames >= 0 && ++f.age_frames > f.total_frames) {
+                f.age_frames = -1;
+            }
         }
     }
     int count() const {
-        return slots[0].age_frames >= 0 ? 1 : 0;
+        int n = 0;
+        for (const Flight& f : slots) {
+            n += f.age_frames >= 0 ? 1 : 0;
+        }
+        return n;
     }
     // i-th ACTIVE flight in slot order; nullptr past count().
     const Flight* active(int i) const {
-        return i == 0 && slots[0].age_frames >= 0 ? &slots[0] : nullptr;
+        for (const Flight& f : slots) {
+            if (f.age_frames >= 0 && i-- == 0) {
+                return &f;
+            }
+        }
+        return nullptr;
     }
 };
 

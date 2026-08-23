@@ -10,6 +10,7 @@ module;
 export module ses.scenario.harmonic_director;
 export import ses.scenario.base_director;
 import ses.scenario.atom_model;
+import ses.emission;
 import ses.projection;
 import ses.measurement;
 
@@ -75,8 +76,8 @@ public:
         if (flash_ticks_ <= 0) {
             return 0.0f;
         }
-        const float w = static_cast<float>(flash_ticks_) /
-                        static_cast<float>(kTrapFlashTicks);
+        const float w = static_cast<float>(
+            ses::flash_intensity(flash_ticks_, kTrapFlashTicks));
         --flash_ticks_;
         return w;
     }

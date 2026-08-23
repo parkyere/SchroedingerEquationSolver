@@ -181,29 +181,26 @@ public:
             gpu_ok_ = false;
             cpu_is_truth_ = true;
         }
-        // Photon streak: wall-frame flight clock + this frame's polyline
+        // Photon streaks: wall-frame flight clocks + this frame's polylines
         // (overlay pointers stay valid until the next run_frame).
-        if (photon_flight_.age_frames >= 0) {
-            if (++photon_flight_.age_frames > photon_flight_.total_frames) {
-                photon_flight_.age_frames = -1;
-                streak_xyz_.clear();
-            } else {
-                const double progress =
-                    static_cast<double>(photon_flight_.age_frames) /
-                    photon_flight_.total_frames;
-                const std::vector<ses::Vec3d> pts =
-                    ses::photon_streak_vertices(photon_flight_.rec,
-                                                photon_flight_.delta_e,
-                                                progress);
-                streak_xyz_.resize(pts.size() * 3);
-                for (std::size_t i = 0; i < pts.size(); ++i) {
-                    streak_xyz_[3 * i + 0] = static_cast<float>(pts[i].x);
-                    streak_xyz_[3 * i + 1] = static_cast<float>(pts[i].y);
-                    streak_xyz_[3 * i + 2] = static_cast<float>(pts[i].z);
-                }
-                streak_alpha_ =
-                    static_cast<float>(ses::photon_streak_alpha(progress));
+        photon_pool_.advance();
+        streak_count_ = photon_pool_.count();
+        for (int c = 0; c < streak_count_; ++c) {
+            const ses::PhotonFlightPool::Flight* f = photon_pool_.active(c);
+            const double progress = static_cast<double>(f->age_frames) /
+                                    f->total_frames;
+            const std::vector<ses::Vec3d> pts = ses::photon_streak_vertices(
+                f->rec, f->delta_e, progress);
+            std::vector<float>& buf =
+                streak_xyz_[static_cast<std::size_t>(c)];
+            buf.resize(pts.size() * 3);
+            for (std::size_t i = 0; i < pts.size(); ++i) {
+                buf[3 * i + 0] = static_cast<float>(pts[i].x);
+                buf[3 * i + 1] = static_cast<float>(pts[i].y);
+                buf[3 * i + 2] = static_cast<float>(pts[i].z);
             }
+            streak_alpha_[static_cast<std::size_t>(c)] =
+                static_cast<float>(ses::photon_streak_alpha(progress));
         }
         // Reclaim last frame's async batch FIRST: flips the display volume at a
         // host-observed completion point; all readouts below then see post-step
@@ -761,20 +758,22 @@ public:
 
     // ---- display-facing accessors (the shell's FrameInput assembly) ----
 
-    // Photon streak overlay: LINE_STRIP helix, twist/rotation sense = the
+    // Photon streak overlays: LINE_STRIP helices, twist/rotation sense = the
     // recorded helicity; warm tint matches the flash language.
-    int overlay_curve_count() const override {
-        return photon_flight_.age_frames >= 0 && streak_xyz_.size() >= 6 ? 1
-                                                                         : 0;
-    }
-    OverlayCurve overlay_curve(int /*i*/) const override {
+    int overlay_curve_count() const override { return streak_count_; }
+    OverlayCurve overlay_curve(int i) const override {
+        if (i < 0 || i >= streak_count_) {
+            return {};
+        }
+        const std::vector<float>& buf =
+            streak_xyz_[static_cast<std::size_t>(i)];
         OverlayCurve oc;
-        oc.xyz = streak_xyz_.data();
-        oc.count = static_cast<int>(streak_xyz_.size() / 3);
+        oc.xyz = buf.data();
+        oc.count = static_cast<int>(buf.size() / 3);
         oc.r = 1.0f;
         oc.g = 0.95f;
         oc.b = 0.75f;
-        oc.a = streak_alpha_;
+        oc.a = streak_alpha_[static_cast<std::size_t>(i)];
         return oc;
     }
 
@@ -783,8 +782,8 @@ public:
         if (flash_ticks_ <= 0) {
             return 0.0f;
         }
-        const float v =
-            static_cast<float>(flash_ticks_) / static_cast<float>(kFlashTicks);
+        const float v = static_cast<float>(
+            ses::flash_intensity(flash_ticks_, kFlashTicks));
         --flash_ticks_;
         return v;
     }
@@ -1296,8 +1295,8 @@ private:
                     flash_ticks_ = kFlashTicks;
                     const double gap_e = atom_.state_energy(fin.from) -
                                          atom_.state_energy(fin.to);
-                    photon_flight_ = PhotonFlight{
-                        rec, gap_e, 0, ses::photon_flight_frames(gap_e)};
+                    photon_pool_.spawn(rec, gap_e,
+                                       ses::photon_flight_frames(gap_e));
                     for (const int c : fired) {
                         const ShellChannel& ch =
                             atom_.channels()[static_cast<std::size_t>(c)];
@@ -1725,17 +1724,12 @@ private:
     PartialBasis pending_partial_ = PartialBasis::None;
     int last_partial_outcome_ = -99;  // sampled n, l, or m; -1 = continuum
 
-    // Photon streak (display): one in-flight record, wall-frame animated.
-    struct PhotonFlight {
-        ses::PhotonRecord rec{};
-        double delta_e = 0.0;
-        int age_frames = -1;  // -1 = none in flight
-        // Constant display speed: soft photons fly farther AND longer.
-        int total_frames = ses::kPhotonFlightTicks;
-    };
-    PhotonFlight photon_flight_{};
-    std::vector<float> streak_xyz_;
-    float streak_alpha_ = 0.0f;
+    // Photon streaks (display): up to kMaxPhotonFlights concurrent,
+    // wall-frame animated at one shared display speed.
+    ses::PhotonFlightPool photon_pool_{};
+    std::array<std::vector<float>, ses::kMaxPhotonFlights> streak_xyz_{};
+    std::array<float, ses::kMaxPhotonFlights> streak_alpha_{};
+    int streak_count_ = 0;
 
     // Quantum-jump bookkeeping.
     std::string last_jump_;
