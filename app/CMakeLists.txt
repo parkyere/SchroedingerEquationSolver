@@ -27,8 +27,7 @@ add_executable(sesolver_app
 )
 target_sources(sesolver_app
     PRIVATE FILE_SET CXX_MODULES FILES
-        src/imgui_ui.ixx
-        src/scheduler.ixx)
+        src/imgui_ui.ixx)
 # WIN32 subsystem (optimized builds) drops the console; Debug keeps it. SDL_main.h = WinMain.
 set_target_properties(sesolver_app PROPERTIES
     WIN32_EXECUTABLE "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>"

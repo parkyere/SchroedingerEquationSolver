@@ -58,7 +58,7 @@ import ses.scenario.qdot2d_director;
 import ses.scenario.rutherford3d_director;
 import ses.scenario.tunneling_director;
 
-import app.scheduler;
+import ses.scenario.scheduler;
 import ses.scenario.doublewell1d_director;
 import ses.scenario.harmonic_director;
 import ses.scenario.harmonic1d_director;
@@ -552,7 +552,7 @@ public:
         distance_ = std::clamp(d, 4.0, 300.0);
     }
 
-    app::Scheduler& sched() { return sched_; }
+    ses_shell::Scheduler& sched() { return sched_; }
     void request_exit(int code) {
         exit_code_ = code;
         exit_requested_ = true;
@@ -922,7 +922,7 @@ private:
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
 
     std::vector<std::string> args_;
-    app::Scheduler sched_;
+    ses_shell::Scheduler sched_;
     app::UiState ui_;
     std::string status_text_;
     double perf_sim_rate_ = 0.0;     // achieved au/s, ~1 s rolling window

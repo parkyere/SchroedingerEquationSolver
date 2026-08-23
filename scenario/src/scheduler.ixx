@@ -3,13 +3,15 @@ module;
 #include <functional>
 #include <utility>
 #include <vector>
-export module app.scheduler;
+export module ses.scenario.scheduler;
 
 
 // Single-threaded: all methods run on the SDL loop thread (no locking).
+// CONTRACT: tests/scheduler_test.cpp -- a callback may cancel ITSELF and
+// register new entries mid-call; the running callable must stay alive.
 
 
-export namespace app {
+export namespace ses_shell {
 
 class Scheduler {
 public:
@@ -64,4 +66,4 @@ private:
     int next_id_ = 1;
 };
 
-}  // namespace app
+}  // namespace ses_shell
