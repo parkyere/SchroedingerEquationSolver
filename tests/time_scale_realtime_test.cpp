@@ -27,4 +27,22 @@ TEST(TimeScaleRealTime, Lattice2dFamilyRestoresUnitScale) {
     EXPECT_EQ(d.time_scale(), 1);
 }
 
+// The shared pacing invariants themselves (formerly copy-pasted per director).
+
+TEST(TickPacing, DialClampsToTheHistoricalRange) {
+    EXPECT_EQ(ses_shell::clamp_time_scale(0), 1);
+    EXPECT_EQ(ses_shell::clamp_time_scale(-5), 1);
+    EXPECT_EQ(ses_shell::clamp_time_scale(1), 1);
+    EXPECT_EQ(ses_shell::clamp_time_scale(16), 16);
+    EXPECT_EQ(ses_shell::clamp_time_scale(99), 16);
+}
+
+TEST(TickPacing, CatchUpTicksDropInsteadOfBundling) {
+    EXPECT_EQ(ses_shell::pending_after_tick(0, 16), 16);
+    // Un-consumed pending from a stalled frame must NOT stack up.
+    EXPECT_EQ(ses_shell::pending_after_tick(16, 16), 16);
+    EXPECT_EQ(ses_shell::pending_after_tick(3, 8), 8);
+    EXPECT_EQ(ses_shell::pending_after_tick(0, 1), 1);
+}
+
 }  // namespace
