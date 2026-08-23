@@ -271,8 +271,9 @@ TEST(PhotonFlightPool, OverflowEvictsTheMostSpentFlight) {
         pool.advance();  // 0.1 -> 0.6, 0.2 -> 0.1
     }
     for (int i = 2; i < ses::kMaxPhotonFlights; ++i) {
+        // Filler tags out of the 0.x band (0.01*10 rounds to exactly 0.1).
         pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1},
-                   0.01 * static_cast<double>(i), 100);
+                   10.0 + static_cast<double>(i), 100);
     }
     ASSERT_EQ(pool.count(), ses::kMaxPhotonFlights);
     // Overflow spawn: 0.1 is the most spent and must be the one evicted.
