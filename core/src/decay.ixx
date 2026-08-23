@@ -160,6 +160,30 @@ inline ChannelPick pick_decay_channel(const std::vector<double>& rates, double d
     return ChannelPick{last_positive, p};
 }
 
+// ---- chained jumps (one accumulated interval) ----
+
+struct RateChannel {
+    int from;
+    int to;
+    double gamma;
+};
+
+// Chained first-arrival jumps across one accumulated interval: segment rates
+// gamma_c * pop[from_c]; a collapse sets pop to a delta on the destination, so
+// cascade hops chain within the SAME interval (single-jump trials defer them a
+// whole interval; that error grows with time_scale). Draws no uniforms when no
+// rate is positive; u01() supplies uniforms in [0,1).
+template <class U01>
+inline std::vector<int> chain_decay_jumps(const std::vector<RateChannel>& channels,
+                                          std::vector<double> pop, double dt,
+                                          U01&& u01) {
+    (void)channels;
+    (void)pop;
+    (void)dt;
+    (void)u01;
+    return {};  // stub (red)
+}
+
 inline MultiJumpResult multi_quantum_jump(Field3D& psi,
                                           const std::vector<DecayChannel>& channels,
                                           double dt, double u1, double u2) {
