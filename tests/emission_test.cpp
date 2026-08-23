@@ -7,6 +7,10 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
+#include <cstddef>
+#include <random>
+#include <vector>
 import ses.observables;
 import ses.grid;
 import ses.vec;
@@ -72,6 +76,132 @@ TEST(LarmorPower, ExactFactorAndQuadraticScaling) {
                      (2.0 / 3.0) * a3 * 9.0);
     EXPECT_DOUBLE_EQ(ses::larmor_power(Vec3d{2.0, 0.0, 0.0}),
                      4.0 * ses::larmor_power(Vec3d{1.0, 0.0, 0.0}));
+}
+
+// QED photon record: detecting the E1 photon as a plane wave (n, lambda)
+// projects the atom onto c_m ∝ conj(e_lambda(n)).D_m -- angular momentum
+// conservation lives in this coupling.
+
+using ses::DipoleMatrixElement;
+const double kS2 = 1.0 / std::sqrt(2.0);
+
+// sigma+ / pi / sigma- dipole vectors (z quantization axis).
+DipoleMatrixElement dip_sigma_plus() {
+    return DipoleMatrixElement{{kS2, 0.0}, {0.0, kS2}, {0.0, 0.0}};
+}
+DipoleMatrixElement dip_pi() {
+    return DipoleMatrixElement{{0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
+}
+DipoleMatrixElement dip_sigma_minus() {
+    return DipoleMatrixElement{{kS2, 0.0}, {0.0, -kS2}, {0.0, 0.0}};
+}
+
+std::complex<double> cdot(const DipoleMatrixElement& a,
+                          const DipoleMatrixElement& b) {
+    return std::conj(a.x) * b.x + std::conj(a.y) * b.y + std::conj(a.z) * b.z;
+}
+
+TEST(HelicityVector, ConventionAlongZAndTransversality) {
+    const DipoleMatrixElement ep = ses::helicity_vector(Vec3d{0.0, 0.0, 1.0}, +1);
+    // e_+(z) = (x + iy)/sqrt2.
+    EXPECT_NEAR(ep.x.real(), kS2, 1e-12);
+    EXPECT_NEAR(ep.x.imag(), 0.0, 1e-12);
+    EXPECT_NEAR(ep.y.real(), 0.0, 1e-12);
+    EXPECT_NEAR(ep.y.imag(), kS2, 1e-12);
+    EXPECT_NEAR(std::abs(ep.z), 0.0, 1e-12);
+    const Vec3d dirs[] = {Vec3d{1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0},
+                          Vec3d{-kS2, kS2, 0.0}, Vec3d{0.0, 0.0, -1.0}};
+    for (const Vec3d& n : dirs) {
+        const DipoleMatrixElement p = ses::helicity_vector(n, +1);
+        const DipoleMatrixElement m = ses::helicity_vector(n, -1);
+        EXPECT_NEAR(std::abs(cdot(p, p)), 1.0, 1e-12);  // unit
+        EXPECT_NEAR(std::abs(cdot(m, m)), 1.0, 1e-12);
+        EXPECT_NEAR(std::abs(n.x * p.x + n.y * p.y + n.z * p.z), 0.0,
+                    1e-12);  // transverse
+        EXPECT_NEAR(std::abs(n.x * m.x + n.y * m.y + n.z * m.z), 0.0, 1e-12);
+        EXPECT_NEAR(std::abs(cdot(p, m)), 0.0, 1e-12);  // conj-orthogonal
+    }
+}
+
+TEST(ConditionedAmplitudes, AxialDetectionEnforcesDeltaM) {
+    const std::vector<DipoleMatrixElement> dip{dip_sigma_plus(), dip_pi(),
+                                               dip_sigma_minus()};
+    // Along +z with lambda=+1 only the sigma+ component survives (Delta m = -1).
+    const auto cp = ses::conditioned_amplitudes(dip, Vec3d{0.0, 0.0, 1.0}, +1);
+    ASSERT_EQ(cp.size(), 3u);
+    EXPECT_NEAR(std::abs(cp[0]), 1.0, 1e-12);
+    EXPECT_NEAR(std::abs(cp[1]), 0.0, 1e-12);
+    EXPECT_NEAR(std::abs(cp[2]), 0.0, 1e-12);
+    // lambda=-1 picks the sigma- partner instead.
+    const auto cm = ses::conditioned_amplitudes(dip, Vec3d{0.0, 0.0, 1.0}, -1);
+    ASSERT_EQ(cm.size(), 3u);
+    EXPECT_NEAR(std::abs(cm[0]), 0.0, 1e-12);
+    EXPECT_NEAR(std::abs(cm[2]), 1.0, 1e-12);
+}
+
+TEST(ConditionedAmplitudes, ObliqueDetectionIsTheExactSuperposition) {
+    // n = x, lambda=+1: e_+ = (-z + iy)/sqrt2 -> |c| = (1/2, 1/sqrt2, 1/2).
+    const std::vector<DipoleMatrixElement> dip{dip_sigma_plus(), dip_pi(),
+                                               dip_sigma_minus()};
+    const auto c = ses::conditioned_amplitudes(dip, Vec3d{1.0, 0.0, 0.0}, +1);
+    ASSERT_EQ(c.size(), 3u);
+    EXPECT_NEAR(std::abs(c[0]), 0.5, 1e-12);
+    EXPECT_NEAR(std::abs(c[1]), kS2, 1e-12);
+    EXPECT_NEAR(std::abs(c[2]), 0.5, 1e-12);
+    double n2 = 0.0;
+    for (const auto& z : c) {
+        n2 += std::norm(z);
+    }
+    EXPECT_NEAR(n2, 1.0, 1e-12);
+}
+
+TEST(ConditionedAmplitudes, AllZeroDipolesStayZero) {
+    const std::vector<DipoleMatrixElement> dip{DipoleMatrixElement{},
+                                               DipoleMatrixElement{}};
+    const auto c = ses::conditioned_amplitudes(dip, Vec3d{0.0, 0.0, 1.0}, +1);
+    ASSERT_EQ(c.size(), 2u);
+    EXPECT_NEAR(std::abs(c[0]), 0.0, 1e-15);
+    EXPECT_NEAR(std::abs(c[1]), 0.0, 1e-15);
+}
+
+TEST(PhotonSampling, PiDipoleGivesSinSquaredPatternAndBalancedHelicity) {
+    const std::vector<DipoleMatrixElement> dip{dip_pi()};
+    std::mt19937 rng(20260823u);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    auto u01 = [&] { return uni(rng); };
+    const int n = 20000;
+    double cos2 = 0.0;
+    double hel = 0.0;
+    for (int t = 0; t < n; ++t) {
+        const ses::PhotonRecord r = ses::sample_photon_emission(dip, u01);
+        const double nrm =
+            r.n.x * r.n.x + r.n.y * r.n.y + r.n.z * r.n.z;
+        ASSERT_NEAR(nrm, 1.0, 1e-9);
+        cos2 += r.n.z * r.n.z;
+        hel += r.helicity;
+    }
+    // sin^2(theta) pattern: <cos^2 theta> = 1/5; linear light = 50/50 helicity.
+    EXPECT_NEAR(cos2 / n, 0.2, 0.02);
+    EXPECT_NEAR(hel / n, 0.0, 0.03);
+}
+
+TEST(PhotonSampling, CircularDipoleCorrelatesHelicityWithHemisphere) {
+    const std::vector<DipoleMatrixElement> dip{dip_sigma_plus()};
+    std::mt19937 rng(9781u);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+    auto u01 = [&] { return uni(rng); };
+    const int n = 20000;
+    double cos2 = 0.0;
+    double lam_cos = 0.0;
+    for (int t = 0; t < n; ++t) {
+        const ses::PhotonRecord r = ses::sample_photon_emission(dip, u01);
+        cos2 += r.n.z * r.n.z;
+        lam_cos += r.helicity * r.n.z;
+    }
+    // (1 + cos^2)/2 pattern: <cos^2> = 2/5; sigma+ helicity rides +z:
+    // <lambda cos theta> = 1/2.
+    EXPECT_NEAR(cos2 / n, 0.4, 0.02);
+    EXPECT_NEAR(lam_cos / n, 0.5, 0.02);
 }
 
 }  // namespace
