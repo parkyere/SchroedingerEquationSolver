@@ -1201,10 +1201,10 @@ private:
             engine_.project_psi();
         }
 
-        // Competing-channel Poisson trials on the TITLE cadence: the exponential
-        // is memoryless, so accumulated-dt trials give identical statistics with
-        // far fewer GPU reductions. A jump collapses psi onto the fired
-        // destination.
+        // Competing-channel trials on the TITLE cadence: chained first-arrival
+        // sampling keeps cascade statistics exact for ANY accumulated trial_dt
+        // (single-jump trials defer in-interval cascade hops; the error grows
+        // with time_scale). psi collapses ONCE onto the chain's final state.
         if (decay_on_ && !atom_.channels().empty()) {
             decay_accum_dt_ += pending_gpu_steps_ * sim_.dt();
             if (gpu_title_due_) {
@@ -1212,35 +1212,42 @@ private:
                 for (int s = 1; s < kNumStates; ++s) {
                     pop[s] = atom_.project_population(engine_, s);
                 }
-                std::vector<double> rates(atom_.channels().size());
+                std::vector<ses::RateChannel> rate_ch(atom_.channels().size());
                 for (std::size_t c = 0; c < atom_.channels().size(); ++c) {
-                    rates[c] = atom_.channels()[c].gamma_display *
-                               pop[atom_.channels()[c].from];
+                    const ShellChannel& sc = atom_.channels()[c];
+                    rate_ch[c] =
+                        ses::RateChannel{sc.from, sc.to, sc.gamma_display};
                 }
                 std::uniform_real_distribution<double> uniform(0.0, 1.0);
                 const double trial_dt = decay_accum_dt_;
-                const ses::ChannelPick pick = ses::pick_decay_channel(
-                    rates, trial_dt, uniform(rng_), uniform(rng_));
+                const std::vector<int> fired = ses::chain_decay_jumps(
+                    rate_ch, std::vector<double>(pop.begin(), pop.end()),
+                    trial_dt, [&] { return uniform(rng_); });
                 decay_accum_dt_ = 0.0;
-                if (pick.channel >= 0) {
-                    const ShellChannel& ch =
-                        atom_.channels()[static_cast<std::size_t>(pick.channel)];
-                    atom_.collapse_onto(engine_, ch.to);
+                if (!fired.empty()) {
+                    const ShellChannel& fin = atom_.channels()
+                        [static_cast<std::size_t>(fired.back())];
+                    atom_.collapse_onto(engine_, fin.to);
                     reset_ionized_tally();  // BEFORE the flush: its renorm
                                             // must not read as ionization
-                    flush_collapse_error(ch.to);
+                    flush_collapse_error(fin.to);
                     flash_ticks_ = kFlashTicks;
-                    ++photon_count_;
-                    // Spectrometer record: the photon carried exactly the level gap.
-                    spectro_ev_.push_back((atom_.state_energy(ch.from) -
-                                           atom_.state_energy(ch.to)) *
-                                          kHaToEv);
-                    last_jump_ = strf("%s->%s", kStateSpec[ch.from].name,
-                                      kStateSpec[ch.to].name);
-                    std::fprintf(stderr,
-                                 "decay: jump %s (photon #%lld, t=%.1f au)\n",
-                                 last_jump_.c_str(), photon_count_,
-                                 sim_.time() + gpu_time_);
+                    for (const int c : fired) {
+                        const ShellChannel& ch =
+                            atom_.channels()[static_cast<std::size_t>(c)];
+                        ++photon_count_;
+                        // Spectrometer record: the photon carried exactly the
+                        // level gap.
+                        spectro_ev_.push_back((atom_.state_energy(ch.from) -
+                                               atom_.state_energy(ch.to)) *
+                                              kHaToEv);
+                        last_jump_ = strf("%s->%s", kStateSpec[ch.from].name,
+                                          kStateSpec[ch.to].name);
+                        std::fprintf(stderr,
+                                     "decay: jump %s (photon #%lld, t=%.1f au)\n",
+                                     last_jump_.c_str(), photon_count_,
+                                     sim_.time() + gpu_time_);
+                    }
                     title_dirty_ = true;
                 } else if (mcwf_damping_ && laser_pol_ == LaserPol::Off) {
                     // No photon this interval: MCWF no-jump evolution (H_eff).

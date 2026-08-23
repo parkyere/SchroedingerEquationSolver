@@ -1,4 +1,5 @@
 module;
+#include <algorithm>
 #include <complex>
 #include <cmath>
 #include <cstddef>
@@ -177,11 +178,49 @@ template <class U01>
 inline std::vector<int> chain_decay_jumps(const std::vector<RateChannel>& channels,
                                           std::vector<double> pop, double dt,
                                           U01&& u01) {
-    (void)channels;
-    (void)pop;
-    (void)dt;
-    (void)u01;
-    return {};  // stub (red)
+    std::vector<int> fired;
+    std::vector<double> rates(channels.size());
+    double remaining = dt;
+    for (;;) {
+        double total = 0.0;
+        for (std::size_t m = 0; m < channels.size(); ++m) {
+            rates[m] = channels[m].gamma *
+                       pop[static_cast<std::size_t>(channels[m].from)];
+            total += rates[m];
+        }
+        if (total <= 0.0) {
+            break;
+        }
+        // t1 = -ln(u)/R; u -> 0 reads +inf and survives the interval.
+        const double t1 = -std::log(u01()) / total;
+        if (!(t1 < remaining)) {
+            break;
+        }
+        const double u2 = u01();
+        double acc = 0.0;
+        int picked = -1;
+        int last_positive = -1;
+        for (std::size_t m = 0; m < channels.size(); ++m) {
+            if (rates[m] <= 0.0) {
+                continue;
+            }
+            last_positive = static_cast<int>(m);
+            acc += rates[m] / total;
+            if (u2 < acc) {
+                picked = static_cast<int>(m);
+                break;
+            }
+        }
+        if (picked < 0) {
+            picked = last_positive;  // u2 rounding at the top of the last stratum
+        }
+        fired.push_back(picked);
+        std::fill(pop.begin(), pop.end(), 0.0);
+        pop[static_cast<std::size_t>(
+            channels[static_cast<std::size_t>(picked)].to)] = 1.0;
+        remaining -= t1;
+    }
+    return fired;
 }
 
 inline MultiJumpResult multi_quantum_jump(Field3D& psi,

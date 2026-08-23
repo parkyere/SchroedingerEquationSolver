@@ -133,7 +133,8 @@ protected:
         title_dirty_ = true;
     }
 
-    // Decay trials ride the batch at title cadence (memoryless accumulated-dt).
+    // Decay trials ride the batch at title cadence: chained first-arrival over
+    // the accumulated dt (ladder hops N->N-1->... may fire within ONE interval).
     void after_step_batch() override {
         if (!decay_on_ || atom_.channels().empty()) {
             return;
@@ -144,30 +145,41 @@ protected:
         }
         engine_.wait_async();  // the deposit needs the batch's memory visible
         engine_.project_psi();
-        std::vector<double> rates(atom_.channels().size());
+        std::vector<double> pop(kNumTrapStates, 0.0);
+        std::vector<char> projected(kNumTrapStates, 0);
+        std::vector<ses::RateChannel> rate_ch(atom_.channels().size());
         for (std::size_t c = 0; c < atom_.channels().size(); ++c) {
-            rates[c] = atom_.channels()[c].gamma_display *
-                       atom_.project_population(engine_,
-                                                atom_.channels()[c].from);
+            const ShellChannel& sc = atom_.channels()[c];
+            if (!projected[static_cast<std::size_t>(sc.from)]) {
+                projected[static_cast<std::size_t>(sc.from)] = 1;
+                pop[static_cast<std::size_t>(sc.from)] =
+                    atom_.project_population(engine_, sc.from);
+            }
+            rate_ch[c] = ses::RateChannel{sc.from, sc.to, sc.gamma_display};
         }
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        const ses::ChannelPick pick = ses::pick_decay_channel(
-            rates, decay_accum_dt_, uniform(rng_), uniform(rng_));
+        const std::vector<int> fired = ses::chain_decay_jumps(
+            rate_ch, pop, decay_accum_dt_, [&] { return uniform(rng_); });
         decay_accum_dt_ = 0.0;
-        if (pick.channel < 0) {
+        if (fired.empty()) {
             return;
         }
-        const ShellChannel& ch =
-            atom_.channels()[static_cast<std::size_t>(pick.channel)];
-        atom_.collapse_onto(engine_, ch.to);
-        flush_collapse_error(ch.to);
+        const ShellChannel& fin =
+            atom_.channels()[static_cast<std::size_t>(fired.back())];
+        atom_.collapse_onto(engine_, fin.to);
+        flush_collapse_error(fin.to);
         flash_ticks_ = kTrapFlashTicks;
-        ++photon_count_;
-        last_jump_ = strf("%s->%s", kTrapStates[ch.from].name,
-                          kTrapStates[ch.to].name);
-        std::fprintf(stderr, "trap decay: jump %s (photon #%lld, t=%.1f au)\n",
-                     last_jump_.c_str(), photon_count_,
-                     sim_.time() + gpu_time_);
+        for (const int c : fired) {
+            const ShellChannel& ch =
+                atom_.channels()[static_cast<std::size_t>(c)];
+            ++photon_count_;
+            last_jump_ = strf("%s->%s", kTrapStates[ch.from].name,
+                              kTrapStates[ch.to].name);
+            std::fprintf(stderr,
+                         "trap decay: jump %s (photon #%lld, t=%.1f au)\n",
+                         last_jump_.c_str(), photon_count_,
+                         sim_.time() + gpu_time_);
+        }
         title_dirty_ = true;
     }
 
