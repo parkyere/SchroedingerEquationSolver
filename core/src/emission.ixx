@@ -7,6 +7,7 @@ module;
 export module ses.emission;
 export import ses.decay;
 export import ses.field;
+import ses.harmonics;
 import ses.vec;
 import ses.grid;
 
@@ -111,6 +112,18 @@ inline std::vector<std::complex<double>> conditioned_amplitudes(
         }
     }
     return c;
+}
+
+// Angular dipole vectors <to|r|from> across ONE destination shell (fixed
+// l_to; the common radial integral is omitted -- it cancels in conditioning
+// and in direction sampling). Signs from tesseral_e1_axis.
+inline std::vector<DipoleMatrixElement> shell_dipole_vectors(
+    int l_from, int m_from, int l_to, const std::vector<int>& m_to) {
+    (void)l_from;
+    (void)m_from;
+    (void)l_to;
+    (void)m_to;
+    return {};  // stub (red)
 }
 
 // ---- photon streak display -----------------------------------------------
