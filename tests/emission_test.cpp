@@ -242,9 +242,31 @@ TEST(ShellDipoleVectors, ForbiddenShellIsAllZero) {
 // comoving phase (crests ride with the head), ~2 s wall flight, late fade.
 
 TEST(PhotonStreak, FlightConstantsMatchTheUserSpec) {
-    EXPECT_EQ(ses::kPhotonFlightTicks, 120);  // ~2 s at 60 fps
+    EXPECT_EQ(ses::kPhotonFlightTicks, 120);  // Lyman-alpha baseline: 2 s
     // Must exit the +-80 box even along the corner diagonal.
     EXPECT_GE(ses::kPhotonTravel, std::sqrt(3.0) * 80.0);
+}
+
+TEST(PhotonStreak, TravelAddsTheFourWavelengthTail) {
+    for (const double de : {0.375, 0.75, 0.0694}) {
+        EXPECT_DOUBLE_EQ(ses::photon_travel(de),
+                         ses::kPhotonTravel +
+                             ses::kPhotonTurns *
+                                 ses::photon_display_wavelength(de));
+    }
+}
+
+TEST(PhotonStreak, LymanAlphaTwoSecondsOthersSameDisplaySpeed) {
+    EXPECT_EQ(ses::photon_flight_frames(0.375), ses::kPhotonFlightTicks);
+    // Constant speed: frames scale with travel (round to whole frames).
+    for (const double de : {0.75, 0.486, 0.0694}) {
+        const double want = ses::kPhotonFlightTicks * ses::photon_travel(de) /
+                            ses::photon_travel(0.375);
+        EXPECT_NEAR(ses::photon_flight_frames(de), want, 0.51) << de;
+    }
+    // Softer than Lyman-alpha flies farther -> lives longer; harder shorter.
+    EXPECT_GT(ses::photon_flight_frames(0.0694), ses::kPhotonFlightTicks);
+    EXPECT_LT(ses::photon_flight_frames(0.75), ses::kPhotonFlightTicks);
 }
 
 TEST(PhotonStreak, WavelengthIsInverseInEnergy) {
@@ -266,14 +288,13 @@ TEST(PhotonStreak, AlphaHoldsThenFadesToZero) {
 }
 
 TEST(PhotonStreak, HelixTwistSenseFollowsHelicity) {
-    const double de = 0.375;  // lambda_display = 25 Bohr
-    const double k = 2.0 * 3.14159265358979323846 / 25.0;
+    const double de = 0.375;  // lambda_display = 25 Bohr, tail = 100
     for (const int lam : {+1, -1}) {
         const ses::PhotonRecord ph{Vec3d{0.0, 0.0, 1.0}, lam};
         const auto v = ses::photon_streak_vertices(ph, de, 0.5);
         ASSERT_EQ(v.size(),
                   static_cast<std::size_t>(ses::kPhotonStreakPoints));
-        const double sh = 0.5 * ses::kPhotonTravel;
+        const double sh = 0.5 * ses::photon_travel(de);
         const std::size_t body = v.size() - 1;
         double prev_s = -1.0;
         for (std::size_t i = 0; i < body; ++i) {
@@ -289,25 +310,22 @@ TEST(PhotonStreak, HelixTwistSenseFollowsHelicity) {
         EXPECT_NEAR(head.z, sh, 1e-9);
         EXPECT_NEAR(head.x, ses::kPhotonStreakRadius, 1e-9);
         EXPECT_NEAR(head.y, 0.0, 1e-9);
-        // ...and a quarter display-wavelength behind it sits at -lambda R y_hat.
-        for (std::size_t i = 0; i < body; ++i) {
-            if (std::abs(v[i].z - (sh - 25.0 / 4.0)) < 1e-6) {
-                EXPECT_NEAR(v[i].x, 0.0, 1e-9);
-                EXPECT_NEAR(v[i].y, -lam * ses::kPhotonStreakRadius, 1e-9);
-            }
-        }
+        // ...and the fully-unspooled tail start sits 4 whole turns behind:
+        // same phase, same +R x_hat transverse.
+        EXPECT_NEAR(v[0].z, sh - ses::kPhotonTurns * 25.0, 1e-9);
+        EXPECT_NEAR(v[0].x, ses::kPhotonStreakRadius, 1e-9);
+        EXPECT_NEAR(v[0].y, 0.0, 1e-9);
         // Twist sense: consecutive transverse vectors rotate with sign lam.
         for (std::size_t i = 0; i + 1 < body; ++i) {
             const double cross = v[i].x * v[i + 1].y - v[i].y * v[i + 1].x;
             EXPECT_GT(lam * cross, 0.0);
         }
-        (void)k;
     }
 }
 
 TEST(PhotonStreak, TipIsOnAxisAheadAndTailAnchorsAtTheNucleus) {
     const ses::PhotonRecord ph{Vec3d{0.0, 0.0, 1.0}, +1};
-    // Early flight: the tail is still anchored at the nucleus.
+    // Early flight (head < tail length): still anchored at the nucleus.
     const auto early = ses::photon_streak_vertices(ph, 0.375, 0.1);
     ASSERT_FALSE(early.empty());
     EXPECT_NEAR(early.front().z, 0.0, 1e-9);
@@ -317,10 +335,10 @@ TEST(PhotonStreak, TipIsOnAxisAheadAndTailAnchorsAtTheNucleus) {
     for (std::size_t i = 0; i + 1 < early.size(); ++i) {
         EXPECT_LT(early[i].z, tip.z);
     }
-    // Full flight reaches past the box.
+    // Full flight reaches past the wavelength-scaled travel.
     const auto done = ses::photon_streak_vertices(ph, 0.375, 1.0);
     ASSERT_FALSE(done.empty());
-    EXPECT_GE(done.back().z, ses::kPhotonTravel);
+    EXPECT_GE(done.back().z, ses::photon_travel(0.375));
 }
 
 TEST(PhotonSampling, CircularDipoleCorrelatesHelicityWithHemisphere) {
