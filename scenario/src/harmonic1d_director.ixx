@@ -70,7 +70,7 @@ public:
             const double mean_n =
                 ses::mean_energy(psi_, potential_) / omega_ - 0.5;
             if (mean_n >= static_cast<double>(cap)) {
-                note_ = strf("n = %d cap (%s)", cap,
+                note_ = strf("n = {} cap ({})", cap,
                              eigen ? "grid band" : "fock band");
                 title_dirty_ = true;
                 return false;
@@ -213,18 +213,18 @@ protected:
         const double e = ses::mean_energy(psi_, potential_);
         std::string s;
         if (level_ >= 0) {
-            s = strf("  w = %.2f  n = %d (cap %d)  <H> = %.3f eV "
-                     "((n+1/2)hw = %.3f eV)",
+            s = strf("  w = {:.2f}  n = {} (cap {})  <H> = {:.3f} eV "
+                     "((n+1/2)hw = {:.3f} eV)",
                      omega_, level_, cap_level_, e * kHaToEv,
                      (level_ + 0.5) * omega_ * kHaToEv);
         } else {
-            s = strf("  w = %.2f  superposition  <N> = %.2f  <H> = %.3f eV  "
-                     "Var(H) = %.1e",
+            s = strf("  w = {:.2f}  superposition  <N> = {:.2f}  <H> = {:.3f} eV  "
+                     "Var(H) = {:.1e}",
                      omega_, e / omega_ - 0.5, e * kHaToEv,
                      ses::energy_variance(psi_, potential_));
         }
         if (kappa_ > 0.0) {
-            s += strf("  kappa = %.2f  photons lost %lld", kappa_, jumps_);
+            s += strf("  kappa = {:.2f}  photons lost {}", kappa_, jumps_);
         }
         if (!note_.empty()) {
             s += "  [" + note_ + "]";
@@ -251,7 +251,7 @@ protected:
             }
         }
         if (flipped) {
-            note_ = strf("photon #%lld: parity flip", jumps_);
+            note_ = strf("photon #{}: parity flip", jumps_);
             classify();
         }
     }

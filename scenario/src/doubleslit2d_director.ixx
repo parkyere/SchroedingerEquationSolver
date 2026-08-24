@@ -228,9 +228,9 @@ public:
     std::string title_text() override {
         const double pi = std::numbers::pi;
         return strf(
-            "Electron double slit + Aharonov-Bohm (2D lattice)  |  t = %.1f "
-            "au (%dx%d, dt %.2g)  d = %.1f  w = %.1f  Phi = %.2f pi  "
-            "shot %d  T = %.1f%%  B = 0 on every electron path  "
+            "Electron double slit + Aharonov-Bohm (2D lattice)  |  t = {:.1f} "
+            "au ({}x{}, dt {:.2g})  d = {:.1f}  w = {:.1f}  Phi = {:.2f} pi  "
+            "shot {}  T = {:.1f}%  B = 0 on every electron path  "
             "keys: 2 fire electron",
             sim_time_, kDs2dNx, kDs2dNy, kDs2dDt, sep_, width_, flux_ / pi,
             shots_, 100.0 * transmitted_fraction());

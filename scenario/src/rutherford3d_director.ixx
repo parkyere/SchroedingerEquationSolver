@@ -97,9 +97,9 @@ protected:
     std::string title_suffix() override {
         const double v = std::sqrt(2.0 * energy_);
         const double eta = kRu3dZProj * z_ / v;
-        return strf("  Au(Z=%.0f) <- He++ (alpha; v=%.2f a.u., eta=%.1f ~ real "
-                    "5 MeV)  E = %.1f eV  r_min = %.1f bohr  closest <r> = %.1f "
-                    " backscatter %.2f",
+        return strf("  Au(Z={:.0f}) <- He++ (alpha; v={:.2f} a.u., eta={:.1f} ~ real "
+                    "5 MeV)  E = {:.1f} eV  r_min = {:.1f} bohr  closest <r> = {:.1f} "
+                    " backscatter {:.2f}",
                     z_, v, eta, energy_ * kBaseHaToEv, turning_point(),
                     r_min_seen_ < 1e8 ? r_min_seen_ : 0.0, back_);
     }

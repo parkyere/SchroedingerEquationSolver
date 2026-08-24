@@ -358,18 +358,18 @@ public:
     std::string title_text() override {
         const double t_au = sim_.time() + gpu_time_;
         std::string s = scene_name() + std::string("   t = ") +
-                        strf("%.2f au (%.3f fs)", t_au, t_au * kBaseAuToFs) + "   ";
+                        strf("{:.2f} au ({:.3f} fs)", t_au, t_au * kBaseAuToFs) + "   ";
         if (stepping_ != BaseStepping::RealTime) {
             s += cpu_is_truth_
-                     ? strf("E = %.3f eV   ",
+                     ? strf("E = {:.3f} eV   ",
                             ses::mean_energy(sim_.psi(), sim_.potential()) *
                                 kBaseHaToEv)
-                     : strf("E ~ %.3f eV   ", relax_energy_display_ * kBaseHaToEv);
+                     : strf("E ~ {:.3f} eV   ", relax_energy_display_ * kBaseHaToEv);
         }
         if (stepping_ == BaseStepping::RealTime && use_gpu_path()) {
-            s += strf("emit P = %.2e au   ", radiated_power_);
+            s += strf("emit P = {:.2e} au   ", radiated_power_);
         }
-        s += strf("norm = %.6f   [%s, %s, %s]  1=real 2=relax R=reset tab=view "
+        s += strf("norm = {:.6f}   [{}, {}, {}]  1=real 2=relax R=reset tab=view "
                   "[ ]=density M=pos",
                   norm_display_,
                   mode_ == BaseViewMode::Cloud ? "cloud" : "surface",
@@ -462,10 +462,9 @@ protected:
             if (std::norm(c) < 1e-9) {
                 continue;
             }
-            const int buf = atom.synth_transient(engine_, s);
-            if (buf >= 0) {
-                engine_.add_state_into_psi(buf, -c.real(), -c.imag());
-                engine_.release_state(buf);
+            const TransientState buf(atom, engine_, s);
+            if (buf) {
+                engine_.add_state_into_psi(buf.get(), -c.real(), -c.imag());
             }
         }
         const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
@@ -510,20 +509,19 @@ protected:
             if (std::norm(c[i]) < 1e-18) {
                 continue;
             }
-            const int buf = atom.synth_transient(engine_, states[i]);
-            if (buf < 0) {
+            const TransientState buf(atom, engine_, states[i]);
+            if (!buf) {
                 continue;
             }
             if (!anchored) {
                 phase = std::conj(c[i]) / std::abs(c[i]);
-                engine_.copy_into_psi(buf);
+                engine_.copy_into_psi(buf.get());
                 engine_.scale(static_cast<float>(std::abs(c[i])));
                 anchored = true;
             } else {
                 const std::complex<double> z = c[i] * phase;
-                engine_.add_state_into_psi(buf, z.real(), z.imag());
+                engine_.add_state_into_psi(buf.get(), z.real(), z.imag());
             }
-            engine_.release_state(buf);
         }
         if (!anchored) {
             return false;

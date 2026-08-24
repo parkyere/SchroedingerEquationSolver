@@ -103,8 +103,8 @@ public:
     std::string title_text() override {
         const double t_rev = revival_time();
         return strf(
-            "Quantum carpet (free ring, temporal Talbot)  |  t = %.0f au  "
-            "t/T_rev = %.2f  |<psi0|psi>|^2 = %.2f  T_rev = L^2/pi = %.0f "
+            "Quantum carpet (free ring, temporal Talbot)  |  t = {:.0f} au  "
+            "t/T_rev = {:.2f}  |<psi0|psi>|^2 = {:.2f}  T_rev = L^2/pi = {:.0f} "
             "au  keys: 2 refire",
             sim_time_, t_rev > 0.0 ? sim_time_ / t_rev : 0.0,
             revival_overlap(), t_rev);

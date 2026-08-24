@@ -477,20 +477,20 @@ protected:
 
     std::string title_suffix() override {
         const double rep = nuclear_repulsion();
-        std::string s = strf("  R = %.3f Bohr (fixed nuclei)", snap_r(param_));
+        std::string s = strf("  R = {:.3f} Bohr (fixed nuclei)", snap_r(param_));
         if (!atlas_.empty()) {
-            s += strf("  E_total(1sigma_g) = %.2f eV",
+            s += strf("  E_total(1sigma_g) = {:.2f} eV",
                       (atlas_[0].orb.energy + rep) * kBaseHaToEv);
         }
         if (showing_random_) {
             s += "  showing: random atlas superposition";
         } else if (cur_ >= 0 && cur_ < static_cast<int>(atlas_.size())) {
-            s += strf("  showing %s: E_elec = %.2f eV",
+            s += strf("  showing {}: E_elec = {:.2f} eV",
                       atlas_[static_cast<std::size_t>(cur_)].label.c_str(),
                       atlas_[static_cast<std::size_t>(cur_)].orb.energy *
                           kBaseHaToEv);
         }
-        s += strf("  (%d known orbitals)  keys: 2.. orbitals / S random",
+        s += strf("  ({} known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
         return s;
     }
@@ -567,7 +567,7 @@ private:
         const char* g = o.parity > 0 ? "g" : "u";
         const char* sym = o.m == 0 ? "sigma" : (o.m == 1 ? "pi" : "delta");
         // principal-ish index within the (m,parity) tower
-        std::string s = strf("%d%s_%s%s", o.n_xi + o.n_eta + o.m + 1, sym, g,
+        std::string s = strf("{}{}_{}{}", o.n_xi + o.n_eta + o.m + 1, sym, g,
                              o.parity < 0 && o.m == 0 ? "*" : "");
         if (o.m > 0) {
             s += partner == 0 ? " (y)" : " (z)";
@@ -696,13 +696,13 @@ protected:
     std::string title_suffix() override {
         std::string s{"  uniform ring (the X-ray geometry)"};
         if (prepared_[0]) {
-            s += strf("  E0 = %.2f eV", e_[0] * kBaseHaToEv);
+            s += strf("  E0 = {:.2f} eV", e_[0] * kBaseHaToEv);
         }
         if (prepared_[1]) {
-            s += strf("  E1 = %.2f eV", e_[1] * kBaseHaToEv);
+            s += strf("  E1 = {:.2f} eV", e_[1] * kBaseHaToEv);
         }
         if (prepared_[2]) {
-            s += strf("  E2 = %.2f eV (quasi-degenerate carbon-core band)",
+            s += strf("  E2 = {:.2f} eV (quasi-degenerate carbon-core band)",
                       e_[2] * kBaseHaToEv);
         }
         s += "  BARE nuclei: 6 C (Z=6) + 6 H (Z=1), regularized cells, "

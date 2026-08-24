@@ -50,9 +50,6 @@ public:
     const StateSpec& spec(int i) const {
         return spec_[static_cast<std::size_t>(i)];
     }
-    const StateSpec& state_spec(int idx) const {
-        return spec_[static_cast<std::size_t>(idx)];
-    }
 
     // Hydrogen: bare -1/r manifold + a free-atom E1 lifetime table (to stderr).
     void solve_radial_atom(double r_box) {
@@ -160,6 +157,8 @@ public:
                    radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m)) /
                n2;
     }
+
+    // (TransientState below scopes synth_transient/release_state pairs.)
 
     // Overwrites psi with the on-demand normalized orbital idx (collapse).
     void collapse_onto(ses_vk::Engine& engine, int idx) {
@@ -404,6 +403,29 @@ private:
     std::vector<ShellChannel> channels_;
     double accel_display_ = 0.0;
     double dipole_z_ = 0.0;  // |<2p_z| z |1s>|, the laser drive strength
+};
+
+// Scoped transient state: synthesized on construction, released on scope
+// exit -- an early return between use and release cannot leak the VRAM slot.
+class TransientState {
+public:
+    TransientState(AtomModel& atom, ses_vk::Engine& engine, int idx,
+                   double* out_peak = nullptr)
+        : engine_(&engine),
+          buf_(atom.synth_transient(engine, idx, out_peak)) {}
+    TransientState(const TransientState&) = delete;
+    TransientState& operator=(const TransientState&) = delete;
+    ~TransientState() {
+        if (buf_ >= 0) {
+            engine_->release_state(buf_);
+        }
+    }
+    explicit operator bool() const { return buf_ >= 0; }
+    int get() const { return buf_; }
+
+private:
+    ses_vk::Engine* engine_;
+    int buf_;
 };
 
 }  // namespace ses_shell

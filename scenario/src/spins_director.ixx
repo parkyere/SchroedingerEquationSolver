@@ -298,7 +298,7 @@ public:
                 ++plus;
             }
         }
-        note_ = strf("measured: %d/%d aligned", plus, kSlN * kSlN);
+        note_ = strf("measured: {}/{} aligned", plus, kSlN * kSlN);
         display_changed_ = true;
         title_dirty_ = true;
     }
@@ -357,8 +357,8 @@ public:
 
     std::string title_text() override {
         std::string s = strf(
-            "16 interacting spins [%s]  |  t = %.1f au  J = %+.2f  "
-            "alpha = %.2f%s  |M| = %.2f  Neel = %.2f  mean |<s>| = %.2f",
+            "16 interacting spins [{}]  |  t = {:.1f} au  J = {:+.2f}  "
+            "alpha = {:.2f}{}  |M| = {:.2f}  Neel = {:.2f}  mean |<s>| = {:.2f}",
             exact_mode_ ? (gpu_ready_ ? "EXACT 2^16 Heisenberg (GPU)"
                                       : "EXACT 2^16 Heisenberg (CPU)")
                         : "mean-field, no entanglement",

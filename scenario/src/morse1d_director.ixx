@@ -108,10 +108,10 @@ protected:
         std::string s;
         if (level_ >= 0) {
             const double e = bound_[static_cast<std::size_t>(level_)].energy;
-            s = strf("  n = %d/%d  E = %.3f eV (D = %.2f eV)", level_,
+            s = strf("  n = {}/{}  E = {:.3f} eV (D = {:.2f} eV)", level_,
                      bound_count() - 1, e * kHaToEv, kMo1dD * kHaToEv);
             if (level_ + 1 < bound_count()) {
-                s += strf("  gap up = %.3f eV",
+                s += strf("  gap up = {:.3f} eV",
                           (bound_[static_cast<std::size_t>(level_ + 1)].energy -
                            e) * kHaToEv);
             }
@@ -119,7 +119,7 @@ protected:
             const double gap =
                 bound_[static_cast<std::size_t>(base_ + 1)].energy -
                 bound_[static_cast<std::size_t>(base_)].energy;
-            s = strf("  pair (%d, %d)  beat T = 2pi/gap = %.0f au (slows "
+            s = strf("  pair ({}, {})  beat T = 2pi/gap = {:.0f} au (slows "
                      "up the ladder)",
                      base_, base_ + 1, 2.0 * std::numbers::pi / gap);
         }

@@ -171,8 +171,8 @@ public:
 
     std::string title_text() override {
         return strf(
-            "Quantum point contact  |  t = %.1f au  gap = %.1f "
-            "(lambda/2 = %.2f, channels %d)  transmitted %.1f%%  "
+            "Quantum point contact  |  t = {:.1f} au  gap = {:.1f} "
+            "(lambda/2 = {:.2f}, channels {})  transmitted {:.1f}%  "
             "keys: 2 fire",
             sim_time_, gap_, std::numbers::pi / kQp2dK0,
             open_channels(), 100.0 * transmitted_);

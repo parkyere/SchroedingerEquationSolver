@@ -261,9 +261,9 @@ public:
     std::string title_text() override {
         const double pi = std::numbers::pi;
         return strf(
-            "Landau levels / cyclotron (2D lattice, uniform B)  |  t = %.1f "
-            "au  B = %.2f  k0 = %.2f  r = %.2f (pred %.2f)  T = %.1f  "
-            "<n> = %.1f  keys: 2 refire / 3 up / 4 down",
+            "Landau levels / cyclotron (2D lattice, uniform B)  |  t = {:.1f} "
+            "au  B = {:.2f}  k0 = {:.2f}  r = {:.2f} (pred {:.2f})  T = {:.1f}  "
+            "<n> = {:.1f}  keys: 2 refire / 3 up / 4 down",
             sim_time_, b_, k0_,
             std::hypot(mean_[0] - center_[0], mean_[1] - center_[1]),
             radius_pred(), 2.0 * pi / b_, mean_n());

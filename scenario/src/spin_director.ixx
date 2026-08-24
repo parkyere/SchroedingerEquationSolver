@@ -142,7 +142,7 @@ public:
             plus += ses::spin_measure(s, nx, ny, nz, uni(rng_)) > 0 ? 1 : 0;
         }
         outcome_ = 2 * plus - static_cast<int>(ens_.size());
-        note_ = strf("measured: %d of %d aligned with B", plus,
+        note_ = strf("measured: {} of {} aligned with B", plus,
                      static_cast<int>(ens_.size()));
         echo_stage_ = 0;
         title_dirty_ = true;
@@ -213,12 +213,12 @@ public:
 
     std::string title_text() override {
         std::string s = strf(
-            "Electron spin (Bloch sphere)  |  t = %.1f au  |B| = %.2f "
-            "(omega_L = |B|)  <s> = (%+.2f, %+.2f, %+.2f)  spins %d",
+            "Electron spin (Bloch sphere)  |  t = {:.1f} au  |B| = {:.2f} "
+            "(omega_L = |B|)  <s> = ({:+.2f}, {:+.2f}, {:+.2f})  spins {}",
             sim_time_, bmag(), mean_[0], mean_[1], mean_[2],
             static_cast<int>(ens_.size()));
         if (rf_on_) {
-            s += strf("  RF ON (Omega_R = %.2f)", kSpRfB1);
+            s += strf("  RF ON (Omega_R = {:.2f})", kSpRfB1);
         }
         if (std::abs(e_[0]) + std::abs(e_[1]) + std::abs(e_[2]) > 1e-9) {
             s += "  [E: global phase only on a pinned spin]";
@@ -322,7 +322,7 @@ private:
                     measure_mean();
                     echo_peak_ = std::hypot(mean_[0], mean_[1]);
                     echo_stage_ = 0;
-                    note_ = strf("ECHO |m_xy| = %.2f", echo_peak_);
+                    note_ = strf("ECHO |m_xy| = {:.2f}", echo_peak_);
                 }
                 title_dirty_ = true;
             }

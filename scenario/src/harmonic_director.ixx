@@ -92,17 +92,17 @@ protected:
     double default_camera_distance() const override { return 45.0; }
 
     std::string title_suffix() override {
-        std::string s = strf("  w = %.2f au (T = %.1f au, E0 = %.2f eV)",
+        std::string s = strf("  w = {:.2f} au (T = {:.1f} au, E0 = {:.2f} eV)",
                              kTrapOmega, (2.0 * std::numbers::pi) / kTrapOmega,
                              1.5 * kTrapOmega * kBaseHaToEv);
         if (decay_on_) {
-            s += strf("  decay ON: photons %lld", photon_count_);
+            s += strf("  decay ON: photons {}", photon_count_);
             if (!last_jump_.empty()) {
-                s += strf(", last %s", last_jump_.c_str());
+                s += strf(", last {}", last_jump_.c_str());
             }
         }
         if (!last_measure_.empty()) {
-            s += strf("  measured %s", last_measure_.c_str());
+            s += strf("  measured {}", last_measure_.c_str());
         }
         s += "  5=excite D=decay E=measure";
         return s;
@@ -118,7 +118,7 @@ protected:
         if (n >= 0) {
             flush_collapse_error(n);
             write_display_texture();
-            last_measure_ = strf("%s (E = %.2f eV)", kTrapStates[n].name,
+            last_measure_ = strf("{} (E = {:.2f} eV)", kTrapStates[n].name,
                                  atom_.state_energy(n) * kBaseHaToEv);
         } else {
             // Deficit = untracked bound ladder (N > 3), not continuum.
@@ -202,7 +202,7 @@ protected:
             photon_streaks_.spawn(rec, kTrapOmega);  // every photon = hbar*w
             ++jumps;
             ++photon_count_;
-            last_jump_ = strf("hw -> %s", kTrapStates[dom].name);
+            last_jump_ = strf("hw -> {}", kTrapStates[dom].name);
             std::fprintf(
                 stderr,
                 "trap decay: collective jump -> %s (photon #%lld, t=%.1f au)\n",

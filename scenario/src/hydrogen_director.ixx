@@ -227,7 +227,7 @@ public:
                     flush_collapse_error(n);
                     write_display_texture();
                     last_measure_ = strf(
-                        "%s (E %.3f eV)",
+                        "{} (E {:.3f} eV)",
                         kStateSpec[static_cast<std::size_t>(n)].name,
                         atom_.state_energy(n) * kHaToEv);
                 } else {
@@ -689,14 +689,14 @@ public:
         // While relaxing: exact <H> on CPU, or the free ITP estimator on GPU.
         const double t_au = sim_.time() + gpu_time_;
         std::string s = "Electron near a hydrogen nucleus   t = " +
-                        strf("%.2f au (%.3f fs)", t_au, t_au * kAuToFs) + "   ";
+                        strf("{:.2f} au ({:.3f} fs)", t_au, t_au * kAuToFs) + "   ";
         if (stepping_ != BaseStepping::RealTime) {
             s += cpu_is_truth_
-                     ? strf("E = %.3f eV   ",
+                     ? strf("E = {:.3f} eV   ",
                             ses::mean_energy(sim_.psi(), sim_.potential()) * kHaToEv)
-                     : strf("E ~ %.3f eV   ", relax_energy_display_ * kHaToEv);
+                     : strf("E ~ {:.3f} eV   ", relax_energy_display_ * kHaToEv);
         }
-        s += strf("norm = %.6f   [%s, %s, %s]  1=real 2=relax R=reset tab=view "
+        s += strf("norm = {:.6f}   [{}, {}, {}]  1=real 2=relax R=reset tab=view "
                   "[ ]=density M=pos E=energy",
                   norm_display_,
                   mode_ == BaseViewMode::Cloud ? "cloud" : "surface",
@@ -704,45 +704,45 @@ public:
                       ? "real-time"
                       : (stepping_ == BaseStepping::Relaxing
                              ? "relaxing->1s"
-                             : strf("relaxing->%s", relax_label_.c_str()).c_str()),
+                             : strf("relaxing->{}", relax_label_.c_str()).c_str()),
                   use_gpu_path() ? "gpu 256^3" : "cpu 256^3");
         if (stepping_ == BaseStepping::RealTime && !solving()) {
-            s += strf("  emit P = %.2e au", radiated_power_);
+            s += strf("  emit P = {:.2e} au", radiated_power_);
         }
         if (solving() && !synth_queue_.empty()) {
-            s += strf("  solving atom: %s (%d/%d)",
+            s += strf("  solving atom: {} ({}/{})",
                       kStateSpec[synth_queue_.front()].name,
                       kNumStates - static_cast<int>(synth_queue_.size()) + 1,
                       kNumStates);
         }
         if (decay_on_ && !atom_.channels().empty()) {
-            s += strf("  decay ON: tau(2p) %.2e au, tau(2s) %.2e au, x%.1e, photons %lld",
+            s += strf("  decay ON: tau(2p) {:.2e} au, tau(2s) {:.2e} au, x{:.1e}, photons {}",
                       atom_.lifetime_of(kP2Z), atom_.lifetime_of(kS2),
                       atom_.accel_display(), photon_count_);
             if (!last_jump_.empty()) {
-                s += strf(", last %s", last_jump_.c_str());
+                s += strf(", last {}", last_jump_.c_str());
             }
         }
         if (laser_pol_ != LaserPol::Off) {
-            s += strf("  laser %s: w %.4f, E0 %.4f, P(1s) %.3f, P(2pz) %.3f",
+            s += strf("  laser {}: w {:.4f}, E0 {:.4f}, P(1s) {:.3f}, P(2pz) {:.3f}",
                       laser_pol_ == LaserPol::Z ? "Z" : "X", laser_omega_,
                       laser_e0_, pop_ground_, pop_excited_);
         }
         if (fields_.e_active() && laser_pol_ == LaserPol::Off) {
-            s += strf("  E-field %s: %+.4f au (%.2e V/m)",
+            s += strf("  E-field {}: {:+.4f} au ({:.2e} V/m)",
                       FieldControl::axis_name(fields_.e_axis), fields_.e0,
                       fields_.e0 * 5.14220674e11);
         }
         if (fields_.b_active()) {
-            s += strf("  B-field %s: %+.4f au, omega_L %.4f au (psi evolved)",
+            s += strf("  B-field {}: {:+.4f} au, omega_L {:.4f} au (psi evolved)",
                       FieldControl::axis_name(fields_.b_axis), fields_.b,
                       0.5 * fields_.b);
         }
         if (absorber_on_ && 1.0 - bound_survival_ > 5e-4) {
-            s += strf("  ionized %.1f%%", (1.0 - bound_survival_) * 100.0);
+            s += strf("  ionized {:.1f}%", (1.0 - bound_survival_) * 100.0);
         }
         if (!last_measure_.empty()) {
-            s += strf("  measured %s", last_measure_.c_str());
+            s += strf("  measured {}", last_measure_.c_str());
         }
         return s;
     }
@@ -860,13 +860,13 @@ private:
         const double p_key = prob[static_cast<std::size_t>(key)];
         if (basis == PartialBasis::NShell) {
             last_partial_outcome_ = key + 1;
-            last_measure_ = strf("n=%d shell (P %.2f)", key + 1, p_key);
+            last_measure_ = strf("n={} shell (P {:.2f})", key + 1, p_key);
         } else if (basis == PartialBasis::LTotal) {
             last_partial_outcome_ = key;
-            last_measure_ = strf("l=%d (P %.2f)", key, p_key);
+            last_measure_ = strf("l={} (P {:.2f})", key, p_key);
         } else {
             last_partial_outcome_ = key - 5;
-            last_measure_ = strf("m=%+d (P %.2f)", key - 5, p_key);
+            last_measure_ = strf("m={:+} (P {:.2f})", key - 5, p_key);
         }
     }
 
@@ -1108,7 +1108,7 @@ private:
                         spectro_ev_.push_back((atom_.state_energy(ch.from) -
                                                atom_.state_energy(ch.to)) *
                                               kHaToEv);
-                        last_jump_ = strf("%s->%s", kStateSpec[ch.from].name,
+                        last_jump_ = strf("{}->{}", kStateSpec[ch.from].name,
                                           kStateSpec[ch.to].name);
                         std::fprintf(stderr,
                                      "decay: jump %s (photon #%lld, t=%.1f au)\n",
@@ -1308,12 +1308,12 @@ private:
             // Synthesize into a TRANSIENT fp32 buffer: capture norm, SHOW
             // (montage), audit, then FREE -- one orbital resident at a time.
             double pk = 0.0;
-            const int buf = atom_.synth_transient(engine_, idx, &pk);
-            if (buf < 0) {
+            const TransientState buf(atom_, engine_, idx, &pk);
+            if (!buf) {
                 atlas_done_ = true;  // GPU buffer alloc failed: give up gracefully
                 return;
             }
-            engine_.copy_into_psi(buf);  // show (fp32)
+            engine_.copy_into_psi(buf.get());  // show (fp32)
             // h-audit: cross-check 1D radial energy vs 3D spectral <H> for the
             // resolution-critical 1s and box-critical 4s/5s/6s -- the only CPU
             // readbacks.
@@ -1340,7 +1340,6 @@ private:
                 std::fprintf(stderr, "atlas: %-8s E_radial = %.6f Ha\n",
                              kStateSpec[idx].name, atom_.state_energy(idx));
             }
-            engine_.release_state(buf);  // TRANSIENT: freed after show + audit
             if (pk > 0.0) {
                 peak_ = pk;
             }

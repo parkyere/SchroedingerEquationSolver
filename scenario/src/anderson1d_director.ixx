@@ -119,8 +119,8 @@ protected:
 
     std::string title_suffix() override {
         return strf(
-            "  W = %.2f eV (E = %.2f eV)  seed %u  transmitted %.1f%%  "
-            "on stage %.1f%%  keys: 2 refire / 5 new landscape",
+            "  W = {:.2f} eV (E = {:.2f} eV)  seed {}  transmitted {:.1f}%  "
+            "on stage {:.1f}%  keys: 2 refire / 5 new landscape",
             w_ * kHaToEv, 0.5 * kAn1dK0 * kAn1dK0 * kHaToEv, seed_,
             100.0 * transmitted_, 100.0 * survived_);
     }

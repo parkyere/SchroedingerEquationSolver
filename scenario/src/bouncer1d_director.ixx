@@ -121,8 +121,8 @@ protected:
 
     std::string title_suffix() override {
         return strf(
-            "  g = %.1f  <H> = %.3f eV  Airy E1 = %.3f eV (soft floor "
-            "~ -8.16 eV)  T_bounce = %.1f au  keys: 2 ground / "
+            "  g = {:.1f}  <H> = {:.3f} eV  Airy E1 = {:.3f} eV (soft floor "
+            "~ -8.16 eV)  T_bounce = {:.1f} au  keys: 2 ground / "
             "F drop",
             kBo1dGrav, energy() * kHaToEv, airy_e1() * kHaToEv,
             2.0 * std::sqrt(2.0 * kBo1dDropZ / kBo1dGrav));

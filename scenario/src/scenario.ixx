@@ -4,7 +4,8 @@ module;
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cstdarg>
+#include <format>
+#include <utility>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -371,15 +372,11 @@ struct RutherfordApi {
 inline constexpr double kHaToEv = 27.211386;
 inline constexpr double kAuToFs = 2.4188843e-2;
 
-// printf-into-std::string: the director title/readout helper (one copy; the
-// eight per-class statics it replaces were byte-identical).
-inline std::string strf(const char* fmt, ...) {
-    char buf[512];  // the 1D scenes' long titles need the headroom
-    va_list args;
-    va_start(args, fmt);
-    std::vsnprintf(buf, sizeof buf, fmt, args);
-    va_end(args);
-    return std::string{buf};
+// Director title/readout formatter: std::format with a compile-time checked
+// format string (no truncation, no varargs type holes).
+template <class... Args>
+inline std::string strf(std::format_string<Args...> fmt, Args&&... args) {
+    return std::format(fmt, std::forward<Args>(args)...);
 }
 
 // Pacing invariants shared by every director (the sticky-x16 contract):

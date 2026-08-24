@@ -184,8 +184,8 @@ public:
 
     std::string title_text() override {
         return strf(
-            "Quantum billiard (%s)  |  t = %.1f au  view %s  "
-            "center/interior = %.2f  keys: 2 fire / 5 shape / A average",
+            "Quantum billiard ({})  |  t = {:.1f} au  view {}  "
+            "center/interior = {:.2f}  keys: 2 fire / 5 shape / A average",
             stadium_ ? "Bunimovich stadium, CHAOTIC"
                      : "circle, integrable",
             sim_time_, avg_view_ ? "TIME AVERAGE (scar lens)" : "live",

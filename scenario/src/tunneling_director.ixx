@@ -43,8 +43,8 @@ protected:
     double default_camera_elevation() const override { return 0.22; }
 
     std::string title_suffix() override {
-        return strf("  V0 = %.2f eV, E = %.2f eV (forbidden)  P(x<%.0f) %.3f | "
-                    "P(x>%.0f) %.3f (max T %.3f)",
+        return strf("  V0 = {:.2f} eV, E = {:.2f} eV (forbidden)  P(x<{:.0f}) {:.3f} | "
+                    "P(x>{:.0f}) {:.3f} (max T {:.3f})",
                     kTunnelV0 * kBaseHaToEv,
                     0.5 * kTunnelK0 * kTunnelK0 * kBaseHaToEv, kTunnelXLo,
                     p_left_, kTunnelXHi, p_right_, t_max_);

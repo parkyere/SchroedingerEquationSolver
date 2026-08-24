@@ -116,7 +116,7 @@ public:
     const ses::Mesh& mesh() const override { return no_mesh_; }
     const std::vector<ses::Rgb>& colors() const override { return no_colors_; }
     std::string title_text() override {
-        return strf("%s  |  t = %.1f au (dt %.3g, %d pts)%s", scene_name(),
+        return strf("{}  |  t = {:.1f} au (dt {:.3g}, {} pts){}", scene_name(),
                     sim_time_, dt_, grid1d_.n, title_suffix().c_str());
     }
 

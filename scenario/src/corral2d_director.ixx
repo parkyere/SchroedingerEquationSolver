@@ -233,11 +233,11 @@ public:
 
     std::string title_text() override {
         std::string s = strf(
-            "Quantum corral (48 adatoms, IBM 1993)  |  t = %.1f au  "
-            "R = %.1f  states %d",
+            "Quantum corral (48 adatoms, IBM 1993)  |  t = {:.1f} au  "
+            "R = {:.1f}  states {}",
             sim_time_, radius_, captured());
         for (std::size_t k = 0; k < energies_.size(); ++k) {
-            s += strf("  E%zu = %.3f eV", k, energies_[k] * kHaToEv);
+            s += strf("  E{} = {:.3f} eV", k, energies_[k] * kHaToEv);
         }
         if (relaxing_) {
             s += "  [relaxing...]";

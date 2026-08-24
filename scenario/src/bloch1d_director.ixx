@@ -112,12 +112,12 @@ protected:
 
     std::string title_suffix() override {
         std::string s = strf(
-            "  V0 = %.2f eV (E_R = %.2f eV)  F = %.3f  q = %+.2f kL  <x> = %+.1f "
-            "(max |dx| %.1f)",
+            "  V0 = {:.2f} eV (E_R = {:.2f} eV)  F = {:.3f}  q = {:+.2f} kL  <x> = {:+.1f} "
+            "(max |dx| {:.1f})",
             v0_ * kHaToEv, 0.5 * kBl1dKl * kBl1dKl * kHaToEv, force_,
             quasimomentum() / kBl1dKl, mean_x_, excursion_);
         if (force_ > 0.0) {
-            s += strf("  T_Bloch = %.0f au", bloch_period());
+            s += strf("  T_Bloch = {:.0f} au", bloch_period());
         }
         s += "  keys: 2 refire";
         return s;

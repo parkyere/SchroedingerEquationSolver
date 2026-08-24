@@ -62,8 +62,8 @@ protected:
     int steps_per_tick() const override { return 2; }
 
     std::string title_suffix() override {
-        return strf("  Vb = %.2f eV  dE = %.2e eV  transfer T = pi/dE = %.0f "
-                    "au  P_L = %.3f | P_R = %.3f",
+        return strf("  Vb = {:.2f} eV  dE = {:.2e} eV  transfer T = pi/dE = {:.0f} "
+                    "au  P_L = {:.3f} | P_R = {:.3f}",
                     vb_ * kHaToEv, de_ * kHaToEv, std::numbers::pi / de_,
                     p_left_, p_right_);
     }

@@ -306,8 +306,8 @@ public:
 
     std::string title_text() override {
         std::string s = strf(
-            "2D quantum dot (Fock-Darwin)  |  t = %.1f au  w0 = %.2f  "
-            "B = %.2f  E = %.3f eV (hbar*Omega = %.3f eV)",
+            "2D quantum dot (Fock-Darwin)  |  t = {:.1f} au  w0 = {:.2f}  "
+            "B = {:.2f}  E = {:.3f} eV (hbar*Omega = {:.3f} eV)",
             sim_time_, w0_, b_, energy_meas() * kHaToEv,
             energy_pred() * kHaToEv);
         if (relaxing_) {
