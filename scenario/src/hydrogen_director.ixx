@@ -1062,58 +1062,64 @@ private:
             engine_.project_psi();
         }
 
-        // Competing-channel trials on the TITLE cadence: chained first-arrival
-        // sampling keeps cascade statistics exact for ANY accumulated trial_dt
-        // (single-jump trials defer in-interval cascade hops; the error grows
-        // with time_scale). psi collapses ONCE onto the chain's final state.
+        // Frequency-resolved collective trials on the TITLE cadence
+        // (ses::collective_decay_interval): each photon's frequency GROUP is
+        // the environment's energy measurement; within a group the collapse
+        // is the coherent (n, lambda)-conditioned superposition, and chains
+        // re-condition analytically inside the interval.
         if (decay_on_ && !atom_.channels().empty()) {
             decay_accum_dt_ += pending_gpu_steps_ * sim_.dt();
             if (gpu_title_due_) {
+                std::vector<std::complex<double>> amps(
+                    static_cast<std::size_t>(kNumStates));
                 std::array<double, kNumStates> pop{};
                 for (int s = 1; s < kNumStates; ++s) {
-                    pop[s] = atom_.project_population(engine_, s);
+                    amps[static_cast<std::size_t>(s)] =
+                        atom_.project_state_amplitude(engine_, s);
+                    pop[static_cast<std::size_t>(s)] =
+                        std::norm(amps[static_cast<std::size_t>(s)]);
                 }
-                std::vector<ses::RateChannel> rate_ch(atom_.channels().size());
-                for (std::size_t c = 0; c < atom_.channels().size(); ++c) {
-                    const ShellChannel& sc = atom_.channels()[c];
-                    rate_ch[c] =
-                        ses::RateChannel{sc.from, sc.to, sc.gamma_display};
-                }
+                const std::vector<ses::FreqGroup> groups = ses::group_by_gap(
+                    atom_.grouped_channels(), ses::kFreqGroupTol);
                 std::uniform_real_distribution<double> uniform(0.0, 1.0);
                 const double trial_dt = decay_accum_dt_;
-                const std::vector<int> fired = ses::chain_decay_jumps(
-                    rate_ch, std::vector<double>(pop.begin(), pop.end()),
-                    trial_dt, [&] { return uniform(rng_); });
                 decay_accum_dt_ = 0.0;
-                if (!fired.empty()) {
-                    const ShellChannel& fin = atom_.channels()
-                        [static_cast<std::size_t>(fired.back())];
-                    // (n, lambda) record + conditioned shell collapse
-                    // (base helper; angular momentum bookkeeping).
-                    const ses::PhotonRecord rec =
-                        conditioned_jump_collapse(atom_, fin);
+                const ses::IntervalResult res = ses::collective_decay_interval(
+                    groups, std::move(amps), trial_dt,
+                    [&] { return uniform(rng_); });
+                if (!res.jumps.empty()) {
+                    std::vector<int> states;
+                    std::vector<std::complex<double>> cs;
+                    for (int s = 0; s < kNumStates; ++s) {
+                        if (std::norm(res.c[static_cast<std::size_t>(s)]) >
+                            1e-18) {
+                            states.push_back(s);
+                            cs.push_back(res.c[static_cast<std::size_t>(s)]);
+                        }
+                    }
+                    const int dom = res.jumps.back().dominant_to;
+                    if (!superpose_into_psi(atom_, states, cs) && dom >= 0) {
+                        atom_.collapse_onto(engine_, dom);  // guard fallback
+                    }
                     reset_ionized_tally();  // BEFORE the flush: its renorm
                                             // must not read as ionization
-                    flush_collapse_error(fin.to);
+                    flush_collapse_error(dom >= 0 ? dom : kS1);
                     flash_ticks_ = kFlashTicks;
-                    const double gap_e = atom_.state_energy(fin.from) -
-                                         atom_.state_energy(fin.to);
-                    photon_streaks_.spawn(rec, gap_e);
-                    for (const int c : fired) {
-                        const ShellChannel& ch =
-                            atom_.channels()[static_cast<std::size_t>(c)];
+                    for (const ses::IntervalJump& j : res.jumps) {
                         ++photon_count_;
                         // Spectrometer record: the photon carried exactly the
-                        // level gap.
-                        spectro_ev_.push_back((atom_.state_energy(ch.from) -
-                                               atom_.state_energy(ch.to)) *
-                                              kHaToEv);
-                        last_jump_ = strf("{}->{}", kStateSpec[ch.from].name,
-                                          kStateSpec[ch.to].name);
-                        std::fprintf(stderr,
-                                     "decay: jump %s (photon #%lld, t=%.1f au)\n",
-                                     last_jump_.c_str(), photon_count_,
-                                     sim_.time() + gpu_time_);
+                        // group's line energy.
+                        spectro_ev_.push_back(j.gap_e * kHaToEv);
+                        photon_streaks_.spawn(j.rec, j.gap_e);
+                        last_jump_ = strf(
+                            "{:.2f} eV -> {}", j.gap_e * kHaToEv,
+                            kStateSpec[static_cast<std::size_t>(
+                                           j.dominant_to)].name);
+                        std::fprintf(
+                            stderr,
+                            "decay: jump %s (photon #%lld, t=%.1f au)\n",
+                            last_jump_.c_str(), photon_count_,
+                            sim_.time() + gpu_time_);
                     }
                     title_dirty_ = true;
                 } else if (mcwf_damping_ && laser_pol_ == LaserPol::Off) {

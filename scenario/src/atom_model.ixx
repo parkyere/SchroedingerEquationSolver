@@ -265,19 +265,30 @@ public:
         }
     }
 
-    // Collective-jump channel view: signed per-axis amplitudes
-    // m = rint x tesseral_e1_axis (ses.emission collective_jump_dipoles).
-    std::vector<ses::DipoleChannel> dipole_channels() const {
-        std::vector<ses::DipoleChannel> out;
+    // Frequency-grouped collective view: signed per-axis amplitudes
+    // m = rint x tesseral_e1_axis, gap from the level energies, display-rate
+    // scale k = gamma_display / |m|^2 (ses::group_by_gap consumes this).
+    std::vector<ses::GroupedChannel> grouped_channels() const {
+        std::vector<ses::GroupedChannel> out;
         out.reserve(channels_.size());
         for (const ShellChannel& ch : channels_) {
             const StateSpec& sf = spec_[static_cast<std::size_t>(ch.from)];
             const StateSpec& st = spec_[static_cast<std::size_t>(ch.to)];
-            out.push_back(ses::DipoleChannel{
-                ch.from, ch.to,
-                ch.rint * ses::tesseral_e1_axis(0, st.l, st.m, sf.l, sf.m),
-                ch.rint * ses::tesseral_e1_axis(1, st.l, st.m, sf.l, sf.m),
-                ch.rint * ses::tesseral_e1_axis(2, st.l, st.m, sf.l, sf.m)});
+            const double mx =
+                ch.rint * ses::tesseral_e1_axis(0, st.l, st.m, sf.l, sf.m);
+            const double my =
+                ch.rint * ses::tesseral_e1_axis(1, st.l, st.m, sf.l, sf.m);
+            const double mz =
+                ch.rint * ses::tesseral_e1_axis(2, st.l, st.m, sf.l, sf.m);
+            const double m2 = mx * mx + my * my + mz * mz;
+            if (m2 <= 0.0) {
+                continue;  // forbidden: no rate scale derivable
+            }
+            out.push_back(ses::GroupedChannel{
+                ses::DipoleChannel{ch.from, ch.to, mx, my, mz},
+                state_energy_[static_cast<std::size_t>(ch.from)] -
+                    state_energy_[static_cast<std::size_t>(ch.to)],
+                ch.gamma_display / m2});
         }
         return out;
     }

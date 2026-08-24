@@ -197,12 +197,26 @@ struct FreqGroup {
 };
 
 // Cluster by gap (ascending); a new group starts when the gap exceeds the
-// running group's first gap by more than tol.
+// running group's first gap by more than tol. tol must sit between the
+// degeneracy splitting (radial-grid l-splits ~1e-4 Ha) and the smallest
+// inter-line distance (hydrogen 6->5 vs 5->4: 5.1e-3 Ha): 1e-3 works for
+// every tracked manifold.
+inline constexpr double kFreqGroupTol = 1e-3;  // Ha
+
 inline std::vector<FreqGroup> group_by_gap(std::vector<GroupedChannel> items,
                                            double tol) {
-    (void)items;
-    (void)tol;
-    return {};  // stub (red)
+    std::sort(items.begin(), items.end(),
+              [](const GroupedChannel& a, const GroupedChannel& b) {
+                  return a.gap_e < b.gap_e;
+              });
+    std::vector<FreqGroup> out;
+    for (const GroupedChannel& it : items) {
+        if (out.empty() || it.gap_e - out.back().gap_e > tol) {
+            out.push_back(FreqGroup{{}, it.gap_e, it.k_rate});
+        }
+        out.back().channels.push_back(it.ch);
+    }
+    return out;
 }
 
 struct IntervalJump {
@@ -226,10 +240,60 @@ template <class U01>
 inline IntervalResult collective_decay_interval(
     const std::vector<FreqGroup>& groups, std::vector<std::complex<double>> c,
     double dt, U01&& u01) {
-    (void)groups;
-    (void)dt;
-    (void)u01;
-    return IntervalResult{{}, std::move(c)};  // stub (red)
+    IntervalResult out;
+    double remaining = dt;
+    for (;;) {
+        // Per-group collective dipoles + rates off the CURRENT amplitudes.
+        std::vector<CollectiveDipoles> cds(groups.size());
+        std::vector<double> rates(groups.size());
+        double total = 0.0;
+        for (std::size_t g = 0; g < groups.size(); ++g) {
+            cds[g] = collective_jump_dipoles(groups[g].channels, c);
+            double w = 0.0;
+            for (const DipoleMatrixElement& d : cds[g].dipoles) {
+                w += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
+            }
+            rates[g] = groups[g].k_rate * w;
+            total += rates[g];
+        }
+        if (total <= 0.0) {
+            break;
+        }
+        const double t1 = -std::log(u01()) / total;
+        if (!(t1 < remaining)) {
+            break;
+        }
+        remaining -= t1;
+        // Group pick = the environment's frequency measurement (stratified;
+        // drawn even for a single group -- the documented stream order).
+        const double ug = u01();
+        double acc = 0.0;
+        std::size_t pick = groups.size() - 1;
+        for (std::size_t g = 0; g < groups.size(); ++g) {
+            acc += rates[g] / total;
+            if (ug < acc) {
+                pick = g;
+                break;
+            }
+        }
+        const CollectiveDipoles& cd = cds[pick];
+        const PhotonRecord rec = sample_photon_emission(cd.dipoles, u01);
+        const std::vector<std::complex<double>> cond =
+            conditioned_amplitudes(cd.dipoles, rec.n, rec.helicity);
+        std::fill(c.begin(), c.end(), std::complex<double>{});
+        int dom = cd.to_states.empty() ? -1 : cd.to_states[0];
+        double best = 0.0;
+        for (std::size_t i = 0; i < cd.to_states.size(); ++i) {
+            c[static_cast<std::size_t>(cd.to_states[i])] = cond[i];
+            if (std::norm(cond[i]) > best) {
+                best = std::norm(cond[i]);
+                dom = cd.to_states[i];
+            }
+        }
+        out.jumps.push_back(IntervalJump{rec, groups[pick].gap_e, dom});
+    }
+    out.c = std::move(c);
+    return out;
 }
 
 // Joint (n, lambda) sample from P ~ Sum_m |conj(e_lambda(n)) . D_m|^2 by

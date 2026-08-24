@@ -127,11 +127,11 @@ protected:
         title_dirty_ = true;
     }
 
-    // Decay trials at title cadence: COLLECTIVE jumps. Every trap gap is
-    // exactly hbar*omega, so the photon cannot resolve which rung fired --
-    // the jump operator is the collective lowering sum (damped-HO L ~ a per
-    // axis, ses::collective_jump_dipoles); rung coherences survive and
-    // arrivals chain analytically within the interval, one streak each.
+    // Decay trials at title cadence through the SAME frequency-group core as
+    // hydrogen (ses::collective_decay_interval): every trap gap is hbar*omega,
+    // so group_by_gap collapses to ONE group -- the damped-HO collective limit
+    // (rung coherences survive; in-interval chains are exact; one streak per
+    // arrival).
     void after_step_batch() override {
         if (!decay_on_ || atom_.channels().empty()) {
             return;
@@ -142,82 +142,48 @@ protected:
         }
         engine_.wait_async();  // the deposit needs the batch's memory visible
         engine_.project_psi();
-        std::vector<std::complex<double>> c(
+        std::vector<std::complex<double>> amps(
             static_cast<std::size_t>(kNumTrapStates));
         for (int s = 0; s < kNumTrapStates; ++s) {
-            c[static_cast<std::size_t>(s)] =
+            amps[static_cast<std::size_t>(s)] =
                 atom_.project_state_amplitude(engine_, s);
         }
-        const std::vector<ses::DipoleChannel> dch = atom_.dipole_channels();
-        // Display-rate scale: gamma_ch = k_rate * m_ch^2 with ONE shared k
-        // (equal gaps make it channel-independent).
-        double k_rate = 0.0;
-        for (std::size_t i = 0; i < dch.size(); ++i) {
-            const double m2 = dch[i].mx * dch[i].mx + dch[i].my * dch[i].my +
-                              dch[i].mz * dch[i].mz;
-            if (m2 > 0.0) {
-                k_rate = atom_.channels()[i].gamma_display / m2;
-                break;
+        const std::vector<ses::FreqGroup> groups =
+            ses::group_by_gap(atom_.grouped_channels(), ses::kFreqGroupTol);
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        const double trial_dt = decay_accum_dt_;
+        decay_accum_dt_ = 0.0;
+        const ses::IntervalResult res = ses::collective_decay_interval(
+            groups, std::move(amps), trial_dt, [&] { return uniform(rng_); });
+        if (res.jumps.empty()) {
+            return;
+        }
+        std::vector<int> states;
+        std::vector<std::complex<double>> cs;
+        for (int s = 0; s < kNumTrapStates; ++s) {
+            if (std::norm(res.c[static_cast<std::size_t>(s)]) > 1e-18) {
+                states.push_back(s);
+                cs.push_back(res.c[static_cast<std::size_t>(s)]);
             }
         }
-        std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        double remaining = decay_accum_dt_;
-        decay_accum_dt_ = 0.0;
-        int jumps = 0;
-        int dom = 0;  // dominant destination of the LAST jump (flush target)
-        std::vector<int> final_states;
-        std::vector<std::complex<double>> final_c;
-        for (;;) {
-            const ses::CollectiveDipoles cd =
-                ses::collective_jump_dipoles(dch, c);
-            double wsum = 0.0;
-            for (const ses::DipoleMatrixElement& d : cd.dipoles) {
-                wsum += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
-            }
-            const double rate = k_rate * wsum;
-            if (rate <= 0.0) {
-                break;
-            }
-            const double t1 = -std::log(uniform(rng_)) / rate;
-            if (!(t1 < remaining)) {
-                break;
-            }
-            remaining -= t1;
-            const ses::PhotonRecord rec = ses::sample_photon_emission(
-                cd.dipoles, [&] { return uniform(rng_); });
-            const std::vector<std::complex<double>> cond =
-                ses::conditioned_amplitudes(cd.dipoles, rec.n, rec.helicity);
-            std::fill(c.begin(), c.end(), std::complex<double>{});
-            double best = 0.0;
-            dom = cd.to_states[0];
-            for (std::size_t i = 0; i < cd.to_states.size(); ++i) {
-                c[static_cast<std::size_t>(cd.to_states[i])] = cond[i];
-                if (std::norm(cond[i]) > best) {
-                    best = std::norm(cond[i]);
-                    dom = cd.to_states[i];
-                }
-            }
-            final_states = cd.to_states;
-            final_c = cond;
-            photon_streaks_.spawn(rec, kTrapOmega);  // every photon = hbar*w
-            ++jumps;
+        const int dom = res.jumps.back().dominant_to;
+        if (!superpose_into_psi(atom_, states, cs) && dom >= 0) {
+            atom_.collapse_onto(engine_, dom);  // guard fallback
+        }
+        flush_collapse_error(dom >= 0 ? dom : 0);
+        flash_ticks_ = kTrapFlashTicks;
+        for (const ses::IntervalJump& j : res.jumps) {
             ++photon_count_;
-            last_jump_ = strf("hw -> {}", kTrapStates[dom].name);
+            photon_streaks_.spawn(j.rec, j.gap_e);
+            last_jump_ = strf(
+                "hw -> {}",
+                kTrapStates[static_cast<std::size_t>(j.dominant_to)].name);
             std::fprintf(
                 stderr,
                 "trap decay: collective jump -> %s (photon #%lld, t=%.1f au)\n",
-                kTrapStates[dom].name, photon_count_, sim_.time() + gpu_time_);
+                kTrapStates[static_cast<std::size_t>(j.dominant_to)].name,
+                photon_count_, sim_.time() + gpu_time_);
         }
-        if (jumps == 0) {
-            return;
-        }
-        if (superpose_into_psi(atom_, final_states, final_c)) {
-            flush_collapse_error(dom);
-        } else {
-            atom_.collapse_onto(engine_, dom);  // guard fallback
-            flush_collapse_error(dom);
-        }
-        flash_ticks_ = kTrapFlashTicks;
         title_dirty_ = true;
     }
 

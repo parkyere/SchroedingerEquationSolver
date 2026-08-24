@@ -536,35 +536,6 @@ protected:
         return true;
     }
 
-    // (n, lambda)-conditioned jump collapse for the fired channel's
-    // destination shell: sample the photon record off the shell dipole set,
-    // collapse onto the conditioned superposition (angular momentum
-    // bookkeeping); tesseral fallback if forbidden/failed.
-    ses::PhotonRecord conditioned_jump_collapse(AtomModel& atom,
-                                                const ShellChannel& fin) {
-        const StateSpec& sf = atom.spec(fin.from);
-        const StateSpec& st = atom.spec(fin.to);
-        std::vector<int> shell_states;
-        std::vector<int> shell_m;
-        for (int s = 0; s < atom.n_states(); ++s) {
-            if (atom.spec(s).level == st.level) {
-                shell_states.push_back(s);
-                shell_m.push_back(atom.spec(s).m);
-            }
-        }
-        const std::vector<ses::DipoleMatrixElement> dip =
-            ses::shell_dipole_vectors(sf.l, sf.m, st.l, shell_m);
-        std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        const ses::PhotonRecord rec = ses::sample_photon_emission(
-            dip, [&] { return uniform(rng_); });
-        const std::vector<std::complex<double>> cond =
-            ses::conditioned_amplitudes(dip, rec.n, rec.helicity);
-        if (!superpose_into_psi(atom, shell_states, cond)) {
-            atom.collapse_onto(engine_, fin.to);  // guard fallback
-        }
-        return rec;
-    }
-
     // Relax/ITP tables ride THIS potential; static-field scenes override to
     // the field-dressed effective V (else imaginary time cools to the
     // field-free ground).
