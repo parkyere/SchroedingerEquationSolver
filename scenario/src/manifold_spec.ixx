@@ -86,6 +86,7 @@ struct ShellChannel {
     int to;
     double a_true;         // Einstein A (au)
     double gamma_display;  // uniformly accelerated display rate
+    double rint = 0.0;     // SIGNED radial dipole integral (collective jumps)
 };
 
 

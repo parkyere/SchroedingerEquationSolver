@@ -12,6 +12,7 @@ export import ses.vk.engine;
 export import ses.radial;
 export import ses.decay;
 export import ses.vram_budget;
+import ses.emission;
 import ses.harmonics;
 
 
@@ -255,7 +256,7 @@ public:
                 }
                 const double r = rint[lf][lt];
                 channels_.push_back(ShellChannel{
-                    from, to, ses::einstein_a(gap, r * r * angular), 0.0});
+                    from, to, ses::einstein_a(gap, r * r * angular), 0.0, r});
                 if (from == kP2Z && to == kS1) {
                     // Laser E0 drive strength |<1s|z|2p_z>| = |R| sqrt(1/3).
                     dipole_z_ = std::abs(r) *
@@ -263,6 +264,23 @@ public:
                 }
             }
         }
+    }
+
+    // Collective-jump channel view: signed per-axis amplitudes
+    // m = rint x tesseral_e1_axis (ses.emission collective_jump_dipoles).
+    std::vector<ses::DipoleChannel> dipole_channels() const {
+        std::vector<ses::DipoleChannel> out;
+        out.reserve(channels_.size());
+        for (const ShellChannel& ch : channels_) {
+            const StateSpec& sf = spec_[static_cast<std::size_t>(ch.from)];
+            const StateSpec& st = spec_[static_cast<std::size_t>(ch.to)];
+            out.push_back(ses::DipoleChannel{
+                ch.from, ch.to,
+                ch.rint * ses::tesseral_e1_axis(0, st.l, st.m, sf.l, sf.m),
+                ch.rint * ses::tesseral_e1_axis(1, st.l, st.m, sf.l, sf.m),
+                ch.rint * ses::tesseral_e1_axis(2, st.l, st.m, sf.l, sf.m)});
+        }
+        return out;
     }
 
     bool finalize_channel_table(double gamma_display_target) {

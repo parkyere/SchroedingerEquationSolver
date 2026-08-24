@@ -155,9 +155,26 @@ struct CollectiveDipoles {
 inline CollectiveDipoles collective_jump_dipoles(
     const std::vector<DipoleChannel>& channels,
     std::span<const std::complex<double>> c) {
-    (void)channels;
-    (void)c;
-    return {};  // stub (red)
+    CollectiveDipoles out;
+    for (const DipoleChannel& ch : channels) {
+        const std::complex<double> a = c[static_cast<std::size_t>(ch.from)];
+        std::size_t slot = out.to_states.size();
+        for (std::size_t i = 0; i < out.to_states.size(); ++i) {
+            if (out.to_states[i] == ch.to) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == out.to_states.size()) {
+            out.to_states.push_back(ch.to);
+            out.dipoles.push_back(DipoleMatrixElement{});
+        }
+        DipoleMatrixElement& d = out.dipoles[slot];
+        d.x += ch.mx * a;
+        d.y += ch.my * a;
+        d.z += ch.mz * a;
+    }
+    return out;
 }
 
 // Joint (n, lambda) sample from P ~ Sum_m |conj(e_lambda(n)) . D_m|^2 by

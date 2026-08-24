@@ -1,5 +1,6 @@
 module;
 #include <numbers>
+#include <algorithm>
 #include <cstddef>
 #include <array>
 #include <cmath>
@@ -135,8 +136,11 @@ protected:
         title_dirty_ = true;
     }
 
-    // Decay trials ride the batch at title cadence: chained first-arrival over
-    // the accumulated dt (ladder hops N->N-1->... may fire within ONE interval).
+    // Decay trials at title cadence: COLLECTIVE jumps. Every trap gap is
+    // exactly hbar*omega, so the photon cannot resolve which rung fired --
+    // the jump operator is the collective lowering sum (damped-HO L ~ a per
+    // axis, ses::collective_jump_dipoles); rung coherences survive and
+    // arrivals chain analytically within the interval, one streak each.
     void after_step_batch() override {
         if (!decay_on_ || atom_.channels().empty()) {
             return;
@@ -147,47 +151,82 @@ protected:
         }
         engine_.wait_async();  // the deposit needs the batch's memory visible
         engine_.project_psi();
-        std::vector<double> pop(kNumTrapStates, 0.0);
-        std::vector<char> projected(kNumTrapStates, 0);
-        std::vector<ses::RateChannel> rate_ch(atom_.channels().size());
-        for (std::size_t c = 0; c < atom_.channels().size(); ++c) {
-            const ShellChannel& sc = atom_.channels()[c];
-            if (!projected[static_cast<std::size_t>(sc.from)]) {
-                projected[static_cast<std::size_t>(sc.from)] = 1;
-                pop[static_cast<std::size_t>(sc.from)] =
-                    atom_.project_population(engine_, sc.from);
+        std::vector<std::complex<double>> c(
+            static_cast<std::size_t>(kNumTrapStates));
+        for (int s = 0; s < kNumTrapStates; ++s) {
+            c[static_cast<std::size_t>(s)] =
+                atom_.project_state_amplitude(engine_, s);
+        }
+        const std::vector<ses::DipoleChannel> dch = atom_.dipole_channels();
+        // Display-rate scale: gamma_ch = k_rate * m_ch^2 with ONE shared k
+        // (equal gaps make it channel-independent).
+        double k_rate = 0.0;
+        for (std::size_t i = 0; i < dch.size(); ++i) {
+            const double m2 = dch[i].mx * dch[i].mx + dch[i].my * dch[i].my +
+                              dch[i].mz * dch[i].mz;
+            if (m2 > 0.0) {
+                k_rate = atom_.channels()[i].gamma_display / m2;
+                break;
             }
-            rate_ch[c] = ses::RateChannel{sc.from, sc.to, sc.gamma_display};
         }
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        const std::vector<int> fired = ses::chain_decay_jumps(
-            rate_ch, pop, decay_accum_dt_, [&] { return uniform(rng_); });
+        double remaining = decay_accum_dt_;
         decay_accum_dt_ = 0.0;
-        if (fired.empty()) {
+        int jumps = 0;
+        int dom = 0;  // dominant destination of the LAST jump (flush target)
+        std::vector<int> final_states;
+        std::vector<std::complex<double>> final_c;
+        for (;;) {
+            const ses::CollectiveDipoles cd =
+                ses::collective_jump_dipoles(dch, c);
+            double wsum = 0.0;
+            for (const ses::DipoleMatrixElement& d : cd.dipoles) {
+                wsum += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
+            }
+            const double rate = k_rate * wsum;
+            if (rate <= 0.0) {
+                break;
+            }
+            const double t1 = -std::log(uniform(rng_)) / rate;
+            if (!(t1 < remaining)) {
+                break;
+            }
+            remaining -= t1;
+            const ses::PhotonRecord rec = ses::sample_photon_emission(
+                cd.dipoles, [&] { return uniform(rng_); });
+            const std::vector<std::complex<double>> cond =
+                ses::conditioned_amplitudes(cd.dipoles, rec.n, rec.helicity);
+            std::fill(c.begin(), c.end(), std::complex<double>{});
+            double best = 0.0;
+            dom = cd.to_states[0];
+            for (std::size_t i = 0; i < cd.to_states.size(); ++i) {
+                c[static_cast<std::size_t>(cd.to_states[i])] = cond[i];
+                if (std::norm(cond[i]) > best) {
+                    best = std::norm(cond[i]);
+                    dom = cd.to_states[i];
+                }
+            }
+            final_states = cd.to_states;
+            final_c = cond;
+            photon_streaks_.spawn(rec, kTrapOmega);  // every photon = hbar*w
+            ++jumps;
+            ++photon_count_;
+            last_jump_ = strf("hw -> %s", kTrapStates[dom].name);
+            std::fprintf(
+                stderr,
+                "trap decay: collective jump -> %s (photon #%lld, t=%.1f au)\n",
+                kTrapStates[dom].name, photon_count_, sim_.time() + gpu_time_);
+        }
+        if (jumps == 0) {
             return;
         }
-        const ShellChannel& fin =
-            atom_.channels()[static_cast<std::size_t>(fired.back())];
-        // (n, lambda) record + conditioned shell collapse (base helper); the
-        // helix streak flies with it -- every trap photon carries exactly
-        // hbar*omega, so all streaks share one wavelength.
-        const double gap_e =
-            atom_.state_energy(fin.from) - atom_.state_energy(fin.to);
-        const ses::PhotonRecord rec = conditioned_jump_collapse(atom_, fin);
-        flush_collapse_error(fin.to);
-        flash_ticks_ = kTrapFlashTicks;
-        photon_streaks_.spawn(rec, gap_e);
-        for (const int c : fired) {
-            const ShellChannel& ch =
-                atom_.channels()[static_cast<std::size_t>(c)];
-            ++photon_count_;
-            last_jump_ = strf("%s->%s", kTrapStates[ch.from].name,
-                              kTrapStates[ch.to].name);
-            std::fprintf(stderr,
-                         "trap decay: jump %s (photon #%lld, t=%.1f au)\n",
-                         last_jump_.c_str(), photon_count_,
-                         sim_.time() + gpu_time_);
+        if (superpose_into_psi(atom_, final_states, final_c)) {
+            flush_collapse_error(dom);
+        } else {
+            atom_.collapse_onto(engine_, dom);  // guard fallback
+            flush_collapse_error(dom);
         }
+        flash_ticks_ = kTrapFlashTicks;
         title_dirty_ = true;
     }
 
