@@ -98,6 +98,18 @@ inline std::vector<double> morse_potential(const Grid1D& g, double d,
 }
 
 // Integral of 1/r over the unit cube centered at origin; 7-digit quadrature.
+// Uniform static E folded into the potential: V += e0 * coord_axis (odd in
+// e0; axis 0=x 1=y 2=z). Relax tables MUST ride this same effective V or
+// imaginary time cools to the field-free ground.
+inline std::vector<double> tilted_potential(std::vector<double> v,
+                                            const Grid3D& g, double e0,
+                                            int axis) {
+    (void)g;
+    (void)e0;
+    (void)axis;
+    return v;  // stub (red)
+}
+
 inline constexpr double kCoulombCellAverage = 2.3800774;
 
 inline std::vector<double> barrier_potential(const Grid1D& g, double v0,
