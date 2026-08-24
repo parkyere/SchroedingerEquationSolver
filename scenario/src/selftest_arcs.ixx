@@ -291,13 +291,18 @@ void register_verification_arcs(ShellT* shell) {
             shell->sched().after(1000, [shell] {
                 const long long baseline = shell->director().photon_count();
                 shell->press('D');  // arm: the window starts now
-                shell->sched().after(30000, [shell, baseline] {
+                auto streak = std::make_shared<bool>(false);
+                selftest_watch_streak(shell, 0, streak);
+                shell->sched().after(30000, [shell, baseline, streak] {
                     const long long fresh =
                         shell->director().photon_count() - baseline;
-                    std::fprintf(stderr,
-                                 "selftest-trapdecay: photons = %lld  [%s]\n",
-                                 fresh, fresh >= 1 ? "PASS" : "FAIL");
-                    shell->request_exit(fresh >= 1 ? 0 : 1);
+                    // The jump must also launch the photon streak overlay.
+                    const bool pass = fresh >= 1 && *streak;
+                    std::fprintf(
+                        stderr,
+                        "selftest-trapdecay: photons = %lld, streak %d  [%s]\n",
+                        fresh, *streak ? 1 : 0, pass ? "PASS" : "FAIL");
+                    shell->request_exit(pass ? 0 : 1);
                 });
             });
         });

@@ -178,27 +178,8 @@ public:
             gpu_ok_ = false;
             cpu_is_truth_ = true;
         }
-        // Photon streaks: wall-frame flight clocks + this frame's polylines
-        // (overlay pointers stay valid until the next run_frame).
-        photon_pool_.advance();
-        streak_count_ = photon_pool_.count();
-        for (int c = 0; c < streak_count_; ++c) {
-            const ses::PhotonFlightPool::Flight* f = photon_pool_.active(c);
-            const double progress = static_cast<double>(f->age_frames) /
-                                    f->total_frames;
-            const std::vector<ses::Vec3d> pts = ses::photon_streak_vertices(
-                f->rec, f->delta_e, progress);
-            std::vector<float>& buf =
-                streak_xyz_[static_cast<std::size_t>(c)];
-            buf.resize(pts.size() * 3);
-            for (std::size_t i = 0; i < pts.size(); ++i) {
-                buf[3 * i + 0] = static_cast<float>(pts[i].x);
-                buf[3 * i + 1] = static_cast<float>(pts[i].y);
-                buf[3 * i + 2] = static_cast<float>(pts[i].z);
-            }
-            streak_alpha_[static_cast<std::size_t>(c)] =
-                static_cast<float>(ses::photon_streak_alpha(progress));
-        }
+        // Photon streaks: shared display component (base member).
+        photon_streaks_.advance_and_build();
         // Reclaim last frame's async batch FIRST: flips the display volume at a
         // host-observed completion point; all readouts below then see post-step
         // psi.
@@ -694,7 +675,7 @@ public:
         const std::array<int, 2> states{a, b};
         const std::array<std::complex<double>, 2> c{
             std::complex<double>{1.0, 0.0}, std::complex<double>{1.0, 0.0}};
-        if (!superpose_into_psi(states, c)) {
+        if (!superpose_into_psi(atom_, states, c)) {
             return;
         }
         reset_ionized_tally();
@@ -702,25 +683,6 @@ public:
     }
 
     // ---- display-facing accessors (the shell's FrameInput assembly) ----
-
-    // Photon streak overlays: LINE_STRIP helices, twist/rotation sense = the
-    // recorded helicity; warm tint matches the flash language.
-    int overlay_curve_count() const override { return streak_count_; }
-    OverlayCurve overlay_curve(int i) const override {
-        if (i < 0 || i >= streak_count_) {
-            return {};
-        }
-        const std::vector<float>& buf =
-            streak_xyz_[static_cast<std::size_t>(i)];
-        OverlayCurve oc;
-        oc.xyz = buf.data();
-        oc.count = static_cast<int>(buf.size() / 3);
-        oc.r = 1.0f;
-        oc.g = 0.95f;
-        oc.b = 0.75f;
-        oc.a = streak_alpha_[static_cast<std::size_t>(i)];
-        return oc;
-    }
 
     // Photon flash: a brief warm background right after a quantum jump.
     float next_flash_intensity() override {
@@ -1167,36 +1129,17 @@ private:
                 if (!fired.empty()) {
                     const ShellChannel& fin = atom_.channels()
                         [static_cast<std::size_t>(fired.back())];
-                    // (n, lambda) photon record for the LAST hop; the atom
-                    // collapses onto the conditioned shell superposition
-                    // (angular momentum bookkeeping), not a bare tesseral.
-                    const StateSpec& sf = kStateSpec[fin.from];
-                    const StateSpec& st = kStateSpec[fin.to];
-                    std::vector<int> shell_states;
-                    std::vector<int> shell_m;
-                    for (int s = 0; s < kNumStates; ++s) {
-                        if (kStateSpec[s].level == st.level) {
-                            shell_states.push_back(s);
-                            shell_m.push_back(kStateSpec[s].m);
-                        }
-                    }
-                    const std::vector<ses::DipoleMatrixElement> dip =
-                        ses::shell_dipole_vectors(sf.l, sf.m, st.l, shell_m);
-                    const ses::PhotonRecord rec = ses::sample_photon_emission(
-                        dip, [&] { return uniform(rng_); });
-                    const std::vector<std::complex<double>> cond =
-                        ses::conditioned_amplitudes(dip, rec.n, rec.helicity);
-                    if (!superpose_into_psi(shell_states, cond)) {
-                        atom_.collapse_onto(engine_, fin.to);  // guard fallback
-                    }
+                    // (n, lambda) record + conditioned shell collapse
+                    // (base helper; angular momentum bookkeeping).
+                    const ses::PhotonRecord rec =
+                        conditioned_jump_collapse(atom_, fin);
                     reset_ionized_tally();  // BEFORE the flush: its renorm
                                             // must not read as ionization
                     flush_collapse_error(fin.to);
                     flash_ticks_ = kFlashTicks;
                     const double gap_e = atom_.state_energy(fin.from) -
                                          atom_.state_energy(fin.to);
-                    photon_pool_.spawn(rec, gap_e,
-                                       ses::photon_flight_frames(gap_e));
+                    photon_streaks_.spawn(rec, gap_e);
                     for (const int c : fired) {
                         const ShellChannel& ch =
                             atom_.channels()[static_cast<std::size_t>(c)];
@@ -1484,50 +1427,6 @@ private:
         volume_dirty_ = false;
     }
 
-    // THE synth-accumulate idiom (kepler/random seeds, partial-measure
-    // rebuild, debug pairs, shell collapse): overwrite psi with
-    // sum_i c_i |states_i>. The first significant member anchors with its
-    // phase rotated out (global phase unphysical; the real-only engine scale
-    // stays exact), relative phases ride add_state_into_psi; near-zero and
-    // failed-synth members are skipped. Renormalizes, refreshes
-    // peak_/norm_display_, invalidates cpu_is_truth_. False = nothing anchored
-    // (psi untouched).
-    bool superpose_into_psi(std::span<const int> states,
-                            std::span<const std::complex<double>> c) {
-        bool anchored = false;
-        std::complex<double> phase{1.0, 0.0};
-        for (std::size_t i = 0; i < states.size(); ++i) {
-            if (std::norm(c[i]) < 1e-18) {
-                continue;
-            }
-            const int buf = atom_.synth_transient(engine_, states[i]);
-            if (buf < 0) {
-                continue;
-            }
-            if (!anchored) {
-                phase = std::conj(c[i]) / std::abs(c[i]);
-                engine_.copy_into_psi(buf);
-                engine_.scale(static_cast<float>(std::abs(c[i])));
-                anchored = true;
-            } else {
-                const std::complex<double> z = c[i] * phase;
-                engine_.add_state_into_psi(buf, z.real(), z.imag());
-            }
-            engine_.release_state(buf);
-        }
-        if (!anchored) {
-            return false;
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 0.0) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-            peak_ = np.peak / np.sum;
-        }
-        norm_display_ = 1.0;
-        cpu_is_truth_ = false;
-        return true;
-    }
-
     // Whole-manifold convenience: states = 0..kNumStates-1.
     bool superpose_manifold(
         const std::array<std::complex<double>, kNumStates>& c) {
@@ -1535,7 +1434,7 @@ private:
         for (int s = 0; s < kNumStates; ++s) {
             idx[static_cast<std::size_t>(s)] = s;
         }
-        return superpose_into_psi(idx, c);
+        return superpose_into_psi(atom_, idx, c);
     }
 
     // Post-collapse eigenstate-error flush: collapse targets are SAMPLED radial
@@ -1596,13 +1495,6 @@ private:
     // Partial-measurement bookkeeping (n-shell / l / m buttons).
     PartialBasis pending_partial_ = PartialBasis::None;
     int last_partial_outcome_ = -99;  // sampled n, l, or m; -1 = continuum
-
-    // Photon streaks (display): up to kMaxPhotonFlights concurrent,
-    // wall-frame animated at one shared display speed.
-    ses::PhotonFlightPool photon_pool_{};
-    std::array<std::vector<float>, ses::kMaxPhotonFlights> streak_xyz_{};
-    std::array<float, ses::kMaxPhotonFlights> streak_alpha_{};
-    int streak_count_ = 0;
 
     // Quantum-jump bookkeeping.
     std::string last_jump_;

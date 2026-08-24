@@ -168,9 +168,15 @@ protected:
         }
         const ShellChannel& fin =
             atom_.channels()[static_cast<std::size_t>(fired.back())];
-        atom_.collapse_onto(engine_, fin.to);
+        // (n, lambda) record + conditioned shell collapse (base helper); the
+        // helix streak flies with it -- every trap photon carries exactly
+        // hbar*omega, so all streaks share one wavelength.
+        const double gap_e =
+            atom_.state_energy(fin.from) - atom_.state_energy(fin.to);
+        const ses::PhotonRecord rec = conditioned_jump_collapse(atom_, fin);
         flush_collapse_error(fin.to);
         flash_ticks_ = kTrapFlashTicks;
+        photon_streaks_.spawn(rec, gap_e);
         for (const int c : fired) {
             const ShellChannel& ch =
                 atom_.channels()[static_cast<std::size_t>(c)];

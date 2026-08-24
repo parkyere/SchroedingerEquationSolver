@@ -46,6 +46,9 @@ public:
     }
 
     int n_states() const { return n_states_; }
+    const StateSpec& spec(int i) const {
+        return spec_[static_cast<std::size_t>(i)];
+    }
     const StateSpec& state_spec(int idx) const {
         return spec_[static_cast<std::size_t>(idx)];
     }
