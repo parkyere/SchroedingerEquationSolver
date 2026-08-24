@@ -223,6 +223,51 @@ TEST(SnapToGrid, RoundsEachAxisToTheNearestGridPointAndClamps) {
     EXPECT_DOUBLE_EQ(lo.z, 0.0);
 }
 
+// Static-E tilt: V += e0 * coord along the chosen axis, other axes untouched.
+TEST(TiltedPotential, AddsTheAxisTiltAndNothingElse) {
+    const ses::Grid1D ax{-4.0, 4.0, 8};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> base(static_cast<std::size_t>(g.size()), 1.5);
+    for (int axis = 0; axis < 3; ++axis) {
+        const std::vector<double> v =
+            ses::tilted_potential(base, g, 0.02, axis);
+        for (const int i : {0, 3, 7}) {
+            const double c = axis == 0   ? g.x.coord(i)
+                             : axis == 1 ? g.y.coord(i)
+                                         : g.z.coord(i);
+            const int ix = axis == 0 ? i : 2;
+            const int iy = axis == 1 ? i : 2;
+            const int iz = axis == 2 ? i : 2;
+            const double want =
+                1.5 + 0.02 * (axis == 0 ? c : axis == 1 ? c : c);
+            EXPECT_DOUBLE_EQ(
+                v[static_cast<std::size_t>(g.flat(ix, iy, iz))],
+                1.5 + 0.02 * c)
+                << "axis " << axis << " i " << i;
+            (void)want;
+        }
+        // Moving along a DIFFERENT axis leaves the tilt unchanged.
+        const int other = (axis + 1) % 3;
+        const int a0[3] = {1, 1, 1};
+        int a1[3] = {1, 1, 1};
+        a1[other] = 5;
+        EXPECT_DOUBLE_EQ(
+            v[static_cast<std::size_t>(g.flat(a0[0], a0[1], a0[2]))],
+            v[static_cast<std::size_t>(g.flat(a1[0], a1[1], a1[2]))]);
+    }
+}
+
+TEST(TiltedPotential, OddInTheFieldSign) {
+    const ses::Grid1D ax{-4.0, 4.0, 8};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> base(static_cast<std::size_t>(g.size()), 0.0);
+    const auto vp = ses::tilted_potential(base, g, 0.5, 2);
+    const auto vm = ses::tilted_potential(base, g, -0.5, 2);
+    const std::size_t p = static_cast<std::size_t>(g.flat(2, 2, 6));
+    EXPECT_DOUBLE_EQ(vp[p], -vm[p]);
+    EXPECT_NE(vp[p], 0.0);  // z-coord at index 6 is nonzero
+}
+
 TEST(RegularizedCoulombPotential, NucleusCellScalesWithChargeAndInverseSpacing) {
     // cell average -Z*C/h: linear in Z and 1/h.
     const ses::Grid1D ax{-4.0, 4.0, 16};  // h = 0.5, nucleus point at index 8
