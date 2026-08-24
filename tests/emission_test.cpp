@@ -174,6 +174,68 @@ TEST(ConditionedAmplitudes, HelicityFixesThePhaseForAngularMomentum) {
     }
 }
 
+// Collective jump (equal-gap ladders): per-destination D_to = sum_ch m_ch
+// c_from -- rung coherences survive (per-channel jumps cannot interfere).
+
+TEST(CollectiveJump, SingleOccupiedStateGivesItsChannelDipoles) {
+    const std::vector<ses::DipoleChannel> ch{{2, 0, 0.0, 0.0, 0.7},
+                                             {2, 1, 0.4, 0.0, 0.0}};
+    const std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
+    const ses::CollectiveDipoles cd = ses::collective_jump_dipoles(ch, c);
+    ASSERT_EQ(cd.to_states.size(), 2u);
+    ASSERT_EQ(cd.dipoles.size(), 2u);
+    EXPECT_EQ(cd.to_states[0], 0);
+    EXPECT_EQ(cd.to_states[1], 1);
+    EXPECT_NEAR(cd.dipoles[0].z.real(), 0.7, 1e-15);
+    EXPECT_NEAR(std::abs(cd.dipoles[0].x) + std::abs(cd.dipoles[0].y), 0.0,
+                1e-15);
+    EXPECT_NEAR(cd.dipoles[1].x.real(), 0.4, 1e-15);
+}
+
+TEST(CollectiveJump, SharedDestinationInterferesCoherently) {
+    // Two rungs feeding ONE destination on the same axis: the COMPLEX
+    // amplitudes sum.
+    const std::vector<ses::DipoleChannel> ch{{1, 0, 0.0, 0.0, 1.0},
+                                             {2, 0, 0.0, 0.0, 1.0}};
+    const std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.6, 0.0}, {0.0, 0.8}};
+    const ses::CollectiveDipoles cd = ses::collective_jump_dipoles(ch, c);
+    ASSERT_EQ(cd.to_states.size(), 1u);
+    EXPECT_NEAR(cd.dipoles[0].z.real(), 0.6, 1e-15);
+    EXPECT_NEAR(cd.dipoles[0].z.imag(), 0.8, 1e-15);
+}
+
+TEST(CollectiveJump, EmptyAmplitudesCarryZeroWeight) {
+    const std::vector<ses::DipoleChannel> ch{{1, 0, 0.0, 0.0, 1.0}};
+    const std::vector<std::complex<double>> c{{0.0, 0.0}, {0.0, 0.0}};
+    const ses::CollectiveDipoles cd = ses::collective_jump_dipoles(ch, c);
+    double w = 0.0;
+    for (const auto& d : cd.dipoles) {
+        w += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
+    }
+    EXPECT_NEAR(w, 0.0, 1e-30);
+}
+
+TEST(CollectiveJump, HOLadderRateIsNumberWeighted) {
+    // z-ladder a_z elements <n-1|z|n> = sqrt(n/(2w)): total dipole weight
+    // sum_to |D_to|^2 = <N>/(2w) (damped-HO number-weighted rate), whatever
+    // the superposition.
+    const double w0 = 0.25;
+    const std::vector<ses::DipoleChannel> ch{
+        {1, 0, 0.0, 0.0, std::sqrt(1.0 / (2.0 * w0))},
+        {2, 1, 0.0, 0.0, std::sqrt(2.0 / (2.0 * w0))}};
+    const std::vector<std::complex<double>> c{
+        {0.5, 0.0}, {0.5, 0.5}, {-0.5, 0.0}};
+    const ses::CollectiveDipoles cd = ses::collective_jump_dipoles(ch, c);
+    double wsum = 0.0;
+    for (const auto& d : cd.dipoles) {
+        wsum += std::norm(d.x) + std::norm(d.y) + std::norm(d.z);
+    }
+    const double n_mean = 1.0 * std::norm(c[1]) + 2.0 * std::norm(c[2]);
+    EXPECT_NEAR(wsum, n_mean / (2.0 * w0), 1e-12);
+}
+
 TEST(ConditionedAmplitudes, AllZeroDipolesStayZero) {
     const std::vector<DipoleMatrixElement> dip{DipoleMatrixElement{},
                                                DipoleMatrixElement{}};
