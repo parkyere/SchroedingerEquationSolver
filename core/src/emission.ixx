@@ -177,6 +177,61 @@ inline CollectiveDipoles collective_jump_dipoles(
     return out;
 }
 
+// ---- frequency-resolved collective decay (one accumulated interval) -------
+// The environment measures the photon FREQUENCY wherever line separations
+// exceed widths: channels cluster into frequency groups, each an independent
+// collective jump operator. Equal-gap ladders collapse to ONE group (the
+// damped-HO limit); l-degenerate hydrogen shells share a group (3p->2s and
+// 3d->2p interfere); distinct n-gaps do not.
+
+struct GroupedChannel {
+    DipoleChannel ch;
+    double gap_e;   // transition energy (photon bookkeeping)
+    double k_rate;  // display-rate scale: gamma_ch / |m_ch|^2
+};
+
+struct FreqGroup {
+    std::vector<DipoleChannel> channels;
+    double gap_e = 0.0;
+    double k_rate = 0.0;
+};
+
+// Cluster by gap (ascending); a new group starts when the gap exceeds the
+// running group's first gap by more than tol.
+inline std::vector<FreqGroup> group_by_gap(std::vector<GroupedChannel> items,
+                                           double tol) {
+    (void)items;
+    (void)tol;
+    return {};  // stub (red)
+}
+
+struct IntervalJump {
+    PhotonRecord rec;
+    double gap_e = 0.0;
+    int dominant_to = -1;
+};
+
+struct IntervalResult {
+    std::vector<IntervalJump> jumps;
+    // Post-interval amplitudes; equals the input when no jump fired.
+    std::vector<std::complex<double>> c;
+};
+
+// One accumulated-interval unraveling over frequency groups. Per arrival the
+// uniform stream is consumed as: (1) arrival time u, (2) group-pick u
+// (stratified by group rate, drawn even for a single group), then
+// sample_photon_emission's draws. Each jump re-conditions c coherently over
+// the fired group's destinations; chains continue analytically.
+template <class U01>
+inline IntervalResult collective_decay_interval(
+    const std::vector<FreqGroup>& groups, std::vector<std::complex<double>> c,
+    double dt, U01&& u01) {
+    (void)groups;
+    (void)dt;
+    (void)u01;
+    return IntervalResult{{}, std::move(c)};  // stub (red)
+}
+
 // Joint (n, lambda) sample from P ~ Sum_m |conj(e_lambda(n)) . D_m|^2 by
 // rejection against the bound Sum_m |D_m|^2 (transverse projector never
 // exceeds it); u01() supplies uniforms in [0,1).
