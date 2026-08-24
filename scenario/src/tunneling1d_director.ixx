@@ -31,10 +31,9 @@ constexpr double kTun1dYClamp = 12.0;
 class Tunneling1DDirector final : public Line1DDirector, public TunnelApi {
 public:
     Tunneling1DDirector()
-        : Line1DDirector(ses::Grid1D{-kTun1dBox, kTun1dBox, kTun1dPoints},
-                         ses::barrier_potential(
-                             ses::Grid1D{-kTun1dBox, kTun1dBox, kTun1dPoints},
-                             kTun1dV0, kTun1dXLo, kTun1dXHi),
+        : Line1DDirector(scene_grid(),
+                         ses::barrier_potential(scene_grid(), kTun1dV0,
+                                                kTun1dXLo, kTun1dXHi),
                          kTun1dDt, kTun1dRScale, kTun1dEScale, kTun1dYClamp) {
         set_mask(ses::absorbing_mask(grid1d_, kTun1dAbsorb));
         set_state(ses::gaussian_wavepacket(grid1d_, kTun1dLaunchX, kTun1dSigma,
@@ -75,6 +74,10 @@ protected:
     }
 
 private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{-kTun1dBox, kTun1dBox, kTun1dPoints};
+    }
+
     double p_left_ = 0.0;
     double p_right_ = 0.0;
     double t_max_ = 0.0;

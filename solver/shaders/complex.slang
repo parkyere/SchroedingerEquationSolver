@@ -1,6 +1,9 @@
 // Complex == bare float2 (re, im) under Std430; buffers bind as Complex or float2 interchangeably (see pack_half / physics kernels).
 module complex;
 
+public static const float kPi = 3.14159265358979323846;
+public static const float kTwoPi = 6.28318530717958647692;
+
 public struct Complex {
     public float2 v;
 

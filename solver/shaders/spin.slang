@@ -54,7 +54,7 @@ public Spinor spinor_from_bloch(float3 n) {
     if (axn > 1e-12) {
         s = spin_rotate(s, -n.y / axn, n.x / axn, 0.0, th);
     } else if (n.z < 0.0) {
-        s = spin_rotate(s, 1.0, 0.0, 0.0, 3.14159265358979);
+        s = spin_rotate(s, 1.0, 0.0, 0.0, kPi);
     }
     return s;
 }

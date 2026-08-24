@@ -3,6 +3,7 @@
 import complex;
 import ylm;
 import grid;
+import radial_sample;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> psi;
 [[vk::binding(5, 0)]] StructuredBuffer<float, Std430DataLayout> u;
@@ -31,16 +32,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
     int3 ijk = unflatten_moddiv(idx, params.nx, params.ny);
     float3 r3 = cell_pos(ijk, params.box_min.xyz, params.cell_h.xyz);
     float r = length(r3);
+    RadialBin rb = radial_bin(r, params.h_radial);
     float u_over_r = 0.0;
-    if (r < params.h_radial) {
-        u_over_r = u[0] / params.h_radial;      // u(0)=0 pinned: l=0 limit u_0/h
-    } else if (r < params.rmax) {
-        float t = r / params.h_radial - 1.0;    // r_i = (i+1) h
-        int i0 = int(t);
-        float frac = t - float(i0);
-        float ui = (i0 + 1 < params.n_radial) ? (1.0 - frac) * u[i0] + frac * u[i0 + 1]
-                                              : (1.0 - frac) * u[i0];  // outer: u(rmax)=0
-        u_over_r = ui / r;
+    if (rb.origin || r < params.rmax) {
+        u_over_r = radial_u_over_r(u, 0, rb, r, params.h_radial, params.n_radial);
     }
     psi[idx] = Complex(u_over_r * real_Ylm(params.l, params.m, r3.x, r3.y, r3.z), 0.0);
 }

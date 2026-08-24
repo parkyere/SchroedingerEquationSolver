@@ -32,15 +32,14 @@ constexpr double kPt1dDt = 0.04;
 constexpr double kPt1dAbsorb = 10.0;
 constexpr double kPt1dRScale = 60.0;
 constexpr double kPt1dEScale = 13.0;
-constexpr double kPt1dYClamp = 1e30;
+constexpr double kPt1dYClamp = kNoYClamp;
 
 class PtWell1DDirector final : public Line1DDirector, public ReflectApi {
 public:
     PtWell1DDirector()
-        : Line1DDirector(ses::Grid1D{-kPt1dBox, kPt1dBox, kPt1dPoints},
-                         ses::poschl_teller_potential(
-                             ses::Grid1D{-kPt1dBox, kPt1dBox, kPt1dPoints},
-                             kPt1dV0, kPt1dA),
+        : Line1DDirector(scene_grid(),
+                         ses::poschl_teller_potential(scene_grid(), kPt1dV0,
+                                                      kPt1dA),
                          kPt1dDt, kPt1dRScale, kPt1dEScale, kPt1dYClamp) {
         set_mask(ses::absorbing_mask(grid1d_, kPt1dAbsorb));
         launch();
@@ -62,11 +61,10 @@ public:
     }
 
     bool handle_key(char key) override {
-        if (key == 'W') {
-            toggle_well();
-            return true;
+        switch (key) {
+            case 'W': toggle_well(); return true;
+            default: return false;
         }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.22; }
@@ -119,6 +117,10 @@ protected:
     void after_reset() override { launch(); }
 
 private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{-kPt1dBox, kPt1dBox, kPt1dPoints};
+    }
+
     void launch() {
         set_state(ses::gaussian_wavepacket(grid1d_, kPt1dLaunchX, kPt1dSigma,
                                            kPt1dK0));

@@ -22,6 +22,8 @@ file(GLOB SES_SLANG_MODULES CONFIGURE_DEPENDS "${SES_SLANG_MODULE_DIR}/*.slang")
 list(FILTER SES_SLANG_MODULES EXCLUDE REGEX "\\.(comp|vert|frag)\\.slang$")
 
 # Stage extension in the srcfile name is a human hint; slangc uses -stage.
+# Extra args after _x (e.g. -DFFT_N=256) go to slangc verbatim: one source can
+# bake N variants.
 function(ses_bake_shader hdrs_var srcdir spvdir _srcfile _stage _x)
     set(_slang "${srcdir}/${_srcfile}.slang")
     set(_spv "${spvdir}/${_x}.spv")
@@ -32,7 +34,7 @@ function(ses_bake_shader hdrs_var srcdir spvdir _srcfile _stage _x)
         COMMAND "${SES_SLANGC}" "${_slang}"
                 -I "${SES_SLANG_MODULE_DIR}"
                 -target spirv -entry main -stage ${_stage}
-                -matrix-layout-column-major -o "${_spv}"
+                -matrix-layout-column-major ${ARGN} -o "${_spv}"
         COMMAND "${CMAKE_COMMAND}" "-DIN=${_spv}" "-DOUT=${_hdr}"
                 "-DNAME=k_${_x}_spv"
                 -P "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"

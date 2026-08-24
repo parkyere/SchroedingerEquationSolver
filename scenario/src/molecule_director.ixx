@@ -2,6 +2,7 @@ module;
 #include <numbers>
 #include <utility>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -14,7 +15,7 @@ export import ses.scenario.base_director;
 import ses.wavepacket;
 import ses.scenario.molecular_seed;
 import ses.spheroidal;
-import ses.h2plus_atlas_data;
+import ses.h2plus_atlas_loader;
 
 
 // One-electron molecules, fixed Born-Oppenheimer nuclei in a multi-center
@@ -29,7 +30,9 @@ export namespace ses_shell {
 class MoleculeDirectorBase : public BaseDirector, public MoleculeApi {
 public:
     explicit MoleculeDirectorBase(ses::WavepacketSimulation sim)
-        : BaseDirector(std::move(sim)) {}
+        : BaseDirector(std::move(sim)) {
+        buf_.fill(-1);  // 0 is a VALID gpu state-buffer handle
+    }
 
     MoleculeApi* molecule() override { return this; }
 
@@ -348,9 +351,9 @@ protected:
     std::vector<SceneMarker> balls_;
     int geom_ = 0;
     double param_ = 0.0;
-    int buf_[kStates] = {-1, -1, -1, -1, -1, -1};
-    double e_[kStates] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    bool prepared_[kStates] = {false, false, false, false, false, false};
+    std::array<int, kStates> buf_{};  // fill(-1) in the ctor
+    std::array<double, kStates> e_{};
+    std::array<bool, kStates> prepared_{};
     int want_ = 0;
     int target_ = 0;
     bool fine_polish_ = false;
@@ -480,7 +483,7 @@ protected:
         std::string s = strf("  R = {:.3f} Bohr (fixed nuclei)", snap_r(param_));
         if (!atlas_.empty()) {
             s += strf("  E_total(1sigma_g) = {:.2f} eV",
-                      (atlas_[0].orb.energy + rep) * kBaseHaToEv);
+                      (atlas_[0].orb.energy + rep) * kHaToEv);
         }
         if (showing_random_) {
             s += "  showing: random atlas superposition";
@@ -488,7 +491,7 @@ protected:
             s += strf("  showing {}: E_elec = {:.2f} eV",
                       atlas_[static_cast<std::size_t>(cur_)].label.c_str(),
                       atlas_[static_cast<std::size_t>(cur_)].orb.energy *
-                          kBaseHaToEv);
+                          kHaToEv);
         }
         s += strf("  ({} known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
@@ -696,14 +699,14 @@ protected:
     std::string title_suffix() override {
         std::string s{"  uniform ring (the X-ray geometry)"};
         if (prepared_[0]) {
-            s += strf("  E0 = {:.2f} eV", e_[0] * kBaseHaToEv);
+            s += strf("  E0 = {:.2f} eV", e_[0] * kHaToEv);
         }
         if (prepared_[1]) {
-            s += strf("  E1 = {:.2f} eV", e_[1] * kBaseHaToEv);
+            s += strf("  E1 = {:.2f} eV", e_[1] * kHaToEv);
         }
         if (prepared_[2]) {
             s += strf("  E2 = {:.2f} eV (quasi-degenerate carbon-core band)",
-                      e_[2] * kBaseHaToEv);
+                      e_[2] * kHaToEv);
         }
         s += "  BARE nuclei: 6 C (Z=6) + 6 H (Z=1), regularized cells, "
              "lattice-snapped; C6H6^41+ first electron.  keys: 2/3/4 states";
@@ -746,8 +749,7 @@ private:
     // Full skeleton in one overlay curve: hexagon with a C->H spoke drawn and
     // retraced at each vertex.
     void rebuild_markers() {
-        const ses::Grid1D axis{-kBzBox, kBzBox, kBzPoints};
-        const ses::Grid3D grid{axis, axis, axis};
+        const ses::Grid3D& grid = sim_.grid();
         const std::vector<ses::Vec3d> c = snapped_ring(grid, kBzRingR);
         const std::vector<ses::Vec3d> h =
             snapped_ring(grid, kBzRingR + kBzCH);

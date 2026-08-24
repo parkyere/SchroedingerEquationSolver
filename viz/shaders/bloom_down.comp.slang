@@ -1,4 +1,6 @@
 // Kawase dual-filter downsample: half-texel corner offsets make each bilinear tap average 4 texels; center weighted x4 + 4 unit corner taps, /8 normalizes.
+import viz_util;
+
 [[vk::binding(0, 0)]] Sampler2D<float4> src;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> dst;
 
@@ -11,11 +13,8 @@ struct Params {
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 gid : SV_DispatchThreadID) {
-    int2 p = int2(gid.xy);
-    uint w, h;
-    dst.GetDimensions(w, h);
-    int2 size = int2(w, h);
-    if (p.x >= size.x || p.y >= size.y) {
+    int2 p, size;
+    if (oob(gid, dst, p, size)) {
         return;
     }
     float2 uv = (float2(p) + 0.5) / float2(size);

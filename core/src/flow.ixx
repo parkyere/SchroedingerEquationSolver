@@ -25,7 +25,7 @@ inline Vec3d probability_current(std::complex<double> psi, std::complex<double> 
 inline Vec3d bohmian_velocity(std::complex<double> psi, std::complex<double> dpsi_dx,
                               std::complex<double> dpsi_dy,
                               std::complex<double> dpsi_dz) noexcept {
-    const double rho = psi.real() * psi.real() + psi.imag() * psi.imag();
+    const double rho = std::norm(psi);
     const Vec3d j = probability_current(psi, dpsi_dx, dpsi_dy, dpsi_dz);
     const double inv = rho > 1e-12 ? 1.0 / rho : 0.0;
     return Vec3d{j.x * inv, j.y * inv, j.z * inv};

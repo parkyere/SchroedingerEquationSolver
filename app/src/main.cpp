@@ -19,11 +19,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -86,99 +88,24 @@ namespace {
 
 constexpr std::uint64_t kTickMs = 16;
 
-// Panel-combo order; make_scene_director switches on this index.
-constexpr const char* kSceneNames[] = {
-    "hydrogen", "harmonic", "tunnel",  "harmonic1d",   "tunnel1d",
-    "doublewell1d", "ptwell1d", "morse1d", "h2plus",   "benzene",
-    "doubleslit2d", "landau2d", "bloch1d", "corral2d", "qdot2d",
-    "billiard2d", "anderson1d", "carpet1d", "qpc2d", "bouncer1d",
-    "spin", "spins", "rutherford3d"};
-constexpr int kSceneCount = 23;
-// Combo display labels; SAME order and length as kSceneNames (static_assert
-// below turns any drift into a compile error).
-constexpr const char* kSceneLabels[] = {
-    "Hydrogen atom", "Harmonic trap", "Tunneling barrier",
-    "1D harmonic oscillator", "1D tunneling barrier", "1D double well",
-    "1D reflectionless well", "1D Morse well", "H2+ molecular ion",
-    "Stripped benzene (1e)", "2D double slit + AB", "2D Landau / cyclotron",
-    "1D crystal lattice (Bloch)", "2D quantum corral", "2D quantum dot",
-    "2D quantum billiard", "1D Anderson localization", "1D quantum carpet",
-    "2D quantum point contact", "1D quantum bouncer", "Electron spin (Bloch)",
-    "16 interacting spins", "Rutherford scattering"};
-static_assert(sizeof(kSceneNames) / sizeof(kSceneNames[0]) == kSceneCount,
-              "kSceneNames length != kSceneCount");
-static_assert(sizeof(kSceneLabels) / sizeof(kSceneLabels[0]) == kSceneCount,
-              "kSceneLabels length != kSceneCount (combo out of sync)");
-std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
-    switch (idx) {
-        case 1: return std::make_unique<ses_shell::HarmonicDirector>();
-        case 2: return std::make_unique<ses_shell::TunnelingDirector>();
-        case 3: return std::make_unique<ses_shell::Harmonic1DDirector>();
-        case 4: return std::make_unique<ses_shell::Tunneling1DDirector>();
-        case 5: return std::make_unique<ses_shell::DoubleWell1DDirector>();
-        case 6: return std::make_unique<ses_shell::PtWell1DDirector>();
-        case 7: return std::make_unique<ses_shell::Morse1DDirector>();
-        case 8: return std::make_unique<ses_shell::H2PlusDirector>();
-        case 9: return std::make_unique<ses_shell::BenzeneDirector>();
-        case 10: return std::make_unique<ses_shell::DoubleSlit2DDirector>();
-        case 11: return std::make_unique<ses_shell::Landau2DDirector>();
-        case 12: return std::make_unique<ses_shell::Bloch1DDirector>();
-        case 13: return std::make_unique<ses_shell::Corral2DDirector>();
-        case 14: return std::make_unique<ses_shell::Qdot2DDirector>();
-        case 15: return std::make_unique<ses_shell::Billiard2DDirector>();
-        case 16: return std::make_unique<ses_shell::Anderson1DDirector>();
-        case 17: return std::make_unique<ses_shell::Carpet1DDirector>();
-        case 18: return std::make_unique<ses_shell::Qpc2DDirector>();
-        case 19: return std::make_unique<ses_shell::Bouncer1DDirector>();
-        case 20: return std::make_unique<ses_shell::SpinDirector>();
-        case 21: return std::make_unique<ses_shell::SpinsDirector>();
-        case 22: return std::make_unique<ses_shell::Rutherford3DDirector>();
-        default: return std::make_unique<ses_shell::HydrogenDirector>();
-    }
-}
-
+// Scene registry: ONE row per scene -- --scene name, combo label, director
+// factory, per-frame panel. The table lives AFTER Shell (panel thunks call
+// into it); these accessors front it.
+class Shell;
+struct SceneEntry {
+    const char* name;
+    const char* label;
+    std::unique_ptr<ses_shell::ScenarioDirector> (*factory)();
+    void (*panel)(Shell&);
+};
+int scene_table_count();
+const char* scene_table_name(int idx);
+const char* scene_table_label(int idx);
 // --scene name -> combo index, or -1 if unknown.
-int scene_index_of(const std::string& name) {
-    for (int i = 0; i < kSceneCount; ++i) {
-        if (name == kSceneNames[i]) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-// Arcs that force a NON-hydrogen scene (else a mismatched --scene could leave
-// the arc dereferencing a null capability). Arcs absent here drive hydrogen.
-struct ArcScene {
-    const char* arc;
-    const char* scene;
-};
-constexpr ArcScene kArcScenes[] = {
-    {"selftest-tunnel", "tunnel"},
-    {"selftest-trapdecay", "harmonic"},
-    {"selftest-ladder1d", "harmonic1d"},
-    {"selftest-tunnel1d", "tunnel1d"},
-    {"selftest-dw1d", "doublewell1d"},
-    {"selftest-pt1d", "ptwell1d"},
-    {"selftest-morse1d", "morse1d"},
-    {"selftest-doubleslit2d", "doubleslit2d"},
-    {"selftest-landau", "landau2d"},
-    {"selftest-bloch", "bloch1d"},
-    {"selftest-corral", "corral2d"},
-    {"selftest-qdot", "qdot2d"},
-    {"selftest-billiard", "billiard2d"},
-    {"selftest-anderson", "anderson1d"},
-    {"selftest-cat", "harmonic1d"},
-    {"selftest-carpet", "carpet1d"},
-    {"selftest-qpc2d", "qpc2d"},
-    {"selftest-bouncer", "bouncer1d"},
-    {"selftest-spin", "spin"},
-    {"selftest-spins", "spins"},
-    {"selftest-h2p", "h2plus"},
-    {"selftest-h2p-orbitals", "h2plus"},
-    {"selftest-benzene", "benzene"},
-    {"selftest-rutherford", "rutherford3d"},
-};
+int scene_index_of(const std::string& name);
+// Out-of-range idx boots the default scene (hydrogen, row 0).
+std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx);
+void draw_scene_panel(int idx, Shell& shell);
 
 class Shell {
 public:
@@ -194,11 +121,10 @@ public:
         // which strangles the sim rate and false-fails wall-clock verdicts.
         // --dump-frame still renders, but OFFSCREEN.
         for (const std::string& a : args_) {
-            if (a.rfind("--selftest-", 0) == 0 ||
-                a.rfind("--dump-frame", 0) == 0) {
+            if (a.starts_with("--selftest-") || a.starts_with("--dump-frame")) {
                 headless_ = true;
             }
-            if (a.rfind("--dump-frame", 0) == 0) {
+            if (a.starts_with("--dump-frame")) {
                 needs_render_ = true;
             }
         }
@@ -287,7 +213,10 @@ public:
     }
 
     void shutdown() {
-        vkDeviceWaitIdle(vk_ctx_.device);
+        if (vkDeviceWaitIdle(vk_ctx_.device) != VK_SUCCESS) {
+            // Device lost: no idle guarantee, but we are exiting anyway.
+            std::fprintf(stderr, "vk: wait-idle failed at shutdown\n");
+        }
         if (!headless_) {
             ImGui_ImplVulkan_Shutdown();
             ImGui_ImplSDL3_Shutdown();
@@ -377,66 +306,7 @@ public:
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
-            if (auto* hy = director_->hydrogen()) {
-                app::draw_hydrogen_panel(*this, ui_, *hy);
-            } else if (auto* ld = director_->ladder1d()) {
-                app::draw_ladder1d_panel(*this, ui_, *ld);
-            } else if (auto* dwp = director_->doublewell()) {
-                app::draw_doublewell_panel(*this, ui_, *dwp);
-            } else if (director_->morse() != nullptr) {
-                app::draw_generic_panel(*this, ui_,
-                                        {{"Jump up (U)", 'U'},
-                                         {"Jump down (D)", 'D'},
-                                         {"Pair beat (S)", 'S'},
-                                         {"Ground (2)", '2'}});
-            } else if (director_->reflect() != nullptr) {
-                app::draw_generic_panel(*this, ui_,
-                                        {{"Swap well (W)", 'W'}});
-            } else if (auto* mol = director_->molecule()) {
-                if (scene_index_ == 8) {
-                    app::draw_h2plus_panel(*this, ui_, *mol);
-                } else {
-                    app::draw_benzene_panel(*this, ui_, *mol);
-                }
-            } else if (auto* slit = director_->slit()) {
-                app::draw_doubleslit_panel(*this, ui_, *slit);
-            } else if (auto* lnd = director_->landau()) {
-                app::draw_landau_panel(*this, ui_, *lnd);
-            } else if (auto* blc = director_->bloch()) {
-                app::draw_bloch_panel(*this, ui_, *blc);
-            } else if (auto* crl = director_->corral()) {
-                app::draw_corral_panel(*this, ui_, *crl);
-            } else if (auto* qdt = director_->qdot()) {
-                app::draw_qdot_panel(*this, ui_, *qdt);
-            } else if (auto* bil = director_->billiard()) {
-                app::draw_billiard_panel(*this, ui_, *bil);
-            } else if (auto* and1 = director_->anderson()) {
-                app::draw_anderson_panel(*this, ui_, *and1);
-            } else if (director_->carpet() != nullptr) {
-                app::draw_generic_panel(*this, ui_,
-                                        {{"Refire (2)", '2'}});
-            } else if (auto* qpc = director_->qpc()) {
-                app::draw_qpc_panel(*this, ui_, *qpc);
-            } else if (director_->bouncer() != nullptr) {
-                app::draw_generic_panel(*this, ui_,
-                                        {{"Airy ground (2)", '2'},
-                                         {"Drop (F)", 'F'}});
-            } else if (auto* spn = director_->spin()) {
-                app::draw_spin_panel(*this, ui_, *spn);
-            } else if (auto* sns = director_->spins()) {
-                app::draw_spins_panel(*this, ui_, *sns);
-            } else if (auto* rf = director_->rutherford()) {
-                app::draw_rutherford_panel(*this, ui_, *rf);
-            } else if (director_->tunnel() != nullptr) {
-                app::draw_generic_panel(*this, ui_, {});
-            } else {
-                app::draw_generic_panel(
-                    *this, ui_,
-                    {{"Relax to ground (2)", '2'},
-                     {"Excite N (5)", '5'},
-                     {"Decay (D)", 'D'},
-                     {"Measure E (E)", 'E'}});
-            }
+            draw_scene_panel(scene_index_, *this);
             // Refresh here too: a panel control changed while PAUSED (no tick,
             // no title-dirty) would otherwise read stale forever.
             refresh_status();
@@ -517,12 +387,25 @@ public:
     }
 
     int scene_index() const { return scene_index_; }
-    static int scene_count() { return kSceneCount; }
-    static const char* scene_label(int i) { return kSceneLabels[i]; }
+    static int scene_count() { return scene_table_count(); }
+    static const char* scene_label(int i) { return scene_table_label(i); }
     void request_scene(int idx) {
-        if (idx >= 0 && idx < kSceneCount) {
+        if (idx >= 0 && idx < scene_table_count()) {
             pending_scene_ = idx;
         }
+    }
+    // Panel thunks (scene table rows) reach the slider state through this.
+    app::UiState& ui() { return ui_; }
+    // Cross-section slider range; grids are symmetric (+-L on every axis).
+    double box_half_extent() const { return director_->grid().x.xmax; }
+    // Arcs hop by NAME; kScenes stays the single source of the order.
+    void request_scene(const char* name) {
+        const int idx = scene_index_of(name);
+        if (idx < 0) {
+            std::fprintf(stderr, "request_scene: unknown scene '%s'\n", name);
+            return;
+        }
+        request_scene(idx);
     }
 
     // Scenario + capability seams (single accessors); the arcs call e.g.
@@ -588,8 +471,13 @@ private:
         if (idx == scene_index_) {
             return;
         }
-        std::fprintf(stderr, "scene: switching to %s\n", kSceneNames[idx]);
-        vkDeviceWaitIdle(vk_ctx_.device);
+        std::fprintf(stderr, "scene: switching to %s\n", scene_table_name(idx));
+        if (vkDeviceWaitIdle(vk_ctx_.device) != VK_SUCCESS) {
+            // No idle guarantee (device lost): tearing down live resources
+            // would be UB.
+            fatal_shell_error("Vulkan device",
+                             "wait-idle failed before scene switch");
+        }
         director_->release_gpu();
         director_ = make_scene_director(idx);
         scene_index_ = idx;
@@ -743,10 +631,15 @@ private:
         const double kPi = std::numbers::pi;
         const double ndc_x = 2.0 * mx / w - 1.0;
         const double ndc_y = 1.0 - 2.0 * my / h;
-        return ses::unproject_to_z0(azimuth_, elevation_, distance_,
-                                    45.0 * kPi / 180.0,
-                                    static_cast<double>(w) / h, ndc_x,
-                                    ndc_y, out_x, out_y);
+        const ses::StagePick p =
+            ses::unproject_to_z0(azimuth_, elevation_, distance_,
+                                 45.0 * kPi / 180.0,
+                                 static_cast<double>(w) / h, ndc_x, ndc_y);
+        if (p.hit) {
+            *out_x = p.x;
+            *out_y = p.y;
+        }
+        return p.hit;
     }
 
     // Generic keys handled here; anything else is offered to the scenario as
@@ -837,13 +730,12 @@ private:
         in.slice_axis = ui_.slice_axis;
         in.slice_offset = ui_.slice_offset;
         in.slice_map = ui_.slice_map;
-        // Packed scalar: changes whenever any plane control moves, so the
-        // accumulation early-out treats a plane edit as "not static".
-        const double plane_tag =
-            (ui_.clip_on ? 1.0 : 0.0) + 2.0 * ui_.clip_axis +
-            8.0 * ui_.clip_sign + 100.0 * ui_.clip_offset +
-            (ui_.slice_on ? 1000.0 : 0.0) + 4000.0 * ui_.slice_axis +
-            200000.0 * ui_.slice_offset + 30000000.0 * ui_.slice_map;
+        // Field-compared (a packed weighted sum could alias two simultaneous
+        // control edits and freeze the accumulator).
+        const PlaneState plane{ui_.clip_on,      ui_.clip_axis,
+                               ui_.clip_sign,    ui_.clip_offset,
+                               ui_.slice_on,     ui_.slice_axis,
+                               ui_.slice_offset, ui_.slice_map};
         // Temporal accumulation: average only while NOTHING changed (camera,
         // display params, flash, psi volume, animating particles).
         in.frame_index = static_cast<float>(frame_index_++ % 4096);
@@ -854,7 +746,7 @@ private:
             distance_ == acc_prev_.distance && in.peak == acc_prev_.peak &&
             view_.absorbance == acc_prev_.absorbance && in.flash == 0.0f &&
             acc_prev_.flash == 0.0f && in.cloud == acc_prev_.cloud &&
-            plane_tag == acc_prev_.plane_tag;
+            plane == acc_prev_.plane;
         // Overlay polylines (1D phasor curves, photon streaks); queried BEFORE
         // the accumulation gate: in-flight curves must break the freeze.
         const int nov = std::min(director_->overlay_curve_count(),
@@ -872,7 +764,7 @@ private:
         in.volume_changed =
             volume_written || view_.absorbance != acc_prev_.absorbance;
         acc_prev_ = {azimuth_, elevation_, distance_, in.peak, view_.absorbance,
-                     in.flash, in.cloud, plane_tag};
+                     in.flash, in.cloud, plane};
         const int nmk = std::min(director_->marker_count(),
                                  ses_vk::SceneRenderer::kMaxMarkers);
         for (int m = 0; m < nmk; ++m) {
@@ -880,11 +772,10 @@ private:
             in.markers[m] = {mk.x, mk.y, mk.z, mk.radius, mk.r, mk.g, mk.b};
         }
         in.marker_count = nmk;
-        double barrier_lo = 0.0;
-        double barrier_hi = 0.0;
-        in.barrier_on = director_->barrier_slab(barrier_lo, barrier_hi);
-        in.barrier_lo = static_cast<float>(barrier_lo);
-        in.barrier_hi = static_cast<float>(barrier_hi);
+        const std::optional<ses_shell::Slab> slab = director_->barrier_slab();
+        in.barrier_on = slab.has_value();
+        in.barrier_lo = static_cast<float>(slab ? slab->lo : 0.0);
+        in.barrier_hi = static_cast<float>(slab ? slab->hi : 0.0);
         // Psi display volume: the engine's GPU bridge image; null falls back
         // to the renderer's CPU-staged texture.
         in.psi_volume = director_->psi_volume_view();
@@ -938,12 +829,24 @@ private:
     int exit_code_ = 0;
     std::uint64_t last_tick_ = 0;
 
+    // Cross-section controls snapshot for the accumulation early-out.
+    struct PlaneState {
+        bool clip_on = false;
+        int clip_axis = 0;
+        int clip_sign = 0;
+        float clip_offset = 0.0f;
+        bool slice_on = false;
+        int slice_axis = 0;
+        float slice_offset = 0.0f;
+        int slice_map = 0;
+        bool operator==(const PlaneState&) const = default;
+    };
     struct AccumPrev {
         double azimuth = 1e9, elevation = 0, distance = 0, peak = 0,
                absorbance = 0;
         float flash = 0.0f;
         bool cloud = true;
-        double plane_tag = 0.0;  // cross-section controls fingerprint
+        PlaneState plane;
     } acc_prev_;
     long long frame_index_ = 0;
     ses::ViewState view_;  // flow tracers (F) + fog absorbance ([ ])
@@ -953,6 +856,139 @@ private:
     double elevation_ = 0.4;
     double distance_ = 150.0;  // frames ~+-62 Bohr at 45 deg fovy (n<=6 body)
 };
+
+template <typename DirectorT>
+std::unique_ptr<ses_shell::ScenarioDirector> make_director() {
+    return std::make_unique<DirectorT>();
+}
+
+// Panel-combo order. Factory and panel share the row, so a panel can deref
+// its scene's capability directly.
+constexpr SceneEntry kScenes[] = {
+    {"hydrogen", "Hydrogen atom", make_director<ses_shell::HydrogenDirector>,
+     [](Shell& s) { app::draw_hydrogen_panel(s, s.ui(), *s.hy()); }},
+    {"harmonic", "Harmonic trap", make_director<ses_shell::HarmonicDirector>,
+     [](Shell& s) {
+         app::draw_generic_panel(s, s.ui(),
+                                 {{"Relax to ground (2)", '2'},
+                                  {"Excite N (5)", '5'},
+                                  {"Decay (D)", 'D'},
+                                  {"Measure E (E)", 'E'}});
+     }},
+    {"tunnel", "Tunneling barrier", make_director<ses_shell::TunnelingDirector>,
+     [](Shell& s) { app::draw_generic_panel(s, s.ui(), {}); }},
+    {"harmonic1d", "1D harmonic oscillator",
+     make_director<ses_shell::Harmonic1DDirector>,
+     [](Shell& s) { app::draw_ladder1d_panel(s, s.ui(), *s.ln()); }},
+    {"tunnel1d", "1D tunneling barrier",
+     make_director<ses_shell::Tunneling1DDirector>,
+     [](Shell& s) { app::draw_generic_panel(s, s.ui(), {}); }},
+    {"doublewell1d", "1D double well",
+     make_director<ses_shell::DoubleWell1DDirector>,
+     [](Shell& s) { app::draw_doublewell_panel(s, s.ui(), *s.dw()); }},
+    {"ptwell1d", "1D reflectionless well",
+     make_director<ses_shell::PtWell1DDirector>,
+     [](Shell& s) {
+         app::draw_generic_panel(s, s.ui(), {{"Swap well (W)", 'W'}});
+     }},
+    {"morse1d", "1D Morse well", make_director<ses_shell::Morse1DDirector>,
+     [](Shell& s) {
+         app::draw_generic_panel(s, s.ui(),
+                                 {{"Jump up (U)", 'U'},
+                                  {"Jump down (D)", 'D'},
+                                  {"Pair beat (S)", 'S'},
+                                  {"Ground (2)", '2'}});
+     }},
+    {"h2plus", "H2+ molecular ion", make_director<ses_shell::H2PlusDirector>,
+     [](Shell& s) { app::draw_h2plus_panel(s, s.ui(), *s.ml()); }},
+    {"benzene", "Stripped benzene (1e)",
+     make_director<ses_shell::BenzeneDirector>,
+     [](Shell& s) { app::draw_benzene_panel(s, s.ui(), *s.ml()); }},
+    {"doubleslit2d", "2D double slit + AB",
+     make_director<ses_shell::DoubleSlit2DDirector>,
+     [](Shell& s) { app::draw_doubleslit_panel(s, s.ui(), *s.sl()); }},
+    {"landau2d", "2D Landau / cyclotron",
+     make_director<ses_shell::Landau2DDirector>,
+     [](Shell& s) { app::draw_landau_panel(s, s.ui(), *s.la()); }},
+    {"bloch1d", "1D crystal lattice (Bloch)",
+     make_director<ses_shell::Bloch1DDirector>,
+     [](Shell& s) { app::draw_bloch_panel(s, s.ui(), *s.bl()); }},
+    {"corral2d", "2D quantum corral",
+     make_director<ses_shell::Corral2DDirector>,
+     [](Shell& s) { app::draw_corral_panel(s, s.ui(), *s.cr()); }},
+    {"qdot2d", "2D quantum dot", make_director<ses_shell::Qdot2DDirector>,
+     [](Shell& s) { app::draw_qdot_panel(s, s.ui(), *s.qd()); }},
+    {"billiard2d", "2D quantum billiard",
+     make_director<ses_shell::Billiard2DDirector>,
+     [](Shell& s) { app::draw_billiard_panel(s, s.ui(), *s.bd()); }},
+    {"anderson1d", "1D Anderson localization",
+     make_director<ses_shell::Anderson1DDirector>,
+     [](Shell& s) { app::draw_anderson_panel(s, s.ui(), *s.an()); }},
+    {"carpet1d", "1D quantum carpet",
+     make_director<ses_shell::Carpet1DDirector>,
+     [](Shell& s) {
+         app::draw_generic_panel(s, s.ui(), {{"Refire (2)", '2'}});
+     }},
+    {"qpc2d", "2D quantum point contact",
+     make_director<ses_shell::Qpc2DDirector>,
+     [](Shell& s) { app::draw_qpc_panel(s, s.ui(), *s.qp()); }},
+    {"bouncer1d", "1D quantum bouncer",
+     make_director<ses_shell::Bouncer1DDirector>,
+     [](Shell& s) {
+         app::draw_generic_panel(s, s.ui(),
+                                 {{"Airy ground (2)", '2'}, {"Drop (F)", 'F'}});
+     }},
+    {"spin", "Electron spin (Bloch)", make_director<ses_shell::SpinDirector>,
+     [](Shell& s) { app::draw_spin_panel(s, s.ui(), *s.sp()); }},
+    {"spins", "16 interacting spins", make_director<ses_shell::SpinsDirector>,
+     [](Shell& s) { app::draw_spins_panel(s, s.ui(), *s.sn()); }},
+    {"rutherford3d", "Rutherford scattering",
+     make_director<ses_shell::Rutherford3DDirector>,
+     [](Shell& s) {
+         app::draw_rutherford_panel(s, s.ui(), *s.director().rutherford());
+     }},
+};
+constexpr int kSceneCount = static_cast<int>(std::size(kScenes));
+// Boot fallback + arc forcing assume row 0.
+static_assert(std::string_view{kScenes[0].name} == "hydrogen",
+              "hydrogen must be scene row 0");
+// Every arc-forced scene must resolve, or the arc boots hydrogen and derefs
+// a null capability.
+consteval bool arc_scenes_registered() {
+    for (const ses_shell::ArcSpec& as : ses_shell::kArcSpecs) {
+        if (as.scene == nullptr) {
+            continue;
+        }
+        bool found = false;
+        for (const SceneEntry& sc : kScenes) {
+            found = found || std::string_view{sc.name} == as.scene;
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(arc_scenes_registered(), "kArcSpecs names an unknown scene");
+
+int scene_table_count() { return kSceneCount; }
+const char* scene_table_name(int idx) { return kScenes[idx].name; }
+const char* scene_table_label(int idx) { return kScenes[idx].label; }
+int scene_index_of(const std::string& name) {
+    for (int i = 0; i < kSceneCount; ++i) {
+        if (name == kScenes[i].name) {
+            return i;
+        }
+    }
+    return -1;
+}
+std::unique_ptr<ses_shell::ScenarioDirector> make_scene_director(int idx) {
+    if (idx < 0 || idx >= kSceneCount) {
+        idx = 0;
+    }
+    return kScenes[idx].factory();
+}
+void draw_scene_panel(int idx, Shell& shell) { kScenes[idx].panel(shell); }
 
 }  // namespace
 
@@ -968,34 +1004,26 @@ int main(int argc, char* argv[]) {
     po::options_description desc("sesolver options");
     auto add = desc.add_options();
     add("help", "print this list and exit");
+    // Scene list generated from the registry (a hand-copy drifted once:
+    // rutherford3d went missing).
+    std::string scene_help = "boot scene (";
+    for (int i = 0; i < scene_table_count(); ++i) {
+        if (i > 0) {
+            scene_help += ", ";
+        }
+        scene_help += scene_table_name(i);
+    }
+    scene_help += ")";
     add("scene", po::value<std::string>()->default_value("hydrogen"),
-        "boot scene (hydrogen, harmonic, tunnel, harmonic1d, tunnel1d, "
-        "doublewell1d, ptwell1d, morse1d, h2plus, benzene, doubleslit2d, "
-        "landau2d, bloch1d, corral2d, qdot2d, billiard2d, anderson1d, "
-        "carpet1d, qpc2d, bouncer1d, spin, spins)");
+        scene_help.c_str());
     add("face-z", "boot straight into the z-facing (textbook) view");
     add("flow", "start with the probability-flow streaklines on");
-    for (const char* flag :
-         {"dump-frame", "dump-frame-late", "dump-frame-mid", "dump-frame-near",
-          "dump-frame-slice", "dump-frame-surface", "dump-frame-switch"}) {
-        add(flag, "render verification arc (offscreen frame dump)");
-    }
-    for (const char* flag :
-         {"selftest-anderson", "selftest-benzene", "selftest-billiard",
-          "selftest-bouncer",
-          "selftest-bloch", "selftest-carpet", "selftest-cascade",
-          "selftest-cat",
-          "selftest-corral", "selftest-decay", "selftest-doubleslit2d",
-          "selftest-dw1d", "selftest-efield", "selftest-energy",
-          "selftest-h2p", "selftest-h2p-orbitals", "selftest-kepler",
-          "selftest-ladder1d", "selftest-landau",
-          "selftest-magnetic", "selftest-manifold", "selftest-morse1d",
-          "selftest-partial", "selftest-pt1d", "selftest-qdot",
-          "selftest-qpc2d",
-          "selftest-rabi", "selftest-rutherford", "selftest-scene",
-          "selftest-spin", "selftest-spins", "selftest-trapdecay",
-          "selftest-tunnel", "selftest-tunnel1d"}) {
-        add(flag, "physics verification arc (headless)");
+    // Arc flags from the exported registry (ses.scenario.selftest_arcs): the
+    // flag, its forced scene, and the has_arg lookup share one table.
+    for (const ses_shell::ArcSpec& as : ses_shell::kArcSpecs) {
+        add(as.flag, as.render
+                         ? "render verification arc (offscreen frame dump)"
+                         : "physics verification arc (headless)");
     }
     po::variables_map vm;
     try {
@@ -1030,21 +1058,21 @@ int main(int argc, char* argv[]) {
     // The shell and the arcs keep their flag-string seam (has_arg).
     std::vector<std::string> args{argv, argv + argc};
 
-    // Scene selection: --scene, overridden by any arc with its own scene
-    // (kArcScenes); every OTHER selftest arc drives hydrogen. Plain
-    // --dump-frame keeps the requested scene.
+    // Scene selection: --scene, overridden by any arc with its own scene;
+    // every OTHER physics arc drives hydrogen. Render arcs (--dump-frame*)
+    // keep the requested scene.
     std::string scene = vm["scene"].as<std::string>();
     bool arc_forced = false;
-    for (const ArcScene& as : kArcScenes) {
-        if (vm.count(as.arc) > 0) {
+    for (const ses_shell::ArcSpec& as : ses_shell::kArcSpecs) {
+        if (as.scene != nullptr && vm.count(as.flag) > 0) {
             scene = as.scene;
             arc_forced = true;
             break;
         }
     }
     if (!arc_forced) {
-        for (const std::string& a : args) {
-            if (a.rfind("--selftest-", 0) == 0) {
+        for (const ses_shell::ArcSpec& as : ses_shell::kArcSpecs) {
+            if (!as.render && vm.count(as.flag) > 0) {
                 scene = "hydrogen";
                 break;
             }

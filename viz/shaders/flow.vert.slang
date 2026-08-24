@@ -1,21 +1,10 @@
 // instance = streak, vertex = trail slot (0=oldest tail .. len-1=newest head); fade matches ses.flow::trail_fade.
 // gl_VertexIndex/gl_InstanceIndex avoid the shaderDrawParameters capability SV_VertexID/SV_InstanceID need.
 import glsl;
+import viz_ubo;
 
 [[vk::binding(0, 0)]] StructuredBuffer<float4, Std430DataLayout> trail;
 
-struct Ubo {
-    float4x4 mvp;
-    float4 eye;             // unused; matches shared UBO layout
-    float4 box_min;
-    float4 box_max;
-    float4 proton_center;
-    float4 proton_color;
-    float inv_peak;
-    float absorbance;
-    float proton_radius;
-    float jitter_frame;
-};
 [[vk::binding(1, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
 struct Push {

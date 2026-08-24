@@ -1,5 +1,6 @@
 // No-atomics fixed-order fold => bit-exact partials; host finishes in double.
 // partials float2 packs (sum, max) -- not a complex number.
+#include "reduce.slang"
 import complex;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Complex, Std430DataLayout> psi;
@@ -28,14 +29,8 @@ void main(uint3 gid : SV_DispatchThreadID,
     }
     s_sum[tid] = acc;
     s_max[tid] = mx;
-    GroupMemoryBarrierWithGroupSync();
-    for (uint half_len = 128u; half_len > 0u; half_len >>= 1u) {
-        if (tid < half_len) {
-            s_sum[tid] += s_sum[tid + half_len];
-            s_max[tid] = max(s_max[tid], s_max[tid + half_len]);
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+#define NP_FOLD(a, b) { s_sum[a] += s_sum[b]; s_max[a] = max(s_max[a], s_max[b]); }
+    REDUCE_FOLD_256(NP_FOLD, tid);
     if (tid == 0u) {
         partials[grp.x] = float2(s_sum[0], s_max[0]);
     }

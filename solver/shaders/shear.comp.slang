@@ -3,6 +3,7 @@
 // std140 Params must match host struct field order (packing contract).
 import complex;
 import grid;
+import vec;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> psi;
 
@@ -29,9 +30,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
     int3 v = unflatten_moddiv(idx, params.nx, params.ny);
-    int e[3] = { v.x, v.y, v.z };
-    int f = e[params.freq_axis];
-    int p = e[params.coord_axis];
+    int f = comp(v, params.freq_axis);
+    int p = comp(v, params.coord_axis);
     // 2f<nf (not f<nf/2): keeps DC=0 at nf=1; matches CPU fftfreq contract.
     int sf = (2 * f < params.nf) ? f : f - params.nf;
     float kf = params.kscale * float(sf);

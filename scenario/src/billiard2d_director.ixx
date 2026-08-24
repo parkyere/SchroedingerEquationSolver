@@ -11,7 +11,6 @@ module;
 #include <vector>
 export module ses.scenario.billiard2d_director;
 export import ses.scenario.lattice2d_director;
-import ses.heightfield;
 import ses.observables;
 import ses.propagator;
 import ses.parallel;
@@ -84,8 +83,7 @@ public:
                 psi_(i, j, 0) =
                     std::exp(-(x * x + y * y) /
                              (4.0 * kBl2dSigma * kBl2dSigma)) *
-                    std::complex<double>{std::cos(kBl2dK0 * x),
-                                         std::sin(kBl2dK0 * x)};
+                    std::polar(1.0, kBl2dK0 * x);
             }
         });
         ses::normalize(psi_);
@@ -99,6 +97,11 @@ public:
     void toggle_shape() override {
         stadium_ = !stadium_;
         rebuild_potential();
+        // The engine holds its own copy: without this the GPU keeps stepping
+        // the OLD shape (latent since the GPU migration; selftest-billiard).
+        if (eng_ok_ && !eng_.set_potential(v_)) {
+            eng_ok_ = false;  // fall back to the CPU propagator
+        }
         fire();
         title_dirty_ = true;
     }
@@ -145,19 +148,19 @@ public:
     void reset_simulation() override { fire(); }
 
     bool handle_key(char key) override {
-        if (key == '2') {
+        switch (key) {
+        case '2':
             fire();
             return true;
-        }
-        if (key == '5') {
+        case '5':
             toggle_shape();
             return true;
-        }
-        if (key == 'A') {
+        case 'A':
             toggle_avg_view();
             return true;
+        default:
+            return false;
         }
-        return false;
     }
 
     double sim_dt() const override { return kBl2dDt; }
@@ -165,13 +168,6 @@ public:
 
     // ---- surface display (corral rule) ----
     bool cloud() const override { return false; }
-    const ses::Mesh& mesh() const override { return hf_.mesh; }
-    const std::vector<ses::Rgb>& colors() const override {
-        return hf_.colors;
-    }
-    bool take_mesh_dirty() override {
-        return std::exchange(mesh_dirty_, false);
-    }
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.95; }
     double default_camera_distance() const override { return 110.0; }
@@ -183,13 +179,15 @@ public:
     }
 
     std::string title_text() override {
+        // -1 sentinel = not yet sampled (API contract keeps the sentinel).
+        const double cf = avg_center_fraction();
         return strf(
             "Quantum billiard ({})  |  t = {:.1f} au  view {}  "
-            "center/interior = {:.2f}  keys: 2 fire / 5 shape / A average",
+            "center/interior = {}  keys: 2 fire / 5 shape / A average",
             stadium_ ? "Bunimovich stadium, CHAOTIC"
                      : "circle, integrable",
             sim_time_, avg_view_ ? "TIME AVERAGE (scar lens)" : "live",
-            avg_center_fraction());
+            cf < 0.0 ? std::string{"n/a"} : strf("{:.2f}", cf));
     }
 
 protected:
@@ -204,31 +202,10 @@ protected:
                         avg_steps_);
                 }
             });
-            double cur = 0.0;
-            for (int j = 0; j < kBl2dN; ++j) {
-                for (int i = 0; i < kBl2dN; ++i) {
-                    cur = std::max(cur, std::norm(scar_(i, j, 0)));
-                }
-            }
-            disp_peak_ = disp_peak_ <= 0.0
-                             ? cur
-                             : std::max(cur, 0.98 * disp_peak_);
-            hf_ = ses::heightfield_surface(scar_, kBl2dSurfH, disp_peak_,
-                                           kBl2dMeshStride);
-            mesh_dirty_ = true;
+            rebuild_surface(scar_, kBl2dSurfH, kBl2dMeshStride);
             return;
         }
-        double cur = 0.0;
-        for (int j = 0; j < kBl2dN; ++j) {
-            for (int i = 0; i < kBl2dN; ++i) {
-                cur = std::max(cur, std::norm(psi_(i, j, 0)));
-            }
-        }
-        disp_peak_ = disp_peak_ <= 0.0 ? cur
-                                       : std::max(cur, 0.98 * disp_peak_);
-        hf_ = ses::heightfield_surface(psi_, kBl2dSurfH, disp_peak_,
-                                       kBl2dMeshStride);
-        mesh_dirty_ = true;
+        rebuild_surface(psi_, kBl2dSurfH, kBl2dMeshStride);
     }
 
     void do_steps(int n) override {
@@ -242,7 +219,7 @@ protected:
                 const int chunk = std::min(left, 4);  // sample the avg 4x/tick
                 eng_.step(chunk);
                 eng_.readback(rb_);
-                store_readback();
+                unpack_interleaved(rb_.data(), psi_.data());
                 accumulate_occupancy();
                 ++avg_steps_;  // one time-average sample per chunk
                 left -= chunk;
@@ -259,13 +236,6 @@ protected:
     }
 
 private:
-    void store_readback() {
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(rb_[2 * i]),
-                                        static_cast<double>(rb_[2 * i + 1])};
-        }
-    }
     void accumulate_occupancy() {
         ses::parallel_for(kBl2dN, [&](int j) {
             const std::size_t row = static_cast<std::size_t>(j) * kBl2dN;
@@ -322,13 +292,10 @@ private:
     bool eng_ok_ = false;
     bool eng_dirty_ = true;
     std::vector<float> rb_;                        // readback scratch
-    ses::Heightfield hf_;
-    bool mesh_dirty_ = false;
     ses::Field3D scar_{phys_grid_};
     std::vector<double> avg_;
     long long avg_steps_ = 0;
     std::vector<float> outline_;
-    double disp_peak_ = 0.0;
     bool stadium_ = false;
     bool avg_view_ = false;
 };

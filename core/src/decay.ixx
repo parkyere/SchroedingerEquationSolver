@@ -131,8 +131,28 @@ struct ChannelPick {
     double p_total{};
 };
 
+// Stratified pick over positive rates (non-positives skipped, acc += r/total);
+// last-positive fallback absorbs u2 rounding at the top of the last stratum.
+// SINGLE SOURCE for pick_decay_channel and chain_decay_jumps.
+inline int select_stratum(const std::vector<double>& rates, double total,
+                          double u2) noexcept {
+    double acc = 0.0;
+    int last_positive = -1;
+    for (std::size_t m = 0; m < rates.size(); ++m) {
+        if (rates[m] <= 0.0) {
+            continue;
+        }
+        last_positive = static_cast<int>(m);
+        acc += rates[m] / total;
+        if (u2 < acc) {
+            return static_cast<int>(m);
+        }
+    }
+    return last_positive;
+}
+
 // Pure selection over precomputed rates -- reused by the GPU shell on GPU-reduced
-// populations. Final fallthrough guards u2 rounding at the top of the last stratum.
+// populations.
 inline ChannelPick pick_decay_channel(const std::vector<double>& rates, double dt,
                                       double u1, double u2) noexcept {
     double total = 0.0;
@@ -146,19 +166,7 @@ inline ChannelPick pick_decay_channel(const std::vector<double>& rates, double d
     if (!(u1 < p)) {
         return ChannelPick{-1, p};
     }
-    double acc = 0.0;
-    int last_positive = -1;
-    for (std::size_t m = 0; m < rates.size(); ++m) {
-        if (rates[m] <= 0.0) {
-            continue;
-        }
-        last_positive = static_cast<int>(m);
-        acc += rates[m] / total;
-        if (u2 < acc) {
-            return ChannelPick{static_cast<int>(m), p};
-        }
-    }
-    return ChannelPick{last_positive, p};
+    return ChannelPick{select_stratum(rates, total, u2), p};
 }
 
 // ---- chained jumps (one accumulated interval) ----
@@ -197,23 +205,7 @@ inline std::vector<int> chain_decay_jumps(const std::vector<RateChannel>& channe
             break;
         }
         const double u2 = u01();
-        double acc = 0.0;
-        int picked = -1;
-        int last_positive = -1;
-        for (std::size_t m = 0; m < channels.size(); ++m) {
-            if (rates[m] <= 0.0) {
-                continue;
-            }
-            last_positive = static_cast<int>(m);
-            acc += rates[m] / total;
-            if (u2 < acc) {
-                picked = static_cast<int>(m);
-                break;
-            }
-        }
-        if (picked < 0) {
-            picked = last_positive;  // u2 rounding at the top of the last stratum
-        }
+        const int picked = select_stratum(rates, total, u2);
         fired.push_back(picked);
         std::fill(pop.begin(), pop.end(), 0.0);
         pop[static_cast<std::size_t>(

@@ -1,11 +1,13 @@
 // Micro-benchmark for the per-frame hot path; not in ctest (machine-dependent timing). Run: sesolver_bench
 
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <vector>
 import ses.simulation;
 import ses.grid;
@@ -18,14 +20,18 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+// min-of-N: the fastest rep is the least scheduler/turbo-polluted sample.
 double time_ms(int reps, const std::function<void()>& fn) {
     fn();  // warm-up
-    const auto t0 = Clock::now();
+    double best = std::numeric_limits<double>::infinity();
     for (int i = 0; i < reps; ++i) {
+        const auto t0 = Clock::now();
         fn();
+        const auto t1 = Clock::now();
+        best = std::min(
+            best, std::chrono::duration<double, std::milli>(t1 - t0).count());
     }
-    const auto t1 = Clock::now();
-    return std::chrono::duration<double, std::milli>(t1 - t0).count() / reps;
+    return best;
 }
 
 void bench_size(int n) {
@@ -63,7 +69,7 @@ void bench_size(int n) {
 }  // namespace
 
 int main() {
-    std::printf("hot-path timings (avg of 5, after warm-up)\n");
+    std::printf("hot-path timings (min of 5, after warm-up)\n");
     bench_size(32);
     bench_size(64);
     return 0;

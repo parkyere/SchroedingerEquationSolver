@@ -1,4 +1,5 @@
 // dipole <to|r|from> = sum conj(to)*from*(x,y,z); packs 6 floats (re,im x3)/workgroup
+#include "reduce.slang"
 import complex;
 import grid;
 
@@ -40,15 +41,9 @@ void main(uint3 gid : SV_DispatchThreadID,
     sx[tid] = ax;
     sy[tid] = ay;
     sz[tid] = az;
-    GroupMemoryBarrierWithGroupSync();
-    for (uint half_len = 128u; half_len > 0u; half_len >>= 1u) {
-        if (tid < half_len) {
-            sx[tid] = sx[tid] + sx[tid + half_len];
-            sy[tid] = sy[tid] + sy[tid + half_len];
-            sz[tid] = sz[tid] + sz[tid + half_len];
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+#define DIP_FOLD(a, b) \
+    { sx[a] = sx[a] + sx[b]; sy[a] = sy[a] + sy[b]; sz[a] = sz[a] + sz[b]; }
+    REDUCE_FOLD_256(DIP_FOLD, tid);
     if (tid == 0u) {
         uint g = grp.x;
         partials[6u * g + 0u] = sx[0].re;

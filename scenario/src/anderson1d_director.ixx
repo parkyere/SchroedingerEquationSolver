@@ -56,6 +56,7 @@ inline std::vector<double> anderson_potential(const ses::Grid1D& g, double w,
     return v;
 }
 
+constexpr unsigned kAn1dSeed0 = 1;  // boot landscape; reroll increments
 constexpr int kAn1dPoints = 4096;
 constexpr double kAn1dHalf = 60.0;
 constexpr double kAn1dDt = 0.01;
@@ -71,8 +72,8 @@ class Anderson1DDirector final : public Line1DDirector, public AndersonApi {
 public:
     Anderson1DDirector()
         : Line1DDirector(wire_grid(),
-                         anderson_potential(wire_grid(), kAn1dW, 1),
-                         kAn1dDt, kAn1dRScale, kAn1dEScale, 1e30) {
+                         anderson_potential(wire_grid(), kAn1dW, kAn1dSeed0),
+                         kAn1dDt, kAn1dRScale, kAn1dEScale, kNoYClamp) {
         build_cap();
         fire();
     }
@@ -96,15 +97,11 @@ public:
     double survived() const override { return survived_; }
 
     bool handle_key(char key) override {
-        if (key == '2') {
-            fire();
-            return true;
+        switch (key) {
+            case '2': fire(); return true;
+            case '5': reroll(); return true;
+            default: return false;
         }
-        if (key == '5') {
-            reroll();
-            return true;
-        }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.25; }
@@ -175,7 +172,7 @@ private:
 
     std::vector<double> cap_;
     double w_ = kAn1dW;
-    unsigned seed_ = 1;
+    unsigned seed_ = kAn1dSeed0;
     double transmitted_ = 0.0;
     double survived_ = 1.0;
 };

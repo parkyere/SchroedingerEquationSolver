@@ -1,9 +1,10 @@
 // Marching-cubes emit: 8^3-cell blocks (matches classify pass); vertices packed
 // interleaved pos3/normal3/color3 -- the mesh pipeline's exact vertex layout;
-// deterministic cell order. MC tables, gradient, sampling and colormap are
-// verbatim ports of the CPU core (keep in sync).
+// deterministic cell order. Gradient, sampling and colormap are verbatim ports
+// of the CPU core (keep in sync); tables/classification in mc_common.
 import complex;
 import grid;
+import mc_common;
 
 [[vk::binding(0, 0)]] StructuredBuffer<float, Std430DataLayout> den;
 [[vk::binding(1, 0)]] StructuredBuffer<int, Std430DataLayout> mc_tab;
@@ -21,21 +22,9 @@ struct Params {
 };
 [[vk::binding(5, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
-static const float PI = 3.14159265358979323846;
-
-static const int3 kCorner[8] = {
-    int3(0, 0, 0), int3(1, 0, 0), int3(1, 1, 0), int3(0, 1, 0),
-    int3(0, 0, 1), int3(1, 0, 1), int3(1, 1, 1), int3(0, 1, 1)
-};
-static const int2 kEdge[12] = {
-    int2(0, 1), int2(1, 2), int2(2, 3), int2(3, 0),
-    int2(4, 5), int2(5, 6), int2(6, 7), int2(7, 4),
-    int2(0, 4), int2(1, 5), int2(2, 6), int2(3, 7)
-};
-
 groupshared uint s_cnt[512];
 
-int flat_at(int3 p) { return p.x + params.npts.x * (p.y + params.npts.y * p.z); }
+int flat_at(int3 p) { return mc_flat_at(p, params.npts.xyz); }
 
 float den_clamped(int3 p) {
     p = clamp(p, int3(0, 0, 0), params.npts.xyz - 1);
@@ -66,16 +55,17 @@ float3 phase_color_at(float3 pos) {
                       psi[flat_at(i0 + int3(1, 1, 1))], t.x);
     Complex c = mix(mix(c00, c10, t.y), mix(c01, c11, t.y), t.z);
     float theta = arg(c);
-    float h = (theta + PI) / (2.0 * PI) * 6.0;
+    float h = (theta + kPi) / (2.0 * kPi) * 6.0;
     h = h - 6.0 * floor(h / 6.0);
     float x = 1.0 - abs(fmod(h, 2.0) - 1.0);
-    int hi = int(h);
-    if (hi == 0) return float3(1.0, x, 0.0);
-    if (hi == 1) return float3(x, 1.0, 0.0);
-    if (hi == 2) return float3(0.0, 1.0, x);
-    if (hi == 3) return float3(0.0, x, 1.0);
-    if (hi == 4) return float3(x, 0.0, 1.0);
-    return float3(1.0, 0.0, x);
+    switch (int(h)) {
+    case 0: return float3(1.0, x, 0.0);
+    case 1: return float3(x, 1.0, 0.0);
+    case 2: return float3(0.0, 1.0, x);
+    case 3: return float3(0.0, x, 1.0);
+    case 4: return float3(x, 0.0, 1.0);
+    default: return float3(1.0, 0.0, x);
+    }
 }
 
 [shader("compute")]
@@ -90,12 +80,8 @@ void main(uint3 grp : SV_GroupID, uint lidx : SV_GroupIndex) {
     uint tris = 0u;
     bool live = all(cell < (params.npts.xyz - 1));
     if (live) {
-        for (int c = 0; c < 8; ++c) {
-            if (den[flat_at(cell + kCorner[c])] < params.iso) {
-                cube |= 1 << c;
-            }
-        }
-        tris = uint(mc_tab[4352 + cube]);
+        cube = mc_classify_cube(den, cell, params.npts.xyz, params.iso);
+        tris = uint(mc_tab[kMcCountOff + cube]);
     }
 
     // exclusive in-block scan of triangle counts
@@ -117,24 +103,24 @@ void main(uint3 grp : SV_GroupID, uint lidx : SV_GroupIndex) {
     float3 cpos[8];
     float cval[8];
     for (int c = 0; c < 8; ++c) {
-        int3 p = cell + kCorner[c];
+        int3 p = cell + kMcCorner[c];
         cpos[c] = cell_pos(p, params.box_min.xyz, params.cell_h.xyz);
         cval[c] = den[flat_at(p)];
     }
 
-    int edges = mc_tab[cube];
+    int edges = mc_tab[kMcEdgeOff + cube];
     float3 ev[12];
     float3 en[12];
     for (int e = 0; e < 12; ++e) {
         if ((edges & (1 << e)) == 0) {
             continue;
         }
-        int a = kEdge[e].x;
-        int b = kEdge[e].y;
+        int a = kMcEdge[e].x;
+        int b = kMcEdge[e].y;
         float t = (params.iso - cval[a]) / (cval[b] - cval[a]);
         ev[e] = lerp(cpos[a], cpos[b], t);
-        float3 ga = gradient_at(cell + kCorner[a]);
-        float3 gb = gradient_at(cell + kCorner[b]);
+        float3 ga = gradient_at(cell + kMcCorner[a]);
+        float3 gb = gradient_at(cell + kMcCorner[b]);
         float3 nrm = -lerp(ga, gb, t);  // outward = down-gradient
         float len = length(nrm);
         en[e] = (len > 0.0) ? nrm / len : nrm;
@@ -146,7 +132,7 @@ void main(uint3 grp : SV_GroupID, uint lidx : SV_GroupIndex) {
             return;  // cap: monotone offsets, tail is a clean prefix cut
         }
         for (uint v = 0u; v < 3u; ++v) {
-            int e = mc_tab[256 + cube * 16 + int(tr) * 3 + int(v)];
+            int e = mc_tab[kMcTriOff + cube * kMcTriStride + int(tr) * 3 + int(v)];
             uint o = slot * 27u + v * 9u;
             float3 col = phase_color_at(ev[e]);
             vb[o + 0u] = ev[e].x;

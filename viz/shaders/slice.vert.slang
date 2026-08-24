@@ -3,21 +3,8 @@
 // SV_VertexID needs.
 import glsl;
 import vec;
+import viz_ubo;
 
-struct Ubo {
-    float4x4 mvp;
-    float4 eye;
-    float4 box_min;
-    float4 box_max;
-    float4 proton_center;
-    float4 proton_color;
-    float inv_peak;
-    float absorbance;
-    float proton_radius;
-    float jitter_frame;
-    float4 clip;
-    float4 slice;  // .x enable, .y axis, .z offset, .w map mode
-};
 [[vk::binding(0, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
 struct VSOut {

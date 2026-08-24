@@ -2,6 +2,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <string>
 export module ses.scenario.rutherford3d_director;
 export import ses.scenario.base_director;
@@ -61,7 +62,9 @@ public:
     double turning_point() const override {
         return kRu3dZProj * z_ / energy_;
     }
-    double closest_approach() const override { return r_min_seen_; }
+    double closest_approach() const override {
+        return r_min_seen_.value_or(0.0);
+    }
     double backscattered_fraction() const override { return back_; }
 
     // Base reset re-uploads psi only; also push the new potential to the engine.
@@ -100,57 +103,43 @@ protected:
         return strf("  Au(Z={:.0f}) <- He++ (alpha; v={:.2f} a.u., eta={:.1f} ~ real "
                     "5 MeV)  E = {:.1f} eV  r_min = {:.1f} bohr  closest <r> = {:.1f} "
                     " backscatter {:.2f}",
-                    z_, v, eta, energy_ * kBaseHaToEv, turning_point(),
-                    r_min_seen_ < 1e8 ? r_min_seen_ : 0.0, back_);
+                    z_, v, eta, energy_ * kHaToEv, turning_point(),
+                    r_min_seen_.value_or(0.0), back_);
     }
 
-    // Readback ~10 ms; probe every 3rd title tick.
+    // Mean-radius / backscatter tallies via the base probe (gate/cadence/skip
+    // there).
     void after_step_batch() override {
-        if (!gpu_title_due_ || ++probe_phase_ % 3 != 0) {
-            return;
-        }
-        engine_.wait_async();
-        if (!engine_.readback(readback_buf_)) {
-            return;
-        }
         const ses::Grid3D& g = sim_.grid();
-        const int nx = g.x.n;
-        const int ny = g.y.n;
-        const std::size_t cells = readback_buf_.size() / 2;
         double mr = 0.0;
         double den = 0.0;
         double back = 0.0;
-        for (std::size_t idx = 0; idx < cells; ++idx) {
-            const double re = readback_buf_[2 * idx];
-            const double im = readback_buf_[2 * idx + 1];
-            const double d = re * re + im * im;
-            if (d <= 0.0) {
-                continue;
-            }
-            const int i = static_cast<int>(idx % nx);
-            const int j = static_cast<int>((idx / nx) % ny);
-            const int k = static_cast<int>(idx / (nx * ny));
-            const double x = g.x.coord(i);
-            const double y = g.y.coord(j);
-            const double z = g.z.coord(k);
-            mr += std::sqrt(x * x + y * y + z * z) * d;
-            den += d;
-            if (x < kRu3dLaunchX) {
-                back += d;
-            }
+        if (!probe_readback([&](int i, int j, int k, double d) {
+                if (d <= 0.0) {
+                    return;
+                }
+                const double x = g.x.coord(i);
+                const double y = g.y.coord(j);
+                const double z = g.z.coord(k);
+                mr += std::sqrt(x * x + y * y + z * z) * d;
+                den += d;
+                if (x < kRu3dLaunchX) {
+                    back += d;
+                }
+            })) {
+            return;
         }
         if (den > 0.0) {
             const double mean_r = mr / den;
-            r_min_seen_ = std::min(r_min_seen_, mean_r);
+            r_min_seen_ = std::min(r_min_seen_.value_or(mean_r), mean_r);
             back_ = std::max(back_, back / den);
             title_dirty_ = true;
         }
     }
 
     void after_reset() override {
-        r_min_seen_ = 1e9;
+        r_min_seen_.reset();
         back_ = 0.0;
-        probe_phase_ = 0;
     }
 
 private:
@@ -172,9 +161,8 @@ private:
 
     double energy_ = kRu3dEDefault;
     double z_ = kRu3dZDefault;
-    double r_min_seen_ = 1e9;
+    std::optional<double> r_min_seen_;
     double back_ = 0.0;
-    int probe_phase_ = 0;
 };
 
 }  // namespace ses_shell

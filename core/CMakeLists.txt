@@ -32,6 +32,7 @@ target_sources(sesolver_core
         src/radial.ixx
         src/spheroidal.ixx
         src/h2plus_atlas_data.ixx
+        src/h2plus_atlas_loader.ixx
         src/observables.ixx
         src/bloch.ixx
         src/ladder.ixx

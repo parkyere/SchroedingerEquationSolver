@@ -97,7 +97,11 @@ struct PhotonFlightPool {
     // Ages every active flight; expires past its own total.
     void advance() {
         for (Flight& f : slots) {
-            if (f.age_frames >= 0 && ++f.age_frames > f.total_frames) {
+            if (f.age_frames < 0) {
+                continue;
+            }
+            ++f.age_frames;
+            if (f.age_frames > f.total_frames) {
                 f.age_frames = -1;
             }
         }
@@ -112,9 +116,13 @@ struct PhotonFlightPool {
     // i-th ACTIVE flight in slot order; nullptr past count().
     const Flight* active(int i) const {
         for (const Flight& f : slots) {
-            if (f.age_frames >= 0 && i-- == 0) {
+            if (f.age_frames < 0) {
+                continue;
+            }
+            if (i == 0) {
                 return &f;
             }
+            --i;
         }
         return nullptr;
     }

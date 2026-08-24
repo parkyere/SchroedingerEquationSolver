@@ -10,10 +10,10 @@ export import ses.grid;
 export import ses.spectral;
 export import ses.fft;
 export import ses.field;
-import ses.parallel;
 
 
-// Split-operator (Fourier) TDSE propagator, atomic units.
+// Split-operator (Fourier) TDSE propagator, atomic units. Tables and phase
+// apply shared via ses.spectral (bitwise-pinned by propagator_tables_test).
 
 
 export namespace ses {
@@ -21,22 +21,10 @@ export namespace ses {
 class SplitOperator1D {
 public:
     SplitOperator1D(const Grid1D& g, const std::vector<double>& potential, double dt)
-        : dt_(dt) {
+        : dt_(dt),
+          half_v_(build_half_potential_table(potential, dt, unit_phase)),
+          kinetic_(build_kinetic_table(g, 1.0, dt, unit_phase)) {
         assert(static_cast<int>(potential.size()) == g.n);
-        const std::size_t n = potential.size();
-
-        half_v_.resize(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            const double th = -0.5 * potential[i] * dt;
-            half_v_[i] = std::complex<double>{std::cos(th), std::sin(th)};
-        }
-
-        const std::vector<double> k = wavenumbers(g);
-        kinetic_.resize(n);
-        for (std::size_t j = 0; j < n; ++j) {
-            const double th = -0.5 * k[j] * k[j] * dt;
-            kinetic_[j] = std::complex<double>{std::cos(th), std::sin(th)};
-        }
     }
 
     double dt() const noexcept { return dt_; }
@@ -53,13 +41,6 @@ public:
     }
 
 private:
-    static void apply_phase(const std::vector<std::complex<double>>& phase,
-                            std::vector<std::complex<double>>& a) noexcept {
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            a[i] = a[i] * phase[i];
-        }
-    }
-
     double dt_;
     std::vector<std::complex<double>> half_v_;
     std::vector<std::complex<double>> kinetic_;
@@ -71,39 +52,15 @@ public:
     // existing caller tables bitwise identical (MassParameter tests).
     SplitOperator3D(const Grid3D& g, const std::vector<double>& potential, double dt,
                     double mass = 1.0)
-        : dt_(dt) {
+        : dt_(dt),
+          half_v_(build_half_potential_table(potential, dt, unit_phase)),
+          kinetic_(build_kinetic_table(g, mass, dt, unit_phase)) {
         assert(static_cast<int>(potential.size()) == g.size());
-        const std::size_t n = potential.size();
-
-        half_v_.resize(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            const double th = -0.5 * potential[i] * dt;
-            half_v_[i] = std::complex<double>{std::cos(th), std::sin(th)};
-        }
-
-        const std::vector<double> kx = wavenumbers(g.x);
-        const std::vector<double> ky = wavenumbers(g.y);
-        const std::vector<double> kz = wavenumbers(g.z);
-        kinetic_.resize(n);
-        for (int k = 0; k < g.z.n; ++k) {
-            for (int j = 0; j < g.y.n; ++j) {
-                for (int i = 0; i < g.x.n; ++i) {
-                    const double kxx = kx[static_cast<std::size_t>(i)];
-                    const double kyy = ky[static_cast<std::size_t>(j)];
-                    const double kzz = kz[static_cast<std::size_t>(k)];
-                    const double th =
-                        -0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) / mass * dt;
-                    kinetic_[static_cast<std::size_t>(g.flat(i, j, k))] =
-                        std::complex<double>{std::cos(th), std::sin(th)};
-                }
-            }
-        }
     }
 
     double dt() const noexcept { return dt_; }
 
-    // Read access for CPU driven_step (ses.drive) and table-pinning tests;
-    // the GPU engine derives phases in-shader.
+    // Read access for table-pinning tests; the GPU engine derives phases in-shader.
     const std::vector<std::complex<double>>& half_potential_phase() const noexcept { return half_v_; }
     const std::vector<std::complex<double>>& kinetic_phase() const noexcept { return kinetic_; }
 
@@ -119,15 +76,6 @@ public:
     }
 
 private:
-    // Elementwise (disjoint) multiply: threaded result is bitwise identical.
-    static void apply_phase(const std::vector<std::complex<double>>& phase,
-                            std::vector<std::complex<double>>& a) noexcept {
-        parallel_for(static_cast<int>(a.size()), [&](int i) {
-            a[static_cast<std::size_t>(i)] =
-                a[static_cast<std::size_t>(i)] * phase[static_cast<std::size_t>(i)];
-        });
-    }
-
     double dt_;
     std::vector<std::complex<double>> half_v_;
     std::vector<std::complex<double>> kinetic_;

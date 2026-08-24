@@ -4,14 +4,20 @@
 set(_ses_viz_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/spv")
 file(MAKE_DIRECTORY "${_ses_viz_spv_dir}")
 set(_ses_viz_hdrs "")
-foreach(_k IN ITEMS accum bloom_down bloom_up compose particles
+# CPU/GPU mirror constants -- host: vk_render.ixx kMaxMarkers / kAccumCap.
+set(_ses_viz_max_markers 64)
+set(_ses_viz_accum_cap 512)
+foreach(_k IN ITEMS bloom_down bloom_up compose particles
         occupancy occ_dilate shadow)
     ses_bake_shader(_ses_viz_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
                     "${_ses_viz_spv_dir}" "${_k}.comp" compute "${_k}")
 endforeach()
-foreach(_k IN ITEMS mesh.vert mesh.frag marker.frag volume.vert volume.frag
+ses_bake_shader(_ses_viz_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                "${_ses_viz_spv_dir}" "accum.comp" compute accum
+                "-DSES_ACCUM_CAP=${_ses_viz_accum_cap}")
+foreach(_k IN ITEMS mesh.vert mesh.frag marker.frag volume.vert
         slice.vert slice.frag
-        flow.vert flow.frag overlay.vert overlay.frag blit.vert blit.frag)
+        flow.vert flow.frag overlay.vert blit.vert blit.frag)
     string(REPLACE "." "_" _x "${_k}")
     if(_k MATCHES "\\.vert$")
         set(_stage vertex)
@@ -21,6 +27,12 @@ foreach(_k IN ITEMS mesh.vert mesh.frag marker.frag volume.vert volume.frag
     ses_bake_shader(_ses_viz_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
                     "${_ses_viz_spv_dir}" "${_k}" "${_stage}" "${_x}")
 endforeach()
+ses_bake_shader(_ses_viz_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                "${_ses_viz_spv_dir}" "volume.frag" fragment volume_frag
+                "-DSES_MAX_MARKERS=${_ses_viz_max_markers}")
+# overlay.frag == flow.frag passthrough: one source, two pipeline blobs.
+ses_bake_shader(_ses_viz_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                "${_ses_viz_spv_dir}" "flow.frag" fragment overlay_frag)
 add_custom_target(ses_viz_spv DEPENDS ${_ses_viz_hdrs})
 
 # Module interface units compile to real objects -- no placeholder TU needed.

@@ -7,7 +7,7 @@
 #
 # Classification of staged paths:
 #   TEST        : tests/**
-#   PRODUCTION  : core/include/**, core/src/**, app/**
+#   PRODUCTION  : core/**, solver/**, viz/**, scenario/**, app/**
 #   NEUTRAL     : everything else
 #
 # Rationale: red test first (its own commit), then the production change that
@@ -26,7 +26,7 @@ for f in $staged; do
     case "$f" in
         tests/*)
             has_test=1 ;;
-        core/include/*|core/src/*|app/*)
+        core/*|solver/*|viz/*|scenario/*|app/*)
             has_prod=1 ;;
         *)
             : ;;  # neutral - ignored

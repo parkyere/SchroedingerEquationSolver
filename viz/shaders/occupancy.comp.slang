@@ -1,27 +1,20 @@
 // Empty-space skipping: one workgroup per occ cell, one thread per fine texel.
 // Max is associative in fp, so the parallel reduction order is exact.
+import viz_ubo;
+
 [[vk::binding(0, 0)]] [[vk::image_format("r32f")]] RWTexture3D<float4> occ;
 
-struct Ubo {
-    float4x4 mvp;
-    float4 eye;
-    float4 box_min;
-    float4 box_max;
-    float4 proton_center;
-    float4 proton_color;
-    float inv_peak;
-    float absorbance;
-    float proton_radius;
-    float jitter_frame;
-};
 [[vk::binding(1, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
 [[vk::binding(2, 0)]] Sampler3D<float4> psi_tex;
 
-groupshared float s_max[512];
+static const uint kWg = 8;
+static const uint kWgVol = kWg * kWg * kWg;
+
+groupshared float s_max[kWgVol];
 
 [shader("compute")]
-[numthreads(8, 8, 8)]
+[numthreads(kWg, kWg, kWg)]
 void main(uint3 gwg : SV_GroupID, uint3 glid : SV_GroupThreadID,
           uint lidx : SV_GroupIndex) {
     // One workgroup per occ cell: no bounds check; all invocations must reach the barriers.
@@ -36,11 +29,11 @@ void main(uint3 gwg : SV_GroupID, uint3 glid : SV_GroupThreadID,
     int3 begin = (c * fsize) / osize;
     int3 end = max(begin + int3(1, 1, 1), ((c + int3(1, 1, 1)) * fsize) /
                                               osize);
-    // Grid-stride: the block can exceed the 8^3 workgroup.
+    // Grid-stride: the block can exceed the kWg^3 workgroup.
     float m = 0.0;
-    for (int k = begin.z + int(glid.z); k < end.z; k += 8) {
-        for (int j = begin.y + int(glid.y); j < end.y; j += 8) {
-            for (int i = begin.x + int(glid.x); i < end.x; i += 8) {
+    for (int k = begin.z + int(glid.z); k < end.z; k += int(kWg)) {
+        for (int j = begin.y + int(glid.y); j < end.y; j += int(kWg)) {
+            for (int i = begin.x + int(glid.x); i < end.x; i += int(kWg)) {
                 float2 s = psi_tex.Load(int4(int3(i, j, k), 0)).xy;
                 m = max(m, dot(s, s));
             }
@@ -49,7 +42,7 @@ void main(uint3 gwg : SV_GroupID, uint3 glid : SV_GroupThreadID,
     uint tid = lidx;
     s_max[tid] = m;
     GroupMemoryBarrierWithGroupSync();
-    for (uint h = 256u; h > 0u; h >>= 1u) {
+    for (uint h = kWgVol / 2u; h > 0u; h >>= 1u) {
         if (tid < h) {
             s_max[tid] = max(s_max[tid], s_max[tid + h]);
         }

@@ -44,98 +44,102 @@ inline const double s11_pi = std::sqrt(11.0 / kPi);
 // (l=1 anchor: -1 -> y, 0 -> z, +1 -> x).
 inline double real_spherical_harmonic(int l, int m, double x, double y, double z) noexcept {
     const double r2 = x * x + y * y + z * z;
-    if (l == 0) {
-        return 1.0 / (2.0 * ynorm::sqrt_pi);
-    }
     if (r2 == 0.0) {
-        return 0.0;  // l > 0 vanishes as r^l
+        // l > 0 vanishes as r^l
+        return l == 0 ? 1.0 / (2.0 * ynorm::sqrt_pi) : 0.0;
     }
-    if (l == 1) {
-        const double c = ynorm::s3_4pi / std::sqrt(r2);
-        switch (m) {
-            case -1: return c * y;
-            case 0: return c * z;
-            default: return c * x;
-        }
-    }
-    if (l == 2) {
-        const double c = ynorm::s15_pi / r2;
-        switch (m) {
-            case -2: return 0.5 * c * x * y;
-            case -1: return 0.5 * c * y * z;
-            case 0: return 0.25 * ynorm::s5_pi * (3.0 * z * z - r2) / r2;
-            case 1: return 0.5 * c * z * x;
-            default: return 0.25 * c * (x * x - y * y);
-        }
-    }
-    if (l == 3) {
-        const double r3 = r2 * std::sqrt(r2);
-        switch (m) {
-            case -3: return 0.25 * ynorm::s35_2pi * y * (3.0 * x * x - y * y) / r3;
-            case -2: return 0.5 * ynorm::s105_pi * x * y * z / r3;
-            case -1: return 0.25 * ynorm::s21_2pi * y * (5.0 * z * z - r2) / r3;
-            case 0: return 0.25 * ynorm::s7_pi * z * (5.0 * z * z - 3.0 * r2) / r3;
-            case 1: return 0.25 * ynorm::s21_2pi * x * (5.0 * z * z - r2) / r3;
-            case 2: return 0.25 * ynorm::s105_pi * z * (x * x - y * y) / r3;
-            default: return 0.25 * ynorm::s35_2pi * x * (x * x - 3.0 * y * y) / r3;
-        }
-    }
-    if (l == 4) {
-        const double r4 = r2 * r2;
-        switch (m) {
-            case -4: return 0.75 * ynorm::s35_pi * x * y * (x * x - y * y) / r4;
-            case -3: return 0.75 * ynorm::s35_2pi * y * z * (3.0 * x * x - y * y) / r4;
-            case -2: return 0.75 * ynorm::s5_pi * x * y * (7.0 * z * z - r2) / r4;
-            case -1: return 0.75 * ynorm::s5_2pi * y * z * (7.0 * z * z - 3.0 * r2) / r4;
-            case 0:
-                return (3.0 / 16.0) * ynorm::s1_pi *
-                       (35.0 * z * z * z * z - 30.0 * z * z * r2 + 3.0 * r2 * r2) / r4;
-            case 1: return 0.75 * ynorm::s5_2pi * x * z * (7.0 * z * z - 3.0 * r2) / r4;
-            case 2: return 0.375 * ynorm::s5_pi * (x * x - y * y) * (7.0 * z * z - r2) / r4;
-            case 3: return 0.75 * ynorm::s35_2pi * x * z * (x * x - 3.0 * y * y) / r4;
-            default:
-                return (3.0 / 16.0) * ynorm::s35_pi *
-                       (x * x * x * x - 6.0 * x * x * y * y + y * y * y * y) / r4;
-        }
-    }
-    // l == 5; orthonormality pinned by tests.
-    const double r5 = r2 * r2 * std::sqrt(r2);
-    const double x2 = x * x;
-    const double y2 = y * y;
-    const double z2 = z * z;
-    const double zpoly = 21.0 * z2 * z2 - 14.0 * z2 * r2 + r2 * r2;
-    switch (m) {
-        case -5:
-            return (1.0 / 32.0) * ynorm::s1386_pi *
-                   y * (5.0 * x2 * x2 - 10.0 * x2 * y2 + y2 * y2) / r5;
-        case -4:
-            return (1.0 / 16.0) * ynorm::s3465_pi *
-                   4.0 * x * y * (x2 - y2) * z / r5;
-        case -3:
-            return (1.0 / 32.0) * ynorm::s770_pi *
-                   y * (3.0 * x2 - y2) * (9.0 * z2 - r2) / r5;
-        case -2:
-            return (1.0 / 8.0) * ynorm::s1155_pi *
-                   2.0 * x * y * z * (3.0 * z2 - r2) / r5;
-        case -1:
-            return (1.0 / 16.0) * ynorm::s165_pi * y * zpoly / r5;
+    switch (l) {
         case 0:
-            return (1.0 / 16.0) * ynorm::s11_pi *
-                   z * (63.0 * z2 * z2 - 70.0 * z2 * r2 + 15.0 * r2 * r2) / r5;
-        case 1:
-            return (1.0 / 16.0) * ynorm::s165_pi * x * zpoly / r5;
-        case 2:
-            return (1.0 / 8.0) * ynorm::s1155_pi *
-                   (x2 - y2) * z * (3.0 * z2 - r2) / r5;
-        case 3:
-            return (1.0 / 32.0) * ynorm::s770_pi *
-                   x * (x2 - 3.0 * y2) * (9.0 * z2 - r2) / r5;
-        case 4:
-            return (1.0 / 16.0) * ynorm::s3465_pi *
-                   (x2 * x2 - 6.0 * x2 * y2 + y2 * y2) * z / r5;
-        default:
-            return (1.0 / 32.0) * ynorm::s1386_pi *
-                   x * (x2 * x2 - 10.0 * x2 * y2 + 5.0 * y2 * y2) / r5;
+            return 1.0 / (2.0 * ynorm::sqrt_pi);
+        case 1: {
+            const double c = ynorm::s3_4pi / std::sqrt(r2);
+            switch (m) {
+                case -1: return c * y;
+                case 0: return c * z;
+                default: return c * x;
+            }
+        }
+        case 2: {
+            const double c = ynorm::s15_pi / r2;
+            switch (m) {
+                case -2: return 0.5 * c * x * y;
+                case -1: return 0.5 * c * y * z;
+                case 0: return 0.25 * ynorm::s5_pi * (3.0 * z * z - r2) / r2;
+                case 1: return 0.5 * c * z * x;
+                default: return 0.25 * c * (x * x - y * y);
+            }
+        }
+        case 3: {
+            const double r3 = r2 * std::sqrt(r2);
+            switch (m) {
+                case -3: return 0.25 * ynorm::s35_2pi * y * (3.0 * x * x - y * y) / r3;
+                case -2: return 0.5 * ynorm::s105_pi * x * y * z / r3;
+                case -1: return 0.25 * ynorm::s21_2pi * y * (5.0 * z * z - r2) / r3;
+                case 0: return 0.25 * ynorm::s7_pi * z * (5.0 * z * z - 3.0 * r2) / r3;
+                case 1: return 0.25 * ynorm::s21_2pi * x * (5.0 * z * z - r2) / r3;
+                case 2: return 0.25 * ynorm::s105_pi * z * (x * x - y * y) / r3;
+                default: return 0.25 * ynorm::s35_2pi * x * (x * x - 3.0 * y * y) / r3;
+            }
+        }
+        case 4: {
+            const double r4 = r2 * r2;
+            switch (m) {
+                case -4: return 0.75 * ynorm::s35_pi * x * y * (x * x - y * y) / r4;
+                case -3: return 0.75 * ynorm::s35_2pi * y * z * (3.0 * x * x - y * y) / r4;
+                case -2: return 0.75 * ynorm::s5_pi * x * y * (7.0 * z * z - r2) / r4;
+                case -1: return 0.75 * ynorm::s5_2pi * y * z * (7.0 * z * z - 3.0 * r2) / r4;
+                case 0:
+                    return (3.0 / 16.0) * ynorm::s1_pi *
+                           (35.0 * z * z * z * z - 30.0 * z * z * r2 + 3.0 * r2 * r2) / r4;
+                case 1: return 0.75 * ynorm::s5_2pi * x * z * (7.0 * z * z - 3.0 * r2) / r4;
+                case 2: return 0.375 * ynorm::s5_pi * (x * x - y * y) * (7.0 * z * z - r2) / r4;
+                case 3: return 0.75 * ynorm::s35_2pi * x * z * (x * x - 3.0 * y * y) / r4;
+                default:
+                    return (3.0 / 16.0) * ynorm::s35_pi *
+                           (x * x * x * x - 6.0 * x * x * y * y + y * y * y * y) / r4;
+            }
+        }
+        default: {
+            // l == 5; orthonormality pinned by tests.
+            const double r5 = r2 * r2 * std::sqrt(r2);
+            const double x2 = x * x;
+            const double y2 = y * y;
+            const double z2 = z * z;
+            const double zpoly = 21.0 * z2 * z2 - 14.0 * z2 * r2 + r2 * r2;
+            switch (m) {
+                case -5:
+                    return (1.0 / 32.0) * ynorm::s1386_pi *
+                           y * (5.0 * x2 * x2 - 10.0 * x2 * y2 + y2 * y2) / r5;
+                case -4:
+                    return (1.0 / 16.0) * ynorm::s3465_pi *
+                           4.0 * x * y * (x2 - y2) * z / r5;
+                case -3:
+                    return (1.0 / 32.0) * ynorm::s770_pi *
+                           y * (3.0 * x2 - y2) * (9.0 * z2 - r2) / r5;
+                case -2:
+                    return (1.0 / 8.0) * ynorm::s1155_pi *
+                           2.0 * x * y * z * (3.0 * z2 - r2) / r5;
+                case -1:
+                    return (1.0 / 16.0) * ynorm::s165_pi * y * zpoly / r5;
+                case 0:
+                    return (1.0 / 16.0) * ynorm::s11_pi *
+                           z * (63.0 * z2 * z2 - 70.0 * z2 * r2 + 15.0 * r2 * r2) / r5;
+                case 1:
+                    return (1.0 / 16.0) * ynorm::s165_pi * x * zpoly / r5;
+                case 2:
+                    return (1.0 / 8.0) * ynorm::s1155_pi *
+                           (x2 - y2) * z * (3.0 * z2 - r2) / r5;
+                case 3:
+                    return (1.0 / 32.0) * ynorm::s770_pi *
+                           x * (x2 - 3.0 * y2) * (9.0 * z2 - r2) / r5;
+                case 4:
+                    return (1.0 / 16.0) * ynorm::s3465_pi *
+                           (x2 * x2 - 6.0 * x2 * y2 + y2 * y2) * z / r5;
+                default:
+                    return (1.0 / 32.0) * ynorm::s1386_pi *
+                           x * (x2 * x2 - 10.0 * x2 * y2 + 5.0 * y2 * y2) / r5;
+            }
+        }
     }
 }
 

@@ -33,6 +33,7 @@ module;
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <numbers>
 #include <vector>
 export module ses.vk.engine;
 export import ses.vk.compute;
@@ -126,6 +127,9 @@ struct HalfMulParams {
     float pad0;
     float pad1;
 };
+// Fused-MCWF state slots; mcwf_axpy.comp mirrors this count in its arrays.
+inline constexpr int kMcwfSlots = 8;
+
 // std140 mirror of mcwf_axpy.comp's Params (16-byte array strides).
 struct alignas(16) McwfParams {
     std::uint32_t n;
@@ -138,8 +142,8 @@ struct alignas(16) McwfParams {
     float h_radial;
     float rmax;
     float pad0;
-    std::int32_t lm[8][4];  // [s] = {l, m, 0, 0}
-    float coef[8][4];       // [s] = {cre, cim, inv_norm, 0}
+    std::int32_t lm[kMcwfSlots][4];  // [s] = {l, m, 0, 0}
+    float coef[kMcwfSlots][4];       // [s] = {cre, cim, inv_norm, 0}
 };
 struct KinMulParams {
     std::uint32_t n;
@@ -159,6 +163,20 @@ public:
     struct NormPeak {
         double sum = 0.0;
         double peak = 0.0;
+    };
+    // Batch step options: absorb damps psi by the absorbing mask after EVERY
+    // step; bridge records the psi -> display-volume store into the SAME
+    // submission (no extra fences).
+    struct StepFlags {
+        bool absorb = false;
+        bool bridge = false;
+    };
+    // Synthesized-state report: handle < 0 = failure; peak = normalized peak
+    // |psi|^2; norm2 = PRE-normalization grid norm (projection normalizer).
+    struct SynthResult {
+        int handle = -1;
+        double peak = 0.0;
+        double norm2 = 0.0;
     };
 
     Engine() = default;
@@ -187,7 +205,7 @@ public:
                                  "planar grids supported\n");
             return false;
         }
-        mul_groups_ = static_cast<std::uint32_t>((cells_ + 255) / 256);
+        mul_groups_ = group_count(cells_);
         field_bytes_ = 2 * cells_ * sizeof(float);
 
         // Kick UBO slot stride: device min offset alignment, grown to a KickParams.
@@ -464,8 +482,10 @@ public:
 
         // Descriptor pool shape: base sets + any-target sets + relax sets +
         // per-resident-state sets; the arena chains more pools of the same
-        // shape when one runs dry.
-        if (!arena_.create(ctx_ ? *ctx_ : ctx, 96, 192, 96, 2, 4)) {
+        // shape when one runs dry. 96 sets / 192 storage / 96 uniform /
+        // 2 dynamic-uniform / 4 storage-image: ~2x the eager wiring, headroom
+        // for resident states.
+        if (!arena_.create(ctx, 96, 192, 96, 2, 4)) {
             return false;
         }
         halfv_set_ = arena_.allocate(*ctx_, half_mul_.set_layout());
@@ -591,16 +611,14 @@ public:
 
     // psi <- (halfV . IFFT . kin . FFT . halfV)^nsteps psi. One submission;
     // a compute-to-compute barrier precedes every psi-aliasing dispatch.
-    // absorb=true damps psi by the absorbing mask after EVERY step (so the
-    // absorption rate is independent of batch length); bridge=true records
-    // the psi -> volume store into the SAME submission (no extra fences).
-    void step(int nsteps, bool absorb = false, bool bridge = false) {
+    // flags.absorb keeps the absorption rate independent of batch length;
+    // flags.bridge rides the same submission (see StepFlags).
+    void step(int nsteps, StepFlags flags = {}) {
         OneShot shot;
         if (!shot.begin_compute(*ctx_)) {
             return;
         }
-        const bool bridged = record_step_batch(shot.cb(), nsteps, absorb,
-                                               bridge);
+        const bool bridged = record_step_batch(shot.cb(), nsteps, flags);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         if (bridged) {
@@ -613,10 +631,9 @@ public:
     // per-step half-kick pairs, one pass fewer per step. With absorb the mask
     // rides each trailing kick (diagonal factors commute; rate unchanged);
     // else separate passes. Returns whether the bridge tail recorded.
-    bool record_step_batch(VkCommandBuffer cb, int nsteps, bool absorb,
-                           bool bridge) {
+    bool record_step_batch(VkCommandBuffer cb, int nsteps, StepFlags flags) {
         Recorder r{cb, true};
-        const bool fuse = absorb && pd_half_set_ != VK_NULL_HANDLE;
+        const bool fuse = flags.absorb && pd_half_set_ != VK_NULL_HANDLE;
         if (nsteps > 0) {
             r.dispatch(half_mul_, halfv_set_, mul_groups_);
             for (int s = 0; s < nsteps; ++s) {
@@ -628,11 +645,11 @@ public:
                 } else {
                     r.dispatch(half_mul_, last ? halfv_set_ : fullv_set_,
                                mul_groups_);
-                    record_absorb(r, absorb);
+                    record_absorb(r, flags.absorb);
                 }
             }
         }
-        return record_bridge_tail(cb, bridge);
+        return record_bridge_tail(cb, flags.bridge);
     }
 
     // Submit a step batch WITHOUT waiting: it runs on the compute queue
@@ -642,23 +659,41 @@ public:
     // readouts stay correct; wait_async() reclaims the cb and flips the
     // display at a host-observed completion point. Falls back to the
     // blocking step() if the dedicated cb cannot be created.
-    void step_async(int nsteps, bool absorb = false, bool bridge = false) {
+    void step_async(int nsteps, StepFlags flags = {}) {
         wait_async();
         if (ctx_->device_lost) {
             async_bridged_ = false;
             return;  // device lost: skip (the director drops to the CPU path)
         }
         if (!ensure_async()) {
-            step(nsteps, absorb, bridge);
+            step(nsteps, flags);
             return;
         }
-        vkResetCommandPool(ctx_->device, async_pool_, 0);
+        // Reset/begin failures fall back to the blocking step(): the batch
+        // still runs, just without the render overlap.
+        if (vkResetCommandPool(ctx_->device, async_pool_, 0) != VK_SUCCESS) {
+            step(nsteps, flags);
+            return;
+        }
         VkCommandBufferBeginInfo cbbi{};
         cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(async_cb_, &cbbi);
-        async_bridged_ = record_step_batch(async_cb_, nsteps, absorb, bridge);
-        vkEndCommandBuffer(async_cb_);
+        if (vkBeginCommandBuffer(async_cb_, &cbbi) != VK_SUCCESS) {
+            step(nsteps, flags);
+            return;
+        }
+        async_bridged_ = record_step_batch(async_cb_, nsteps, flags);
+        if (vkEndCommandBuffer(async_cb_) != VK_SUCCESS) {
+            ctx_->device_lost = true;  // cb state unknown: poison the GPU path
+            async_bridged_ = false;
+            return;
+        }
+        if (ctx_->device_lost) {
+            // record_vkfft aborted the batch mid-record: drop it unsubmitted
+            // (psi untouched).
+            async_bridged_ = false;
+            return;
+        }
         vkResetFences(ctx_->device, 1, &async_fence_);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -683,7 +718,7 @@ public:
             return;
         }
         const VkResult awr = vkWaitForFences(ctx_->device, 1, &async_fence_,
-                                             VK_TRUE, 10ull * 1000 * 1000 * 1000);
+                                             VK_TRUE, kFenceTimeoutNs);
         if (awr != VK_SUCCESS) {
             std::fprintf(stderr,
                          "ses_vk::Engine: async step-batch fence wait %s\n",
@@ -756,18 +791,11 @@ public:
             VK_SUCCESS) {
             return p;
         }
-        const double period = static_cast<double>(ctx_->timestamp_period);
-        const std::uint32_t vb = ctx_->timestamp_valid_bits;
-        const std::uint64_t mask =
-            vb >= 64 ? ~0ull : ((std::uint64_t{1} << vb) - 1ull);
-        auto ms = [&](std::uint64_t a, std::uint64_t b) {
-            return static_cast<double>((b - a) & mask) * period * 1e-6;
-        };
-        p.kick_ms = ms(ts[0], ts[1]);
-        p.fwd_fft_ms = ms(ts[1], ts[2]);
-        p.kin_mul_ms = ms(ts[2], ts[3]);
-        p.inv_fft_ms = ms(ts[3], ts[4]);
-        p.total_ms = ms(ts[0], ts[4]);
+        p.kick_ms = timestamp_ms(ts[0], ts[1]);
+        p.fwd_fft_ms = timestamp_ms(ts[1], ts[2]);
+        p.kin_mul_ms = timestamp_ms(ts[2], ts[3]);
+        p.inv_fft_ms = timestamp_ms(ts[3], ts[4]);
+        p.total_ms = timestamp_ms(ts[0], ts[4]);
         p.valid = true;
 #endif  // SES_HAVE_VKFFT
         return p;
@@ -815,16 +843,9 @@ public:
                                       VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS) {
             return p;
         }
-        const double period = static_cast<double>(ctx_->timestamp_period);
-        const std::uint32_t vb = ctx_->timestamp_valid_bits;
-        const std::uint64_t mask =
-            vb >= 64 ? ~0ull : ((std::uint64_t{1} << vb) - 1ull);
-        auto ms = [&](std::uint64_t a, std::uint64_t b) {
-            return static_cast<double>((b - a) & mask) * period * 1e-6;
-        };
-        p.step_body_ms = ms(ts[0], ts[1]);
-        p.norm_reduce_ms = ms(ts[1], ts[2]);
-        p.total_ms = ms(ts[0], ts[2]);
+        p.step_body_ms = timestamp_ms(ts[0], ts[1]);
+        p.norm_reduce_ms = timestamp_ms(ts[1], ts[2]);
+        p.total_ms = timestamp_ms(ts[0], ts[2]);
         p.valid = true;
         return p;
     }
@@ -834,7 +855,7 @@ public:
     // parameters live in dynamic-offset slots of ONE host-mapped UBO and the
     // whole batch records as a single submission.
     void driven_step(const ses::DipoleDrive& d, double t0, double dt,
-                     int nsteps, bool absorb = false, bool bridge = false) {
+                     int nsteps, StepFlags flags = {}) {
         const int kicks = 2 * nsteps;
         if (!ensure_kick_capacity(kicks)) {
             return;
@@ -865,9 +886,9 @@ public:
             run_step_body(r, half_mul_, halfv_set_, kin_mul_, kin3_set_);
             r.dispatch_dyn(kick_, kick_set_, mul_groups_,
                            static_cast<std::uint32_t>(2 * s + 1) * kick_stride_);
-            record_absorb(r, absorb);
+            record_absorb(r, flags.absorb);
         }
-        const bool bridged = record_bridge_tail(shot.cb(), bridge);
+        const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         if (bridged) {
@@ -888,10 +909,7 @@ public:
             !ctx_->create_device_buffer(cells_ * sizeof(float), &damp_buf_)) {
             return false;
         }
-        std::vector<float> mf(cells_);
-        for (std::size_t i = 0; i < cells_; ++i) {
-            mf[i] = static_cast<float>(mask[i]);
-        }
+        const std::vector<float> mf = to_f32(mask);
         if (!upload_raw(damp_buf_, mf.data(), cells_ * sizeof(float))) {
             return false;
         }
@@ -962,7 +980,7 @@ public:
     // half-angle every rotation, so the two shear UBOs stage once and the whole
     // batch is one submission.
     void magnetic_step(int axis, double half_angle, int nsteps,
-                       bool absorb = false, bool bridge = false) {
+                       StepFlags flags = {}) {
         const int b = (axis + 1) % 3;
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, half_angle);
@@ -975,9 +993,9 @@ public:
             record_rotation(r, b, c);
             run_step_body(r, half_mul_, halfv_set_, kin_mul_, kin3_set_);
             record_rotation(r, b, c);
-            record_absorb(r, absorb);
+            record_absorb(r, flags.absorb);
         }
-        const bool bridged = record_bridge_tail(shot.cb(), bridge);
+        const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
         shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         if (bridged) {
@@ -1071,8 +1089,11 @@ public:
                 vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
             }
             record_partials_readback(shot.cb());
-            shot.submit_and_wait(*ctx_);
+            const bool ok = shot.submit_and_wait(*ctx_);
             shot.destroy(*ctx_);
+            if (!ok) {
+                return stats;  // stale partials would fake energy/peak
+            }
             stats = fused_relax_ok_ ? finish_renorm_stats_only()
                                     : finish_renorm_from_staging();
         }
@@ -1153,16 +1174,10 @@ public:
         if (!ok) {
             return {};
         }
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        double re = 0.0;
-        double im = 0.0;
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            re += p[2 * g];
-            im += p[2 * g + 1];
-        }
-        return std::complex<double>{re * cell_volume_, im * cell_volume_};
+        double ri[2];
+        sum_partials(2, 2, ri);
+        return std::complex<double>{ri[0] * cell_volume_,
+                                    ri[1] * cell_volume_};
     }
 
     // Deflated imaginary-time relax: imaginary Strang body, Gram-Schmidt
@@ -1183,6 +1198,9 @@ public:
             shot.destroy(*ctx_);
             for (int h : lower) {
                 const std::complex<double> c = inner_with_psi(h);
+                if (device_lost()) {
+                    return stats;  // failed inner product is NOT overlap 0
+                }
                 subtract_projection(h, c.real(), c.imag());
             }
             stats = renormalize_and_estimate();
@@ -1200,7 +1218,6 @@ public:
     // instead of per-call create + release (release_state device-idles).
     int create_scratch_state() { return create_state_buffer_uninit(); }
 
-    static constexpr int kMcwfSlots = 8;
     struct McwfTerm {
         const std::vector<double>* u;  // radial table (n_radial entries)
         int l;
@@ -1347,20 +1364,20 @@ public:
             return false;
         }
         // Tables SSBO, uploaded from ses.mc.tables (single source of
-        // truth with the CPU oracle): [0,256) edge, [256,4352) tri 256x16,
-        // [4352,4608) per-case triangle counts.
-        std::vector<std::int32_t> tab(4608, 0);
-        for (int c = 0; c < 256; ++c) {
-            tab[static_cast<std::size_t>(c)] = ses::mc::kEdgeTable[c];
+        // truth with the CPU oracle). Layout contract: see kMcEdgeOff etc.
+        std::vector<std::int32_t> tab(kMcTableInts, 0);
+        for (int c = 0; c < kMcCases; ++c) {
+            tab[static_cast<std::size_t>(kMcEdgeOff + c)] =
+                ses::mc::kEdgeTable[c];
             int count = 0;
-            for (int t = 0; t < 16; ++t) {
-                tab[static_cast<std::size_t>(256 + c * 16 + t)] =
-                    ses::mc::kTriTable[c][t];
+            for (int t = 0; t < kMcTriStride; ++t) {
+                tab[static_cast<std::size_t>(kMcTriOff + c * kMcTriStride +
+                                             t)] = ses::mc::kTriTable[c][t];
                 if (ses::mc::kTriTable[c][t] != -1 && t % 3 == 0) {
                     ++count;
                 }
             }
-            tab[static_cast<std::size_t>(4352 + c)] = count;
+            tab[static_cast<std::size_t>(kMcCountOff + c)] = count;
         }
         const VkDeviceSize den_bytes = cells_ * sizeof(float);
         const VkDeviceSize blk_bytes = mc_nblocks_ * sizeof(std::uint32_t);
@@ -1502,7 +1519,7 @@ public:
         }
         Recorder r{shot.cb(), true};
         barrier_compute_to_compute(shot.cb());  // psi vs earlier submissions
-        r.first = false;
+        r.require_barrier();
         r.dispatch(mc_density_, mc_den_set_, mul_groups_);
         r.dispatch(mc_classify_, mc_classify_set_, mc_nblocks_);
         r.dispatch(mc_scan_, mc_scan_set_, 1);
@@ -1542,13 +1559,13 @@ public:
                                 VK_WHOLE_SIZE);
         const std::uint32_t* draw =
             static_cast<const std::uint32_t*>(staging_.mapped);
-        if (draw[4] > draw[5] && !mc_overflow_warned_) {
+        if (draw[kMcRawIdx] > draw[kMcClampedIdx] && !mc_overflow_warned_) {
             mc_overflow_warned_ = true;
             std::fprintf(stderr,
                          "ses_vk: mc surface clamped (%u > %u tris)\n",
-                         draw[4], draw[5]);
+                         draw[kMcRawIdx], draw[kMcClampedIdx]);
         }
-        return static_cast<int>(draw[5]);
+        return static_cast<int>(draw[kMcClampedIdx]);
     }
 
     // vkcheck readback: the first tri_count triangles as interleaved floats
@@ -1584,15 +1601,22 @@ public:
     }
 
     // Re-synthesize into an existing fp32 state buffer (see scratch note).
-    bool synthesize_state_over(int handle, const std::vector<double>& u,
-                               int l, int m, double h_radial, double rmax,
-                               int n_radial, double* out_norm2 = nullptr) {
+    // Result handle: the SAME handle on success, -1 on failure.
+    SynthResult synthesize_state_over(int handle,
+                                      const std::vector<double>& u, int l,
+                                      int m, double h_radial, double rmax,
+                                      int n_radial) {
+        SynthResult res;
         State* st = state_at(handle);
         if (st == nullptr || st->is_half) {
-            return false;
+            return res;
         }
-        return synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
-                                      n_radial, nullptr, out_norm2);
+        if (!synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
+                                    n_radial, &res.peak, &res.norm2)) {
+            return res;
+        }
+        res.handle = handle;
+        return res;
     }
 
     // psi <- src (bitwise; the quantum-jump collapse path). fp32 states only.
@@ -1680,13 +1704,7 @@ public:
         if (!ok) {
             return out;
         }
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            out.sum += p[2 * g];
-            out.peak = std::max(out.peak, static_cast<double>(p[2 * g + 1]));
-        }
+        out = sum_norm_partials();
         out.sum *= cell_volume_;
         return out;
     }
@@ -1823,10 +1841,7 @@ public:
             arena_.write_buffer(*ctx_, force_set_, 4, storage,
                                 force_v_buf_.buf);
         }
-        std::vector<float> vf(cells_);
-        for (std::size_t i = 0; i < cells_; ++i) {
-            vf[i] = static_cast<float>(v[i]);
-        }
+        const std::vector<float> vf = to_f32(v);
         return upload_raw(force_v_buf_, vf.data(), cells_ * sizeof(float));
     }
 
@@ -1849,19 +1864,10 @@ public:
         if (!ok) {
             return ses::Vec3d{};
         }
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        double gx = 0.0;
-        double gy = 0.0;
-        double gz = 0.0;
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            gx += p[4 * g + 0];
-            gy += p[4 * g + 1];
-            gz += p[4 * g + 2];
-        }
-        return ses::Vec3d{gx * cell_volume_, gy * cell_volume_,
-                          gz * cell_volume_};
+        double g3[3];
+        sum_partials(4, 3, g3);
+        return ses::Vec3d{g3[0] * cell_volume_, g3[1] * cell_volume_,
+                          g3[2] * cell_volume_};
     }
 
     // ---- orbital synthesis ----------------------------------------------
@@ -1873,51 +1879,50 @@ public:
     }
 
     // Synthesize a normalized fp32 eigenstate into its OWN resident state
-    // buffer (the atlas path; psi is untouched) and return a handle.
-    // *out_peak gets the normalized peak |psi|^2; *out_norm2 the
-    // PRE-normalization grid norm (the projection population normalizer).
-    int synthesize_state(const std::vector<double>& u, int l, int m,
-                         double h_radial, double rmax, int n_radial,
-                         double* out_peak = nullptr,
-                         double* out_norm2 = nullptr) {
+    // buffer (the atlas path; psi is untouched); the result carries the
+    // handle plus the peak/norm2 report.
+    SynthResult synthesize_state(const std::vector<double>& u, int l, int m,
+                                 double h_radial, double rmax, int n_radial) {
+        SynthResult res;
         const int handle = create_state_buffer_uninit();
         if (handle < 0) {
-            return -1;
+            return res;
         }
         State* st = state_at(handle);
         if (!synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
-                                    n_radial, out_peak, out_norm2)) {
+                                    n_radial, &res.peak, &res.norm2)) {
             ctx_->destroy_buffer(&st->buf);
-            return -1;
+            return res;
         }
-        return handle;
+        res.handle = handle;
+        return res;
     }
 
     // Synthesize + normalize in fp32 (the tested path), then pack to fp16
-    // storage (cells uints, half the footprint) and return an fp16 handle.
+    // storage (cells uints, half the footprint); the result handle is fp16.
     // Consumers unpack fp16 to scratch on demand (decode-on-use).
-    int synthesize_state_half(const std::vector<double>& u, int l, int m,
-                              double h_radial, double rmax, int n_radial,
-                              double* out_peak = nullptr,
-                              double* out_norm2 = nullptr) {
+    SynthResult synthesize_state_half(const std::vector<double>& u, int l,
+                                      int m, double h_radial, double rmax,
+                                      int n_radial) {
+        SynthResult res;
         if (!ensure_fp16()) {
-            return -1;
+            return res;
         }
         Buffer tmp{};
         if (!ctx_->create_device_buffer(field_bytes_, &tmp)) {
-            return -1;
+            return res;
         }
         if (!synthesize_into_buffer(tmp, u, l, m, h_radial, rmax, n_radial,
-                                    out_peak, out_norm2)) {
+                                    &res.peak, &res.norm2)) {
             ctx_->destroy_buffer(&tmp);
-            return -1;
+            return res;
         }
         State st;
         st.is_half = true;
         if (!ctx_->create_device_buffer(cells_ * sizeof(std::uint32_t),
                                         &st.buf)) {
             ctx_->destroy_buffer(&tmp);
-            return -1;
+            return res;
         }
         // pack tmp(fp32, binding 0) -> st.buf(fp16, binding 6).
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1927,7 +1932,7 @@ public:
         if (!shot.begin_compute(*ctx_)) {
             ctx_->destroy_buffer(&st.buf);
             ctx_->destroy_buffer(&tmp);
-            return -1;
+            return res;
         }
         barrier_compute_to_compute(shot.cb());
         pack_.bind(shot.cb(), pack_set_);
@@ -1936,7 +1941,8 @@ public:
         shot.destroy(*ctx_);
         ctx_->destroy_buffer(&tmp);
         states_.push_back(st);
-        return static_cast<int>(states_.size()) - 1;
+        res.handle = static_cast<int>(states_.size()) - 1;
+        return res;
     }
 
     // <to| r |from> = sum conj(to)*(x,y,z)*from * dV from two resident
@@ -1984,15 +1990,8 @@ public:
         if (!ok) {
             return {};
         }
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        double d6[6] = {0, 0, 0, 0, 0, 0};
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            for (int c = 0; c < 6; ++c) {
-                d6[c] += p[6 * g + c];
-            }
-        }
+        double d6[6];
+        sum_partials(6, 6, d6);
         return ses::DipoleMatrixElement{
             std::complex<double>{d6[0] * cell_volume_, d6[1] * cell_volume_},
             std::complex<double>{d6[2] * cell_volume_, d6[3] * cell_volume_},
@@ -2001,7 +2000,8 @@ public:
 
     // ---- orbital-free angular projection --------------------------------
     // Upload the static counting-sort geometry (ses::build_radial_bin_index)
-    // and allocate g_lm[ncomp*nr]. Call once after the radial grid is fixed.
+    // and allocate g_lm[ncomp*nr]. Re-entrant (the relax-table pattern): a
+    // re-call drops the previous buffers and re-points the once-allocated set.
     bool set_projection_index(const std::vector<std::uint32_t>& sorted_cell,
                               const std::vector<std::uint32_t>& bin_off,
                               int n_radial, double h_radial, int l_max) {
@@ -2011,21 +2011,33 @@ public:
         const VkDeviceSize glm_bytes =
             2ull * proj_ncomp_ * proj_nr_ * sizeof(float);
         const ProjectParams pp0{};
-        if (!ctx_->create_device_buffer(sorted_cell.size() * 4,
-                                        &proj_sorted_buf_) ||
-            !ctx_->create_device_buffer(bin_off.size() * 4, &proj_binoff_buf_) ||
+        if (proj_sorted_buf_.buf != VK_NULL_HANDLE) {
+            vkDeviceWaitIdle(ctx_->device);
+            ctx_->destroy_buffer(&proj_sorted_buf_);
+            ctx_->destroy_buffer(&proj_binoff_buf_);
+            ctx_->destroy_buffer(&glm_buf_);
+        }
+        if (!ctx_->create_device_buffer(
+                sorted_cell.size() * sizeof(std::uint32_t),
+                &proj_sorted_buf_) ||
+            !ctx_->create_device_buffer(bin_off.size() * sizeof(std::uint32_t),
+                                        &proj_binoff_buf_) ||
             !ctx_->create_device_buffer(glm_bytes, &glm_buf_) ||
-            !write_ubo(&proj_ubo_, &pp0, sizeof(pp0))) {
+            (proj_ubo_.buf == VK_NULL_HANDLE &&
+             !write_ubo(&proj_ubo_, &pp0, sizeof(pp0)))) {
             return false;
         }
         if (!upload_raw(proj_sorted_buf_, sorted_cell.data(),
-                        sorted_cell.size() * 4) ||
-            !upload_raw(proj_binoff_buf_, bin_off.data(), bin_off.size() * 4)) {
+                        sorted_cell.size() * sizeof(std::uint32_t)) ||
+            !upload_raw(proj_binoff_buf_, bin_off.data(),
+                        bin_off.size() * sizeof(std::uint32_t))) {
             return false;
         }
-        proj_set_ = arena_.allocate(*ctx_, project_.set_layout());
         if (proj_set_ == VK_NULL_HANDLE) {
-            return false;
+            proj_set_ = arena_.allocate(*ctx_, project_.set_layout());
+            if (proj_set_ == VK_NULL_HANDLE) {
+                return false;
+            }
         }
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         arena_.write_buffer(*ctx_, proj_set_, 0, storage, psi_.buf);
@@ -2390,6 +2402,10 @@ private:
     struct Recorder {
         VkCommandBuffer cb;
         bool first;
+        // `first` doubles as "the next dispatch needs no hazard barrier";
+        // name both directions so call sites read as intent, not state pokes.
+        void mark_barrier_emitted() { first = true; }
+        void require_barrier() { first = false; }
         void dispatch(const Kernel& k, VkDescriptorSet set,
                       std::uint32_t groups) {
             if (!first) {
@@ -2416,6 +2432,14 @@ private:
         for (std::size_t i = 0; i < src.size(); ++i) {
             out[2 * i] = static_cast<float>(src[i].real());
             out[2 * i + 1] = static_cast<float>(src[i].imag());
+        }
+        return out;
+    }
+
+    static std::vector<float> to_f32(const std::vector<double>& src) {
+        std::vector<float> out(src.size());
+        for (std::size_t i = 0; i < src.size(); ++i) {
+            out[i] = static_cast<float>(src[i]);
         }
         return out;
     }
@@ -2513,6 +2537,45 @@ private:
         record_buffer_readback(cb, partials_, 2 * kGroups * sizeof(float));
     }
 
+    // Host finish over partial records already read back into staging_:
+    // out[c] = sum_g staging[stride*g + c], c < ncomp. Fixed g-ascending
+    // order per accumulator (bitwise deterministic).
+    void sum_partials(std::uint32_t stride, std::uint32_t ncomp, double* out) {
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        for (std::uint32_t c = 0; c < ncomp; ++c) {
+            out[c] = 0.0;
+        }
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            for (std::uint32_t c = 0; c < ncomp; ++c) {
+                out[c] += p[stride * g + c];
+            }
+        }
+    }
+
+    // Norm-reduction finish: {sum of p[2g], max of p[2g+1]}. RAW -- no dV.
+    NormPeak sum_norm_partials() {
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        NormPeak np;
+        for (std::uint32_t g = 0; g < kGroups; ++g) {
+            np.sum += p[2 * g];
+            np.peak = std::max(np.peak, static_cast<double>(p[2 * g + 1]));
+        }
+        return np;
+    }
+
+    // Timestamp delta -> milliseconds, wrap-masked to the queue's valid bits.
+    double timestamp_ms(std::uint64_t a, std::uint64_t b) const {
+        const std::uint32_t vb = ctx_->timestamp_valid_bits;
+        const std::uint64_t mask =
+            vb >= 64 ? ~0ull : ((std::uint64_t{1} << vb) - 1ull);
+        return static_cast<double>((b - a) & mask) *
+               static_cast<double>(ctx_->timestamp_period) * 1e-6;
+    }
+
     // (Re)point a full state's four descriptor sets: only the st.buf bindings
     // vary; psi_/ubos/partials_ are stable but re-written idempotently so the
     // same call serves a fresh alloc and a free-list reuse.
@@ -2580,10 +2643,7 @@ private:
                                 int l, int m, double h_radial, double rmax,
                                 int n_radial, double* out_peak = nullptr,
                                 double* out_norm2 = nullptr) {
-        std::vector<float> uf(u.size());
-        for (std::size_t i = 0; i < u.size(); ++i) {
-            uf[i] = static_cast<float>(u[i]);
-        }
+        const std::vector<float> uf = to_f32(u);
         const VkDeviceSize rbytes = uf.size() * sizeof(float);
         if (radial_buf_.buf == VK_NULL_HANDLE || radial_bytes_ != rbytes) {
             vkDeviceWaitIdle(ctx_->device);
@@ -2628,8 +2688,11 @@ private:
         }
         synth_.bind(shot.cb(), synth_any_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        shot.submit_and_wait(*ctx_);
+        const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        if (!ok) {
+            return false;  // unsynthesized buffer: do not report fake stats
+        }
 
         const NormPeak np = normalize_buffer(out);
         if (out_norm2 != nullptr) {
@@ -2663,13 +2726,7 @@ private:
         if (!ok) {
             return np;
         }
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            np.sum += p[2 * g];
-            np.peak = std::max(np.peak, static_cast<double>(p[2 * g + 1]));
-        }
+        np = sum_norm_partials();
         np.sum *= cell_volume_;
 
         const ConjParams sp{static_cast<std::uint32_t>(cells_),
@@ -2700,13 +2757,37 @@ private:
     // from then on). fp16 is DISPLAY-ONLY: physics stays in the fp32 psi
     // SSBO; the texture units convert fp16 texels to fp32 on sample, so
     // half the raymarch/occupancy/shadow traffic costs no shader math.
+    // Flow-velocity volume contract with the renderer's sampler: side capped
+    // at kFlowVelMaxDim (low-res field, bandwidth), speeds clamped to
+    // kFlowVelVmax a.u. by flow_velocity.comp (streakline stability).
+    static constexpr int kFlowVelMaxDim = 128;
+    static constexpr float kFlowVelVmax = 3.0f;
+
+    // Partial-failure unwind: destroy whatever ensure_volume created and
+    // reset EVERY memo, so a re-call rebuilds from scratch instead of
+    // half-succeeding on stale state (the ensure_async pattern).
+    bool fail_volume() {
+        ctx_->destroy_buffer(&bridge_ubo_);
+        ctx_->destroy_buffer(&flow_vel_ubo_);
+        for (int i = 0; i < 2; ++i) {
+            ctx_->destroy_image(&volume_[i]);
+            ctx_->destroy_image(&flow_vel_[i]);
+            store_set_[i] = VK_NULL_HANDLE;
+            flow_vel_set_[i] = VK_NULL_HANDLE;
+            volume_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+            flow_vel_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+        }
+        flow_vel_m_ = 0;
+        return false;
+    }
+
     bool ensure_volume() {
         if (store_set_[0] != VK_NULL_HANDLE) {
             return true;
         }
         const BridgeParams bp{grid_.x.n, grid_.y.n, grid_.z.n, 0};
         if (!write_ubo(&bridge_ubo_, &bp, sizeof(bp))) {
-            return false;
+            return fail_volume();
         }
         for (int i = 0; i < 2; ++i) {
             if (!ctx_->create_storage_image_3d(
@@ -2715,12 +2796,11 @@ private:
                     static_cast<std::uint32_t>(grid_.z.n),
                     VK_FORMAT_R16G16_SFLOAT,
                     &volume_[i], /*share_across_queues=*/true)) {
-                return false;
+                return fail_volume();
             }
             store_set_[i] = arena_.allocate(*ctx_, bridge_store_.set_layout());
             if (store_set_[i] == VK_NULL_HANDLE) {
-                store_set_[0] = VK_NULL_HANDLE;
-                return false;
+                return fail_volume();
             }
             arena_.write_buffer(*ctx_, store_set_[i], 0,
                                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
@@ -2731,7 +2811,7 @@ private:
         }
         // Companion low-res velocity volume (double-buffered with the display).
         if (flow_vel_ok_) {
-            flow_vel_m_ = std::min(128, n_);
+            flow_vel_m_ = std::min(kFlowVelMaxDim, n_);
             const FlowVelParams fvp{grid_.x.n,
                                     grid_.y.n,
                                     grid_.z.n,
@@ -2739,9 +2819,9 @@ private:
                                     static_cast<float>(grid_.x.spacing()),
                                     static_cast<float>(grid_.y.spacing()),
                                     static_cast<float>(grid_.z.spacing()),
-                                    3.0f};
+                                    kFlowVelVmax};
             if (!write_ubo(&flow_vel_ubo_, &fvp, sizeof(fvp))) {
-                return false;
+                return fail_volume();
             }
             for (int i = 0; i < 2; ++i) {
                 if (!ctx_->create_storage_image_3d(
@@ -2750,12 +2830,12 @@ private:
                         static_cast<std::uint32_t>(flow_vel_m_),
                         VK_FORMAT_R16G16B16A16_SFLOAT, &flow_vel_[i],
                         /*share_across_queues=*/true)) {
-                    return false;
+                    return fail_volume();
                 }
                 flow_vel_set_[i] =
                     arena_.allocate(*ctx_, flow_vel_k_.set_layout());
                 if (flow_vel_set_[i] == VK_NULL_HANDLE) {
-                    return false;
+                    return fail_volume();
                 }
                 arena_.write_buffer(*ctx_, flow_vel_set_[i], 0,
                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, psi_.buf);
@@ -2768,7 +2848,7 @@ private:
         }
         OneShot shot;
         if (!shot.begin_compute(*ctx_)) {
-            return false;
+            return fail_volume();
         }
         for (int i = 0; i < 2; ++i) {
             image_layout_barrier(shot.cb(), volume_[i].img,
@@ -2787,8 +2867,11 @@ private:
                 flow_vel_layout_[i] = VK_IMAGE_LAYOUT_GENERAL;
             }
         }
-        shot.submit_and_wait(*ctx_);
+        const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        if (!ok) {
+            return fail_volume();  // device is lost anyway; leave no memo
+        }
         volume_layout_[0] = VK_IMAGE_LAYOUT_GENERAL;
         volume_layout_[1] = VK_IMAGE_LAYOUT_GENERAL;
         return true;
@@ -2882,12 +2965,16 @@ private:
 
     // Lazily build the fp16 codec resources: two decode scratch buffers (a
     // 2-fp16-operand dipole needs both) + the shared re-pointed sets.
+    // Partial failure unwinds fully (no memo stands), so a retry cannot leak
+    // scratch buffers or duplicate arena sets.
     bool ensure_fp16() {
         if (pack_set_ != VK_NULL_HANDLE) {
             return true;
         }
         if (!ctx_->create_device_buffer(field_bytes_, &decode_scratch_[0]) ||
             !ctx_->create_device_buffer(field_bytes_, &decode_scratch_[1])) {
+            ctx_->destroy_buffer(&decode_scratch_[0]);
+            ctx_->destroy_buffer(&decode_scratch_[1]);
             return false;
         }
         pack_set_ = arena_.allocate(*ctx_, pack_.set_layout());
@@ -2895,7 +2982,11 @@ private:
         inner_any_set_ = arena_.allocate(*ctx_, inner_.set_layout());
         if (pack_set_ == VK_NULL_HANDLE || unpack_set_ == VK_NULL_HANDLE ||
             inner_any_set_ == VK_NULL_HANDLE) {
+            ctx_->destroy_buffer(&decode_scratch_[0]);
+            ctx_->destroy_buffer(&decode_scratch_[1]);
             pack_set_ = VK_NULL_HANDLE;
+            unpack_set_ = VK_NULL_HANDLE;
+            inner_any_set_ = VK_NULL_HANDLE;
             return false;
         }
         const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -2926,8 +3017,11 @@ private:
         barrier_compute_to_compute(shot.cb());
         unpack_.bind(shot.cb(), unpack_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        shot.submit_and_wait(*ctx_);
+        const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
+        if (!ok) {
+            return VK_NULL_HANDLE;  // scratch holds stale content
+        }
         return decode_scratch_[slot].buf;
     }
 
@@ -3009,26 +3103,26 @@ private:
         return finish_renorm_from_staging();
     }
 
+    // ONE relax-stat formula for the fused and non-fused paths: free energy
+    // E = -ln(norm)/2dtau from the pre-renorm decay + normalized peak.
+    RelaxStats compute_relax_stats(const NormPeak& raw) const {
+        RelaxStats stats;
+        const double norm_sq = raw.sum * cell_volume_;
+        stats.energy = (norm_sq > 0.0 && dtau_ > 0.0)
+                           ? -std::log(norm_sq) / (2.0 * dtau_)
+                           : 0.0;
+        stats.peak = (norm_sq > 0.0) ? raw.peak / norm_sq : 0.0;
+        return stats;
+    }
+
     // Host finish over partials ALREADY copied into staging_ (relax_step
     // records the reduction inside the step submission), then the
     // 1/sqrt(norm) scale.
     RelaxStats finish_renorm_from_staging() {
-        RelaxStats stats;
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        double sum = 0.0;
-        double peak = 0.0;
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            sum += p[2 * g];
-            peak = std::max(peak, static_cast<double>(p[2 * g + 1]));
-        }
-        const double norm_sq = sum * cell_volume_;
+        const NormPeak raw = sum_norm_partials();
+        const RelaxStats stats = compute_relax_stats(raw);
+        const double norm_sq = raw.sum * cell_volume_;
         const double inv = (norm_sq > 0.0) ? 1.0 / std::sqrt(norm_sq) : 0.0;
-        stats.energy = (norm_sq > 0.0 && dtau_ > 0.0)
-                           ? -std::log(norm_sq) / (2.0 * dtau_)
-                           : 0.0;
-        stats.peak = (norm_sq > 0.0) ? peak / norm_sq : 0.0;
         scale(static_cast<float>(inv));
         return stats;
     }
@@ -3037,22 +3131,7 @@ private:
     // psi, so this only distills the double-precision energy/peak diagnostic
     // from the (pre-scale) partials in staging -- no host scale submit.
     RelaxStats finish_renorm_stats_only() {
-        RelaxStats stats;
-        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
-                                VK_WHOLE_SIZE);
-        const float* p = static_cast<const float*>(staging_.mapped);
-        double sum = 0.0;
-        double peak = 0.0;
-        for (std::uint32_t g = 0; g < kGroups; ++g) {
-            sum += p[2 * g];
-            peak = std::max(peak, static_cast<double>(p[2 * g + 1]));
-        }
-        const double norm_sq = sum * cell_volume_;
-        stats.energy = (norm_sq > 0.0 && dtau_ > 0.0)
-                           ? -std::log(norm_sq) / (2.0 * dtau_)
-                           : 0.0;
-        stats.peak = (norm_sq > 0.0) ? peak / norm_sq : 0.0;
-        return stats;
+        return compute_relax_stats(sum_norm_partials());
     }
 
     KickParams make_kick_params(const ses::Vec3d& axis, double theta) const {
@@ -3103,7 +3182,7 @@ private:
                                   double coeff) const {
         const ses::Grid1D& fa = axis_grid(freq_axis);
         const ses::Grid1D& ca = axis_grid(coord_axis);
-        const double two_pi = 6.283185307179586;
+        const double two_pi = 2.0 * std::numbers::pi_v<double>;
         ShearParams sp{};
         sp.n = static_cast<std::uint32_t>(cells_);
         sp.nx = grid_.x.n;
@@ -3200,10 +3279,7 @@ private:
 
     // Upload helpers for the in-shader phase inputs.
     bool upload_potential(const std::vector<double>& v) {
-        std::vector<float> vf(cells_);
-        for (std::size_t i = 0; i < cells_; ++i) {
-            vf[i] = static_cast<float>(v[i]);
-        }
+        const std::vector<float> vf = to_f32(v);
         return upload_raw(v_buf_, vf.data(), cells_ * sizeof(float));
     }
     bool upload_k2_tables(const ses::Grid3D& grid) {
@@ -3308,9 +3384,13 @@ private:
         if (res != VKFFT_SUCCESS) {
             std::fprintf(stderr, "ses_vk::Engine: VkFFTAppend = %d\n",
                          static_cast<int>(res));
+            // Physics-first: a batch missing an FFT must never touch psi.
+            // Latching device_lost makes submit_and_wait refuse this batch
+            // (step_async gates on it too); the director falls back to CPU.
+            ctx_->device_lost = true;
         }
         barrier_compute_to_compute(r.cb);
-        r.first = true;  // the trailing barrier covers the next dispatch
+        r.mark_barrier_emitted();  // trailing barrier covers the next dispatch
     }
 #else
     bool ensure_vkfft() { return false; }
@@ -3481,6 +3561,20 @@ private:
     bool mcwf_kernel_ok_ = false;
 
     // GPU marching cubes: std140 param mirrors + transient buffers.
+    // Tables-SSBO layout, mirrored VERBATIM by mc_classify/mc_emit shaders
+    // (int32 indices; the numbers ARE the contract -- do not change them):
+    // [0,256) edge table, [256,4352) tri table 256x16, [4352,4608) counts.
+    static constexpr int kMcCases = 256;
+    static constexpr int kMcTriStride = 16;
+    static constexpr int kMcEdgeOff = 0;
+    static constexpr int kMcTriOff = kMcCases;  // 256
+    static constexpr int kMcCountOff =
+        kMcTriOff + kMcCases * kMcTriStride;  // 4352
+    static constexpr int kMcTableInts = kMcCountOff + kMcCases;  // 4608
+    // mc_indirect_ uint32 layout: VkDrawIndirectCommand, then [4] = raw
+    // triangle total, [5] = clamped total (mc_scan.comp writes both).
+    static constexpr int kMcRawIdx = 4;
+    static constexpr int kMcClampedIdx = 5;
     struct McParams {
         std::int32_t npts[4];
         std::int32_t nblk[4];

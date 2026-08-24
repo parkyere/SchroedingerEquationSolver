@@ -46,11 +46,19 @@ constexpr int kBaseRelaxStepsPerTick = 1;
 constexpr double kBaseRelaxDtau = 0.05;
 constexpr double kBaseIsoFraction = 0.25;
 constexpr double kBaseMeasureSigma = 1.25;  // Bohr
-constexpr double kBaseHaToEv = kHaToEv;
-constexpr double kBaseAuToFs = kAuToFs;
+// Full-field readback ~10 ms: probe_readback fires every Nth title tick (~0.5 s).
+constexpr int kBaseProbeStride = 3;
 // ITP auto-complete plateau: energy step below eps for N title-cadence polls.
 constexpr double kBaseRelaxPlateauEps = 5e-5;  // Ha
 constexpr int kBaseRelaxPlateauPolls = 12;     // ~2 s of stable readout
+// Collective-decay contract, ONE copy for hydrogen + trap (contract:
+// tests/eigenstate_flush_test.cpp).
+constexpr double kBaseGammaDisplay = 0.125;  // display decay rate
+constexpr int kBaseFlushSteps = 6;
+constexpr int kBaseFlushStepsGround = 24;  // the ground is the ITP fixed point
+constexpr int kBaseFlashTicks = 25;  // photon-flash duration AND fade divisor
+// Amplitude cutoff shared by superpose_into_psi's skip and callers' pre-filters.
+constexpr double kAmpNormFloor = 1e-18;
 
 // Shared photon-streak display: flight pool + per-slot overlay polylines.
 // Directors spawn on a jump; run_frame advances and rebuilds (overlay
@@ -152,46 +160,10 @@ public:
         }
         // Reclaim last frame's async batch FIRST (display flip + cb reuse).
         engine_.wait_async();
-        if (cpu_is_truth_) {
-            double pk = 0.0;
-            for (const std::complex<double>& z : sim_.psi().data()) {
-                pk = std::max(pk, std::norm(z));
-            }
-            if (pk > 0.0) {
-                peak_ = pk;
-            }
-            engine_.upload_state(sim_.psi().data());
-            cpu_is_truth_ = false;
-            volume_dirty_ = false;
-            write_display_texture();
-        }
+        bridge_cpu_state();
         service_requests();
-        if (pending_gpu_steps_ > 0) {
-            if (stepping_ == BaseStepping::RealTime) {
-                run_real_time_batch();
-                if (mode_ == BaseViewMode::Cloud) {
-                    volume_written_ = true;
-                } else {
-                    mc_dirty_ = true;
-                }
-            } else {
-                run_relax_batch();
-                write_display_texture();
-            }
-            pending_gpu_steps_ = 0;
-            volume_dirty_ = false;
-            if (gpu_title_due_) {
-                gpu_title_due_ = false;
-                title_dirty_ = true;
-            }
-        }
-        // kBaseIsoFraction * peak mirrors marching_cubes_at_fraction (CPU/GPU iso parity).
-        if (mode_ == BaseViewMode::Surface && engine_.mc_ready() &&
-            mc_dirty_) {
-            engine_.mc_extract(kBaseIsoFraction * peak_);
-            mc_dirty_ = false;
-            volume_written_ = true;  // display changed: accumulation resets
-        }
+        run_pending_batches();
+        extract_surface_if_dirty();
     }
 
     void tick() override {
@@ -242,6 +214,7 @@ public:
         cpu_is_truth_ = true;
         gpu_time_ = 0.0;
         pending_gpu_steps_ = 0;
+        probe_phase_ = 0;
         after_reset();
         stage_active_view();
     }
@@ -320,36 +293,31 @@ public:
     VkImageView flow_velocity_view() override {
         return gpu_ok_ ? engine_.flow_velocity_view() : VK_NULL_HANDLE;
     }
-    float next_flash_intensity() override { return 0.0f; }
+    // Photon flash: a brief warm background right after a quantum jump
+    // (flash_ticks_ stays 0 in scenes without jumps).
+    float next_flash_intensity() override {
+        if (flash_ticks_ <= 0) {
+            return 0.0f;
+        }
+        const float w = static_cast<float>(
+            ses::flash_intensity(flash_ticks_, kBaseFlashTicks));
+        --flash_ticks_;
+        return w;
+    }
+    long long photon_count() const override { return photon_count_; }
 
     // Photon streak overlays (count 0 until a scene spawns one).
     int overlay_curve_count() const override { return photon_streaks_.count; }
     OverlayCurve overlay_curve(int i) const override {
         return photon_streaks_.curve(i);
     }
-    bool take_volume_written() override {
-        const bool w = volume_written_;
-        volume_written_ = false;
-        return w;
-    }
-    bool take_volume_dirty() override {
-        const bool d = volume_dirty_;
-        volume_dirty_ = false;
-        return d;
-    }
-    bool take_mesh_dirty() override {
-        const bool d = mesh_dirty_;
-        mesh_dirty_ = false;
-        return d;
-    }
+    bool take_volume_written() override { return take(volume_written_); }
+    bool take_volume_dirty() override { return take(volume_dirty_); }
+    bool take_mesh_dirty() override { return take(mesh_dirty_); }
+    bool take_title_dirty() override { return take(title_dirty_); }
     void mark_display_dirty() override {
         mesh_dirty_ = true;
         volume_dirty_ = true;
-    }
-    bool take_title_dirty() override {
-        const bool t = title_dirty_;
-        title_dirty_ = false;
-        return t;
     }
     const std::vector<float>& psi_staging() const override { return psi_staging_; }
     const ses::Mesh& mesh() const override { return mesh_; }
@@ -358,13 +326,13 @@ public:
     std::string title_text() override {
         const double t_au = sim_.time() + gpu_time_;
         std::string s = scene_name() + std::string("   t = ") +
-                        strf("{:.2f} au ({:.3f} fs)", t_au, t_au * kBaseAuToFs) + "   ";
+                        strf("{:.2f} au ({:.3f} fs)", t_au, t_au * kAuToFs) + "   ";
         if (stepping_ != BaseStepping::RealTime) {
             s += cpu_is_truth_
                      ? strf("E = {:.3f} eV   ",
                             ses::mean_energy(sim_.psi(), sim_.potential()) *
-                                kBaseHaToEv)
-                     : strf("E ~ {:.3f} eV   ", relax_energy_display_ * kBaseHaToEv);
+                                kHaToEv)
+                     : strf("E ~ {:.3f} eV   ", relax_energy_display_ * kHaToEv);
         }
         if (stepping_ == BaseStepping::RealTime && use_gpu_path()) {
             s += strf("emit P = {:.2e} au   ", radiated_power_);
@@ -393,8 +361,65 @@ protected:
     virtual int steps_per_tick() const { return kBaseStepsPerTick; }
     virtual bool relax_allowed() const { return true; }
 
+    static bool take(bool& flag) { return std::exchange(flag, false); }
 
-    void run_real_time_batch() {
+    // CPU state authoritative: refresh the brightness normalizer, upload,
+    // bridge immediately (an empty step queue would keep a stale cloud).
+    void bridge_cpu_state() {
+        if (!cpu_is_truth_) {
+            return;
+        }
+        double pk = 0.0;
+        for (const std::complex<double>& z : sim_.psi().data()) {
+            pk = std::max(pk, std::norm(z));
+        }
+        if (pk > 0.0) {
+            peak_ = pk;
+        }
+        engine_.upload_state(sim_.psi().data());
+        cpu_is_truth_ = false;
+        volume_dirty_ = false;  // texture comes from the bridge now
+        write_display_texture();
+    }
+
+    // Run this frame's queued steps (real-time or relax batch) + the title
+    // epilogue.
+    void run_pending_batches() {
+        if (pending_gpu_steps_ <= 0) {
+            return;
+        }
+        if (stepping_ == BaseStepping::RealTime) {
+            run_real_time_batch();
+            if (mode_ == BaseViewMode::Cloud) {
+                volume_written_ = true;
+            } else {
+                mc_dirty_ = true;  // psi advanced: re-extract
+            }
+        } else {
+            run_relax_batch();
+            write_display_texture();
+        }
+        pending_gpu_steps_ = 0;
+        volume_dirty_ = false;
+        if (gpu_title_due_) {
+            gpu_title_due_ = false;
+            title_dirty_ = true;
+        }
+    }
+
+    // kBaseIsoFraction * peak mirrors marching_cubes_at_fraction (CPU/GPU iso
+    // parity).
+    void extract_surface_if_dirty() {
+        if (mode_ == BaseViewMode::Surface && engine_.mc_ready() &&
+            mc_dirty_) {
+            engine_.mc_extract(kBaseIsoFraction * peak_);
+            mc_dirty_ = false;
+            volume_written_ = true;  // display changed: accumulation resets
+        }
+    }
+
+    // Virtual: HydrogenDirector substitutes the driven/magnetic/decay batch.
+    virtual void run_real_time_batch() {
         if (gpu_title_due_) {
             const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
             norm_display_ = np.sum;
@@ -410,7 +435,8 @@ protected:
         }
         // ASYNC: overlaps this frame's render; next run_frame waits and flips.
         // after_step_batch hooks reading psi serialize on the same queue.
-        engine_.step_async(pending_gpu_steps_, absorber_on_, true);
+        engine_.step_async(pending_gpu_steps_,
+                           {.absorb = absorber_on_, .bridge = true});
         gpu_time_ += pending_gpu_steps_ * sim_.dt();
         after_step_batch();
     }
@@ -425,20 +451,30 @@ protected:
         }
         norm_display_ = 1.0;  // pinned by per-step renormalization
         // Auto-complete on the ITP energy plateau.
-        if (gpu_title_due_) {
-            if (std::abs(stats.energy - relax_prev_energy_) <
-                kBaseRelaxPlateauEps) {
-                ++relax_plateau_;
-            } else {
-                relax_plateau_ = 0;
-            }
-            relax_prev_energy_ = stats.energy;
-            if (relax_plateau_ >= kBaseRelaxPlateauPolls) {
-                relax_plateau_ = 0;
-                stepping_ = BaseStepping::RealTime;
-                engine_.release_relax_tables();
-            }
+        if (relax_plateau_poll(stats.energy)) {
+            stepping_ = BaseStepping::RealTime;
+            engine_.release_relax_tables();
         }
+    }
+
+    // ITP plateau poll (title cadence): true once the energy step stayed under
+    // eps for kBaseRelaxPlateauPolls polls; the counter resets on completion.
+    // The caller epilogues (stepping flip, table release, scene cleanup).
+    bool relax_plateau_poll(double energy) {
+        if (!gpu_title_due_) {
+            return false;
+        }
+        if (std::abs(energy - relax_prev_energy_) < kBaseRelaxPlateauEps) {
+            ++relax_plateau_;
+        } else {
+            relax_plateau_ = 0;
+        }
+        relax_prev_energy_ = energy;
+        if (relax_plateau_ < kBaseRelaxPlateauPolls) {
+            return false;
+        }
+        relax_plateau_ = 0;
+        return true;
     }
 
     // Subtract every tracked amplitude out of psi (continuum / untracked
@@ -495,6 +531,95 @@ protected:
         return n;
     }
 
+    // ---- collective decay (hydrogen + trap share ONE trial pipeline) ----
+
+    // Scene hooks around run_collective_decay_trial / flush_collapse_error.
+    virtual void on_decay_jump(const ses::IntervalJump&) {}  // label/tally/log
+    virtual void before_collapse_flush() {}
+    virtual bool collapse_flush_allowed() const { return true; }
+    virtual int ground_flush_index() const { return 0; }
+    virtual void after_collapse_flush(int /*target*/, double /*energy*/) {}
+
+    // Post-collapse eigenstate-error flush (fixed budget): collapse targets
+    // are SAMPLED radial eigenstates, not grid eigenstates, so a short ITP
+    // burst flushes high-frequency junk before real time resumes. Tables stay
+    // resident while decay is armed (rebuilding per photon costs more than
+    // the burst); a one-off flush drops them again.
+    void flush_collapse_error(int target) {
+        if (!collapse_flush_allowed() || !ensure_relax_tables()) {
+            return;
+        }
+        const ses_vk::Engine::RelaxStats stats = engine_.relax_step(
+            target == ground_flush_index() ? kBaseFlushStepsGround
+                                           : kBaseFlushSteps);
+        if (!decay_on_) {
+            engine_.release_relax_tables();
+        }
+        after_collapse_flush(target, stats.energy);
+    }
+
+    struct DecayTrialResult {
+        bool jumped = false;
+        double trial_dt = 0.0;  // the interval the trial consumed
+    };
+
+    // One frequency-resolved collective trial on the accumulated interval:
+    // project tracked amplitudes -> ses::group_by_gap ->
+    // ses::collective_decay_interval -> rebuild psi (superpose; collapse_onto
+    // guard fallback) -> flush -> flash -> one streak + on_decay_jump per
+    // arrival. PRECONDITION: project_psi() ran on the CURRENT psi.
+    // first_state: projection loop start (hydrogen skips the stable ground).
+    // pop_out (n_states doubles, optional): |amp|^2 tap for the MCWF no-jump
+    // branch. RNG CONTRACT: every draw goes through ONE uniform dist fed to
+    // the sampler lambda -- same seed, same jump sequence.
+    DecayTrialResult run_collective_decay_trial(AtomModel& atom,
+                                                int first_state,
+                                                double* pop_out = nullptr) {
+        const int n = atom.n_states();
+        std::vector<std::complex<double>> amps(static_cast<std::size_t>(n));
+        for (int s = first_state; s < n; ++s) {
+            amps[static_cast<std::size_t>(s)] =
+                atom.project_state_amplitude(engine_, s);
+            if (pop_out != nullptr) {
+                pop_out[static_cast<std::size_t>(s)] =
+                    std::norm(amps[static_cast<std::size_t>(s)]);
+            }
+        }
+        const std::vector<ses::FreqGroup> groups =
+            ses::group_by_gap(atom.grouped_channels(), ses::kFreqGroupTol);
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        const double trial_dt = decay_accum_dt_;
+        decay_accum_dt_ = 0.0;
+        const ses::IntervalResult res = ses::collective_decay_interval(
+            groups, std::move(amps), trial_dt, [&] { return uniform(rng_); });
+        if (res.jumps.empty()) {
+            return {.jumped = false, .trial_dt = trial_dt};
+        }
+        std::vector<int> states;
+        std::vector<std::complex<double>> cs;
+        for (int s = 0; s < n; ++s) {
+            if (std::norm(res.c[static_cast<std::size_t>(s)]) >
+                kAmpNormFloor) {
+                states.push_back(s);
+                cs.push_back(res.c[static_cast<std::size_t>(s)]);
+            }
+        }
+        const int dom = res.jumps.back().dominant_to;
+        if (!superpose_into_psi(atom, states, cs) && dom >= 0) {
+            atom.collapse_onto(engine_, dom);  // guard fallback
+        }
+        before_collapse_flush();
+        flush_collapse_error(dom >= 0 ? dom : ground_flush_index());
+        flash_ticks_ = kBaseFlashTicks;
+        for (const ses::IntervalJump& j : res.jumps) {
+            ++photon_count_;
+            photon_streaks_.spawn(j.rec, j.gap_e);
+            on_decay_jump(j);
+        }
+        title_dirty_ = true;
+        return {.jumped = true, .trial_dt = trial_dt};
+    }
+
     // THE synth-accumulate idiom (seeds, partial-measure rebuild, shell
     // collapse): overwrite psi with sum_i c_i |states_i>. First significant
     // member anchors with its phase rotated out (global phase unphysical; the
@@ -506,7 +631,7 @@ protected:
         bool anchored = false;
         std::complex<double> phase{1.0, 0.0};
         for (std::size_t i = 0; i < states.size(); ++i) {
-            if (std::norm(c[i]) < 1e-18) {
+            if (std::norm(c[i]) < kAmpNormFloor) {
                 continue;
             }
             const TransientState buf(atom, engine_, states[i]);
@@ -569,15 +694,50 @@ protected:
             return;
         }
         if (!engine_.readback(readback_buf_)) {
-            return;  // readback failed: keep the CPU state
+            std::fprintf(stderr,
+                         "engine: readback failed -- keeping the CPU state\n");
+            return;
         }
+        sim_.set_psi(field_from_readback());
+        cpu_is_truth_ = true;
+    }
+
+    // Gated density probe over the full field (kBaseProbeStride title-tick
+    // cadence + host-wait + readback-failure skip in ONE place). cell gets
+    // (i, j, k, |psi|^2) per grid cell, x-fastest layout. False = skipped.
+    template <typename CellFn>
+    bool probe_readback(CellFn&& cell) {
+        if (!gpu_title_due_ || ++probe_phase_ % kBaseProbeStride != 0) {
+            return false;
+        }
+        // Host-wait: readback consumes POST-step psi (same-queue order carries
+        // no memory dependency).
+        engine_.wait_async();
+        if (!engine_.readback(readback_buf_)) {
+            return false;  // GPU readback failed: skip (no stale/OOB read)
+        }
+        const ses::Grid3D& g = sim_.grid();
+        const int nx = g.x.n;
+        const int ny = g.y.n;
+        const std::size_t cells = readback_buf_.size() / 2;
+        for (std::size_t idx = 0; idx < cells; ++idx) {
+            const double re = readback_buf_[2 * idx];
+            const double im = readback_buf_[2 * idx + 1];
+            cell(static_cast<int>(idx % nx),
+                 static_cast<int>((idx / nx) % ny),
+                 static_cast<int>(idx / (nx * ny)), re * re + im * im);
+        }
+        return true;
+    }
+
+    // readback_buf_ (interleaved fp32 re/im) -> Field3D on the sim grid.
+    ses::Field3D field_from_readback() const {
         ses::Field3D f{sim_.grid()};
         for (std::size_t i = 0; i < f.data().size(); ++i) {
-            f.data()[i] =
-                std::complex<double>{readback_buf_[2 * i], readback_buf_[2 * i + 1]};
+            f.data()[i] = std::complex<double>{readback_buf_[2 * i],
+                                               readback_buf_[2 * i + 1]};
         }
-        sim_.set_psi(f);
-        cpu_is_truth_ = true;
+        return f;
     }
 
     void stage_active_view() {
@@ -642,6 +802,7 @@ protected:
     double relax_prev_energy_ = 0.0;
     int relax_plateau_ = 0;
     std::vector<float> readback_buf_;
+    int probe_phase_ = 0;  // probe_readback cadence counter
 
     bool mc_dirty_ = false;  // Surface: re-extract mesh
     ses::Mesh mesh_;
@@ -656,6 +817,15 @@ protected:
     bool absorber_on_ = false;
     std::mt19937 rng_{std::random_device{}()};
     PhotonStreakDisplay photon_streaks_;
+
+    // Shared decay/flash/measure scene state (hydrogen + trap).
+    bool decay_on_ = false;
+    double decay_accum_dt_ = 0.0;  // sim time since the last decay trial
+    int flash_ticks_ = 0;
+    long long photon_count_ = 0;
+    int excite_cycle_ = 0;  // excite-key cycle position
+    std::string last_jump_;
+    std::string last_measure_;
 };
 
 }  // namespace ses_shell

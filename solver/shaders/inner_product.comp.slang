@@ -1,5 +1,6 @@
 // Complex inner product <phi|psi>; one partial per workgroup, host sums them.
 // Bindings: psi=0, partials=2, phi=3, std140 UBO n=1.
+#include "reduce.slang"
 import complex;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Complex, Std430DataLayout> psi;
@@ -24,13 +25,8 @@ void main(uint3 gid : SV_DispatchThreadID,
         acc = acc + mul_conj(phi[i], psi[i]);
     }
     s_sum[tid] = acc;
-    GroupMemoryBarrierWithGroupSync();
-    for (uint half_len = 128u; half_len > 0u; half_len >>= 1u) {
-        if (tid < half_len) {
-            s_sum[tid] = s_sum[tid] + s_sum[tid + half_len];
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+#define IP_FOLD(a, b) { s_sum[a] = s_sum[a] + s_sum[b]; }
+    REDUCE_FOLD_256(IP_FOLD, tid);
     if (tid == 0u) {
         partials[grp.x] = s_sum[0];
     }

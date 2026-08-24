@@ -35,33 +35,25 @@ inline std::vector<double> soft_coulomb_potential(const Grid1D& g, double Z, dou
 
 inline std::vector<double> harmonic_potential(const Grid3D& g, double omega, Vec3d c) {
     std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double dx = g.x.coord(i) - c.x;
-                const double dy = g.y.coord(j) - c.y;
-                const double dz = g.z.coord(k) - c.z;
-                v[static_cast<std::size_t>(g.flat(i, j, k))] =
-                    0.5 * omega * omega * (dx * dx + dy * dy + dz * dz);
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        const double dx = g.x.coord(i) - c.x;
+        const double dy = g.y.coord(j) - c.y;
+        const double dz = g.z.coord(k) - c.z;
+        v[static_cast<std::size_t>(flat)] =
+            0.5 * omega * omega * (dx * dx + dy * dy + dz * dz);
+    });
     return v;
 }
 
 inline std::vector<double> soft_coulomb_potential(const Grid3D& g, double Z, double a, Vec3d c) {
     std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double dx = g.x.coord(i) - c.x;
-                const double dy = g.y.coord(j) - c.y;
-                const double dz = g.z.coord(k) - c.z;
-                v[static_cast<std::size_t>(g.flat(i, j, k))] =
-                    -Z / std::sqrt(dx * dx + dy * dy + dz * dz + a * a);
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        const double dx = g.x.coord(i) - c.x;
+        const double dy = g.y.coord(j) - c.y;
+        const double dz = g.z.coord(k) - c.z;
+        v[static_cast<std::size_t>(flat)] =
+            -Z / std::sqrt(dx * dx + dy * dy + dz * dz + a * a);
+    });
     return v;
 }
 
@@ -104,16 +96,17 @@ inline std::vector<double> morse_potential(const Grid1D& g, double d,
 inline std::vector<double> tilted_potential(std::vector<double> v,
                                             const Grid3D& g, double e0,
                                             int axis) {
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double c = axis == 0   ? g.x.coord(i)
-                                 : axis == 1 ? g.y.coord(j)
-                                             : g.z.coord(k);
-                v[static_cast<std::size_t>(g.flat(i, j, k))] += e0 * c;
-            }
-        }
+    const Grid1D* axes[3] = {&g.x, &g.y, &g.z};
+    const Grid1D& ax = *axes[axis];
+    std::vector<double> tilt(static_cast<std::size_t>(ax.n));
+    for (int p = 0; p < ax.n; ++p) {
+        tilt[static_cast<std::size_t>(p)] = e0 * ax.coord(p);
     }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        const int idx[3] = {i, j, k};
+        v[static_cast<std::size_t>(flat)] +=
+            tilt[static_cast<std::size_t>(idx[axis])];
+    });
     return v;
 }
 
@@ -148,51 +141,29 @@ inline std::vector<double> barrier_potential(const Grid3D& g, double v0,
     return v;
 }
 
-// Bare -Z/|r-c|, only the singular nucleus cell replaced by the analytic cell
-// average (docs/ARCHITECTURE.md: why not soft-Coulomb). Requires cubic cells +
-// nucleus on a grid point; an off-point nucleus just gets -Z/r throughout.
-inline std::vector<double> regularized_coulomb_potential(const Grid3D& g, double Z, Vec3d c) {
-    const double h = g.x.spacing();
-    const double center = -Z * kCoulombCellAverage / h;
-    std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double dx = g.x.coord(i) - c.x;
-                const double dy = g.y.coord(j) - c.y;
-                const double dz = g.z.coord(k) - c.z;
-                const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-                v[static_cast<std::size_t>(g.flat(i, j, k))] =
-                    (r < 1e-6 * h) ? center : -Z / r;
-            }
-        }
-    }
-    return v;
-}
-
-// Superposition of the single-center builder over centers: each exact-hit
-// nucleus cell takes its own analytic average, others add plain -Z/r. Centers
-// must sit on grid points (BO molecular potentials, e.g. H2+).
+// Bare -Z/|r-c| superposed over centers: each exact-hit nucleus cell takes the
+// analytic cell average, others add plain -Z/r (docs/ARCHITECTURE.md: why not
+// soft-Coulomb). Requires cubic cells + centers on grid points (BO molecular
+// potentials, e.g. H2+); an off-point nucleus just gets -Z/r throughout.
 inline std::vector<double> regularized_coulomb_potential(
     const Grid3D& g, double Z, const std::vector<Vec3d>& centers) {
     const double h = g.x.spacing();
     const double center_v = -Z * kCoulombCellAverage / h;
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     for (const Vec3d& c : centers) {
-        for (int k = 0; k < g.z.n; ++k) {
-            for (int j = 0; j < g.y.n; ++j) {
-                for (int i = 0; i < g.x.n; ++i) {
-                    const double dx = g.x.coord(i) - c.x;
-                    const double dy = g.y.coord(j) - c.y;
-                    const double dz = g.z.coord(k) - c.z;
-                    const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-                    v[static_cast<std::size_t>(g.flat(i, j, k))] +=
-                        (r < 1e-6 * h) ? center_v : -Z / r;
-                }
-            }
-        }
+        for_each_cell(g, [&](int i, int j, int k, int flat) {
+            const double dx = g.x.coord(i) - c.x;
+            const double dy = g.y.coord(j) - c.y;
+            const double dz = g.z.coord(k) - c.z;
+            const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
+            v[static_cast<std::size_t>(flat)] += (r < 1e-6 * h) ? center_v : -Z / r;
+        });
     }
     return v;
+}
+
+inline std::vector<double> regularized_coulomb_potential(const Grid3D& g, double Z, Vec3d c) {
+    return regularized_coulomb_potential(g, Z, std::vector<Vec3d>{c});
 }
 
 // Nearest grid point per axis, clamped to valid coords (xmax is off the
@@ -233,22 +204,43 @@ inline std::vector<double> absorbing_mask(const Grid1D& g, double width) {
     return m;
 }
 
+// Quadratic CAP frame on the x/y box edges (k = 0 plane; 2D scenes, nz = 1):
+// w = w0 (1 - d/width)^2 inside the ramp, mask = exp(-w dt) per step.
+// Quadratic, not cos^2: cos^2 is too stiff for slow packets (~30% reflection
+// at k0 = 1).
+inline std::vector<double> quadratic_cap_mask(const Grid3D& g, double width,
+                                              double w0, double dt) {
+    auto ramp_w = [&](const Grid1D& ax, double x) {
+        const double d = std::min(x - ax.xmin, ax.xmax - x);
+        if (d >= width) {
+            return 0.0;
+        }
+        const double t = 1.0 - d / width;
+        return w0 * t * t;
+    };
+    std::vector<double> m(static_cast<std::size_t>(g.size()));
+    for (int j = 0; j < g.y.n; ++j) {
+        const double wy = ramp_w(g.y, g.y.coord(j));
+        for (int i = 0; i < g.x.n; ++i) {
+            const double wx = ramp_w(g.x, g.x.coord(i));
+            m[static_cast<std::size_t>(g.flat(i, j, 0))] =
+                std::exp(-(wx + wy) * dt);
+        }
+    }
+    return m;
+}
+
 // Separable: product of per-axis 1D ramps -- 3n sin calls, not 3n^3.
 inline std::vector<double> absorbing_mask(const Grid3D& g, double width) {
     const std::vector<double> mx = absorbing_mask(g.x, width);
     const std::vector<double> my = absorbing_mask(g.y, width);
     const std::vector<double> mz = absorbing_mask(g.z, width);
     std::vector<double> m(static_cast<std::size_t>(g.size()));
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                m[static_cast<std::size_t>(g.flat(i, j, k))] =
-                    mx[static_cast<std::size_t>(i)] *
-                    my[static_cast<std::size_t>(j)] *
-                    mz[static_cast<std::size_t>(k)];
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        m[static_cast<std::size_t>(flat)] = mx[static_cast<std::size_t>(i)] *
+                                            my[static_cast<std::size_t>(j)] *
+                                            mz[static_cast<std::size_t>(k)];
+    });
     return m;
 }
 

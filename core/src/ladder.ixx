@@ -79,7 +79,7 @@ inline void chain_seed(double a0, double omega, double x, double& m, int& e) {
         e = 0;
         return;
     }
-    const double bits = -arg * 1.4426950408889634;  // log2(psi_0 / a0)
+    const double bits = -arg * std::numbers::log2e;  // log2(psi_0 / a0)
     const int shift = static_cast<int>(std::floor(bits));
     m = a0 * std::exp2(bits - shift);
     e = shift;
@@ -208,19 +208,13 @@ inline Field1D ho_eigenstate(const Grid1D& g, double omega, int n) {
 inline std::vector<std::pair<double, double>> ho1d_spectrum(
     const Field1D& psi, double omega, double e_max) {
     std::vector<std::pair<double, double>> lines;
-    const double h = psi.grid().spacing();
     for (int n = 0;; ++n) {
         const double e = (n + 0.5) * omega;
         if (e > e_max) {
             break;
         }
         const Field1D basis = ho_eigenstate(psi.grid(), omega, n);
-        std::complex<double> ov{};
-        for (int i = 0; i < psi.size(); ++i) {
-            ov += std::conj(basis[i]) * psi[i];
-        }
-        ov *= h;
-        lines.emplace_back(e, std::norm(ov));
+        lines.emplace_back(e, std::norm(inner_product(basis, psi)));
     }
     return lines;
 }
@@ -324,12 +318,17 @@ inline int ho_level_cap(const Grid1D& g, double omega) {
 // Ladder step in the truncated Fock basis |0..n_top> -- superposition
 // counterpart of ladder_rung_stable. Project c_n = <n|psi>, act on the
 // coefficients, resynthesize from noise-free oracles: no spectral derivative,
-// so it works at ANY grid k_max. *out_residual gets the outside-band weight;
-// psi is written only when the band holds the state (residual <= 1/2) AND the
-// result does not vanish. Returns counting norm^2 inside the band.
-inline double ladder_fock(Field1D& psi, double omega, bool up, int n_top,
-                          double* out_residual = nullptr,
-                          double vanish_eps = 1e-6) {
+// so it works at ANY grid k_max. residual = outside-band weight; psi is
+// written only when the band holds the state (residual <= 1/2) AND the
+// result does not vanish. norm2 = counting norm^2 inside the band.
+struct LadderBand {
+    double norm2 = 0.0;
+    double residual = 0.0;
+};
+
+inline LadderBand ladder_fock(Field1D& psi, double omega, Rung rung, int n_top,
+                              double vanish_eps = 1e-6) {
+    const bool up = rung == Rung::Raise;
     const Grid1D& g = psi.grid();
     const double h = g.spacing();
     const double psi_n2 = norm_sq(psi);
@@ -368,9 +367,6 @@ inline double ladder_fock(Field1D& psi, double omega, bool up, int n_top,
     }
     const int m = static_cast<int>(c.size()) - 1;  // last projected level
     const double residual = std::max(0.0, 1.0 - inside / psi_n2);
-    if (out_residual != nullptr) {
-        *out_residual = residual;
-    }
     // Exact coefficient action on the scanned band.
     const int nd = m + (up ? 2 : 1);
     std::vector<std::complex<double>> d(static_cast<std::size_t>(nd));
@@ -389,7 +385,7 @@ inline double ladder_fock(Field1D& psi, double omega, bool up, int n_top,
         }
     }
     if (residual > 0.5 || norm2 < vanish_eps) {
-        return norm2;  // outside the band, or annihilated: psi untouched
+        return {norm2, residual};  // outside the band or annihilated: psi untouched
     }
     // Pass 2: resynthesize psi = sum d_n |n> off a fresh chain, reusing the
     // cached level norms (the up-shift top level n = m+1 was not normed in
@@ -420,25 +416,28 @@ inline double ladder_fock(Field1D& psi, double omega, bool up, int n_top,
     parallel_for(g.n, [&](int i) {
         psi[i] = inv_total * out[static_cast<std::size_t>(i)];
     });
-    return norm2;
+    return {norm2, residual};
 }
 
-// Largest Fock level the FFT ladder reaches cleanly -- MEASURED, not modeled:
-// adag's round-off gains (derivative k_max/sqrt(2w), x-term x_max*sqrt(w/2))
-// make the cap non-monotone with no closed form, so probe directly. Returns
-// the last level matching the Hermite oracle within defect_tol (1e-6 ~ 0.1%
-// amplitude). ~cap FFTs, only on omega change.
+// Probe ceiling for ladder_cap: raw FFT ladders lose the oracle well below
+// this on every measured grid; a scan that survives it returns the ceiling
+// itself, CLIPPED, not measured.
+inline constexpr int kLadderCapProbeMax = 64;
+
+// Largest Fock level the FFT ladder reaches cleanly -- MEASURED (up to
+// kLadderCapProbeMax), not modeled: adag's round-off gains (derivative
+// k_max/sqrt(2w), x-term x_max*sqrt(w/2)) make the cap non-monotone with no
+// closed form, so probe directly. Returns the last level matching the Hermite
+// oracle within defect_tol (1e-6 ~ 0.1% amplitude). ~cap FFTs, only on omega
+// change.
 inline int ladder_cap(const Grid1D& g, double omega, double defect_tol = 1e-6) {
     Field1D psi = ho_eigenstate(g, omega, 0);
     int cap = 0;
-    for (int n = 1; n <= 64; ++n) {
+    for (int n = 1; n <= kLadderCapProbeMax; ++n) {
         ladder_raise(psi, omega);
         const Field1D oracle = ho_eigenstate(g, omega, n);
-        std::complex<double> ov{};
-        for (int i = 0; i < g.n; ++i) {
-            ov += std::conj(psi[i]) * oracle[i];
-        }
-        ov *= g.spacing();  // grid-weighted overlap (both normalized)
+        // grid-weighted overlap (both normalized)
+        const std::complex<double> ov = inner_product(psi, oracle);
         if (1.0 - std::norm(ov) > defect_tol) {
             break;  // ladder diverged from the clean eigenstate here
         }
@@ -470,7 +469,8 @@ inline double ladder_lower(Field1D& psi, double omega, double vanish_eps = 1e-6)
 // psi untouched). If psi is NOT the claimed eigenstate (oracle overlap < 1/2),
 // the raw result is kept: caller misclassified, honest output stands.
 inline double ladder_rung_stable(Field1D& psi, double omega, int n_from,
-                                 bool up, double vanish_eps = 1e-6) {
+                                 Rung rung, double vanish_eps = 1e-6) {
+    const bool up = rung == Rung::Raise;
     const Grid1D& g = psi.grid();
     Field1D raw = psi;
     double norm2 = 0.0;
@@ -484,11 +484,7 @@ inline double ladder_rung_stable(Field1D& psi, double omega, int n_from,
     }
     const int target = up ? n_from + 1 : n_from - 1;
     const Field1D oracle = ho_eigenstate(g, omega, target);
-    std::complex<double> ov{};
-    for (int i = 0; i < g.n; ++i) {
-        ov += std::conj(oracle[i]) * raw[i];
-    }
-    ov *= g.spacing();
+    const std::complex<double> ov = inner_product(oracle, raw);
     if (std::norm(ov) < 0.5) {
         psi = std::move(raw);  // misclassified input: keep the raw output
         return norm2;

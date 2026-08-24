@@ -41,6 +41,9 @@ inline std::array<KeplerPair, 5> kepler_pairs() {
                 break;
             }
         }
+        if (sin_idx < 0) {
+            continue;  // no -m partner in the spec: not a real pair
+        }
         pairs[out++] = KeplerPair{sc.l + 1, i, sin_idx};
     }
     return pairs;
@@ -51,6 +54,9 @@ inline std::array<std::complex<double>, kNumStates> kepler_coefficients(
     std::array<std::complex<double>, kNumStates> c{};
     double sum = 0.0;
     for (const KeplerPair& p : kepler_pairs()) {
+        if (p.n == 0 || p.idx_sin < 0) {
+            continue;  // unfilled tail slot (value-init) or partnerless state
+        }
         const double dn = p.n - n_bar;
         const double w = std::exp(-dn * dn / (4.0 * sigma * sigma));
         const ses::RealPair rp = ses::pair_from_signed_m(w, +1);

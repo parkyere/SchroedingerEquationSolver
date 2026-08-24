@@ -9,7 +9,8 @@ import spin;
 [[vk::binding(1, 0)]] RWStructuredBuffer<float, Std430DataLayout> bloch;
 
 struct Axis {
-    float nx, ny, nz, pad;
+    float nx, ny, nz;
+    uint n_sites;
 };
 [[vk::binding(2, 0)]] ConstantBuffer<Axis, Std140DataLayout> axis;
 [[vk::binding(3, 0)]] RWStructuredBuffer<float, Std430DataLayout> uu;
@@ -18,7 +19,7 @@ struct Axis {
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint i = tid.x;
-    if (i >= 16u) {
+    if (i >= axis.n_sites) {
         return;
     }
     float3 n = float3(axis.nx, axis.ny, axis.nz);

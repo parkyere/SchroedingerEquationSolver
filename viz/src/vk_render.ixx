@@ -10,20 +10,17 @@ module;
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
 #include <source_location>
-#include <vector>
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <vector>
 export module ses.vk.render;
 export import ses.vk.compute;
@@ -49,46 +46,36 @@ export namespace ses_vk {
 
 constexpr int kPhaseLutSize = 256;
 
+// Scene base clear color; the presenter's letterbox clear must match.
+constexpr float kSceneClearColor[3] = {0.04f, 0.05f, 0.09f};
+
+// One offline-baked SPIR-V blob (caller owns the bytes).
+struct Blob {
+    const unsigned char* data = nullptr;
+    std::size_t size = 0;
+};
+
 // SPIR-V blobs for the pipelines + post chain (offline-baked; caller owns).
 struct RenderKernels {
-    const unsigned char* mesh_vert = nullptr;
-    std::size_t mesh_vert_size = 0;
-    const unsigned char* mesh_frag = nullptr;
-    std::size_t mesh_frag_size = 0;
-    const unsigned char* marker_frag = nullptr;
-    std::size_t marker_frag_size = 0;
-    const unsigned char* volume_vert = nullptr;
-    std::size_t volume_vert_size = 0;
-    const unsigned char* volume_frag = nullptr;
-    std::size_t volume_frag_size = 0;
-    const unsigned char* slice_vert = nullptr;  // cross-section sheet
-    std::size_t slice_vert_size = 0;
-    const unsigned char* slice_frag = nullptr;
-    std::size_t slice_frag_size = 0;
-    const unsigned char* accum = nullptr;
-    std::size_t accum_size = 0;
-    const unsigned char* bloom_down = nullptr;
-    std::size_t bloom_down_size = 0;
-    const unsigned char* bloom_up = nullptr;
-    std::size_t bloom_up_size = 0;
-    const unsigned char* compose = nullptr;  // tonemap + bloom + dither
-    std::size_t compose_size = 0;
-    const unsigned char* particles = nullptr;  // probability-flow advection
-    std::size_t particles_size = 0;
-    const unsigned char* occupancy = nullptr;  // block-max density
-    std::size_t occupancy_size = 0;
-    const unsigned char* occ_dilate = nullptr;  // conservative 3^3 dilation
-    std::size_t occ_dilate_size = 0;
-    const unsigned char* shadow = nullptr;  // key-light transmittance
-    std::size_t shadow_size = 0;
-    const unsigned char* flow_vert = nullptr;  // streakline vertices
-    std::size_t flow_vert_size = 0;
-    const unsigned char* flow_frag = nullptr;
-    std::size_t flow_frag_size = 0;
-    const unsigned char* overlay_vert = nullptr;  // 1D-scene polylines
-    std::size_t overlay_vert_size = 0;
-    const unsigned char* overlay_frag = nullptr;
-    std::size_t overlay_frag_size = 0;
+    Blob mesh_vert;
+    Blob mesh_frag;
+    Blob marker_frag;
+    Blob volume_vert;
+    Blob volume_frag;
+    Blob slice_vert;    // cross-section sheet
+    Blob slice_frag;
+    Blob accum;
+    Blob bloom_down;
+    Blob bloom_up;
+    Blob compose;       // tonemap + bloom + dither
+    Blob particles;     // probability-flow advection
+    Blob occupancy;     // block-max density
+    Blob occ_dilate;    // conservative 3^3 dilation
+    Blob shadow;        // key-light transmittance
+    Blob flow_vert;     // streakline vertices
+    Blob flow_frag;
+    Blob overlay_vert;  // 1D-scene polylines
+    Blob overlay_frag;
 };
 
 class SceneRenderer {
@@ -120,7 +107,8 @@ public:
         float g = 1.0f;
         float b = 1.0f;
     };
-    static constexpr int kMaxMarkers = 64;  // the 48-adatom corral fits
+    // Mirrors volume.frag's marker_cr/marker_col[64]; the 48-adatom corral fits.
+    static constexpr int kMaxMarkers = 64;
 
     // Per-frame inputs computed by the shell. Non-null mesh/volume_staging
     // pointers request a (re)upload before the pass records.
@@ -179,7 +167,16 @@ public:
                     const RenderKernels& blobs) {
         ctx_ = &ctx;
         grid_ = grid;
-        if (!arena_.create(ctx, 32, 32, 24, 0, 32, 24)) {
+        // Per-pool descriptor counts; the arena chains more pools on demand.
+        constexpr std::uint32_t kArenaMaxSets = 32;
+        constexpr std::uint32_t kArenaStorageBufs = 32;
+        constexpr std::uint32_t kArenaUniformBufs = 24;
+        constexpr std::uint32_t kArenaDynamicUniforms = 0;
+        constexpr std::uint32_t kArenaStorageImages = 32;
+        constexpr std::uint32_t kArenaSamplers = 24;
+        if (!arena_.create(ctx, kArenaMaxSets, kArenaStorageBufs,
+                           kArenaUniformBufs, kArenaDynamicUniforms,
+                           kArenaStorageImages, kArenaSamplers)) {
             return false;
         }
         if (!create_samplers() || !create_ubos() ||
@@ -284,13 +281,18 @@ public:
         if (in.cloud && (in.volume_changed || !aux_valid_) &&
             volume_bound_view_ != VK_NULL_HANDLE) {
             occ_k_.bind(cb, occ_set_);
-            vkCmdDispatch(cb, 32, 32, 32);  // one workgroup per occ cell
+            // One 8^3-thread workgroup reduces one occ cell.
+            vkCmdDispatch(cb, kOccSize, kOccSize, kOccSize);
             barrier_compute_to_compute(cb);
             dilate_k_.bind(cb, dilate_set_);
-            vkCmdDispatch(cb, 8, 8, 8);
+            vkCmdDispatch(cb, group_count(kOccSize, kDilateGroup),
+                          group_count(kOccSize, kDilateGroup),
+                          group_count(kOccSize, kDilateGroup));
             barrier_compute_to_compute(cb);
             shadow_k_.bind(cb, shadow_set_);
-            vkCmdDispatch(cb, 16, 16, 16);  // 64^3 / 4^3
+            vkCmdDispatch(cb, group_count(kShadowSize, kShadowGroup),
+                          group_count(kShadowSize, kShadowGroup),
+                          group_count(kShadowSize, kShadowGroup));
             memory_barrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            VK_ACCESS_SHADER_WRITE_BIT,
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -333,7 +335,7 @@ public:
                                    VK_WHOLE_SIZE);
                 point_flow_velocity_binding(in.flow_velocity);
                 particles_k_.bind(cb, particles_set_);
-                vkCmdDispatch(cb, (kFlowStreaks + 255) / 256, 1, 1);
+                vkCmdDispatch(cb, group_count(kFlowStreaks), 1, 1);
                 memory_barrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                VK_ACCESS_SHADER_WRITE_BIT,
                                VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
@@ -380,8 +382,9 @@ public:
         color_att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color_att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color_att.clearValue.color = {{0.04f + 0.55f * w, 0.05f + 0.42f * w,
-                                       0.09f + 0.18f * w, 1.0f}};
+        color_att.clearValue.color = {{kSceneClearColor[0] + 0.55f * w,
+                                       kSceneClearColor[1] + 0.42f * w,
+                                       kSceneClearColor[2] + 0.18f * w, 1.0f}};
         VkRenderingAttachmentInfo depth_att{};
         depth_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         depth_att.imageView = depth_.view;
@@ -522,7 +525,7 @@ public:
             vkCmdDraw(cb, static_cast<std::uint32_t>(gizmo_vertex_count_), 1,
                       0, 0);
             vkCmdBindVertexBuffers(cb, 0, 1, &zlabel_vbuf_.buf, &zero_off);
-            vkCmdDraw(cb, 18, 1, 0, 0);
+            vkCmdDraw(cb, kZLabelVerts, 1, 0, 0);
         }
 
         vkCmdEndRendering(cb);
@@ -785,36 +788,27 @@ private:
         const auto simg = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         const auto cis = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         const auto ubo = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        if (!occ_k_.create(*ctx_, blobs.occupancy, blobs.occupancy_size,
+        if (!occ_k_.create(*ctx_, blobs.occupancy.data, blobs.occupancy.size,
                            {{0, simg}, {1, ubo}, {2, cis}}) ||
-            !dilate_k_.create(*ctx_, blobs.occ_dilate, blobs.occ_dilate_size,
+            !dilate_k_.create(*ctx_, blobs.occ_dilate.data,
+                              blobs.occ_dilate.size,
                               {{0, simg}, {1, simg}}) ||
-            !shadow_k_.create(*ctx_, blobs.shadow, blobs.shadow_size,
+            !shadow_k_.create(*ctx_, blobs.shadow.data, blobs.shadow.size,
                               {{0, simg}, {1, ubo}, {2, cis}})) {
             return false;
         }
         const VkImageUsageFlags usage =
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        if (!create_aux_image(32, usage, &occ_a_) ||
-            !create_aux_image(32, usage, &occ_b_) ||
-            !create_aux_image(64, usage, &shadow_vol_)) {
+        if (!create_aux_image(kOccSize, usage, &occ_a_) ||
+            !create_aux_image(kOccSize, usage, &occ_b_) ||
+            !create_aux_image(kShadowSize, usage, &shadow_vol_)) {
             return false;
         }
-        OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!one_shot([this](VkCommandBuffer cb) {
+                transition_to_general(cb, {&occ_a_, &occ_b_, &shadow_vol_});
+            })) {
             return false;
         }
-        const DeviceContext::Image* imgs[3] = {&occ_a_, &occ_b_, &shadow_vol_};
-        for (const DeviceContext::Image* im : imgs) {
-            image_layout_barrier(shot.cb(), im->img, VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_GENERAL,
-                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_ACCESS_SHADER_READ_BIT |
-                                     VK_ACCESS_SHADER_WRITE_BIT);
-        }
-        shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
 
         occ_set_ = arena_.allocate(*ctx_, occ_k_.set_layout());
         dilate_set_ = arena_.allocate(*ctx_, dilate_k_.set_layout());
@@ -875,7 +869,8 @@ private:
                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) &&
                write_host(&volume_ubuf_, &v0, sizeof(v0),
                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) &&
-               write_host(&zlabel_vbuf_, nullptr, 18 * 9 * sizeof(float),
+               write_host(&zlabel_vbuf_, nullptr,
+                          kZLabelVerts * 9 * sizeof(float),
                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     }
 
@@ -889,6 +884,33 @@ private:
             vmaFlushAllocation(ctx_->allocator, b->alloc, 0, VK_WHOLE_SIZE);
         }
         return true;
+    }
+
+    // OneShot scaffold: begin -> record(cb) -> submit_and_wait -> destroy.
+    bool one_shot(auto&& record,
+                  std::source_location loc = std::source_location::current()) {
+        OneShot shot;
+        if (!shot.begin(*ctx_)) {
+            return false;
+        }
+        record(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_, loc);
+        shot.destroy(*ctx_);
+        return ok;
+    }
+
+    // Fresh storage images: UNDEFINED -> GENERAL before first compute access.
+    static void transition_to_general(
+        VkCommandBuffer cb,
+        std::initializer_list<const DeviceContext::Image*> imgs) {
+        for (const DeviceContext::Image* im : imgs) {
+            image_layout_barrier(cb, im->img, VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_GENERAL,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_ACCESS_SHADER_READ_BIT |
+                                     VK_ACCESS_SHADER_WRITE_BIT);
+        }
     }
 
 
@@ -982,22 +1004,12 @@ private:
         bloom_size_[1] = {qw, qh};
         bloom_size_[2] = {ew, eh};
 
-        OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!one_shot([this](VkCommandBuffer cb) {
+                transition_to_general(cb, {&accum_, &bloom_[0], &bloom_[1],
+                                           &bloom_[2], &present_});
+            })) {
             return false;
         }
-        const DeviceContext::Image* imgs[5] = {&accum_, &bloom_[0], &bloom_[1],
-                                               &bloom_[2], &present_};
-        for (const DeviceContext::Image* im : imgs) {
-            image_layout_barrier(shot.cb(), im->img, VK_IMAGE_LAYOUT_UNDEFINED,
-                                 VK_IMAGE_LAYOUT_GENERAL,
-                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_ACCESS_SHADER_READ_BIT |
-                                     VK_ACCESS_SHADER_WRITE_BIT);
-        }
-        shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         present_layout_ = VK_IMAGE_LAYOUT_GENERAL;
         force_accum_reset_ = true;
 
@@ -1159,43 +1171,42 @@ private:
             0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
 
         mesh_pipe_ = build_pipeline(
-            blobs.mesh_vert, blobs.mesh_vert_size, blobs.mesh_frag,
-            blobs.mesh_frag_size, mesh_pl_, &mesh_bind, mesh_attrs, 3,
+            blobs.mesh_vert, blobs.mesh_frag, mesh_pl_, &mesh_bind,
+            mesh_attrs, 3,
             /*depth=*/true, VK_CULL_MODE_NONE, kBlendOff,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         volume_pipe_ = build_pipeline(
-            blobs.volume_vert, blobs.volume_vert_size, blobs.volume_frag,
-            blobs.volume_frag_size, vol_pl_, &cube_bind, &cube_attr, 1,
+            blobs.volume_vert, blobs.volume_frag, vol_pl_, &cube_bind,
+            &cube_attr, 1,
             /*depth=*/false, VK_CULL_MODE_FRONT_BIT, kBlendPremultiplied,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         slice_pipe_ = build_pipeline(
-            blobs.slice_vert, blobs.slice_vert_size, blobs.slice_frag,
-            blobs.slice_frag_size, vol_pl_, nullptr, nullptr, 0,
+            blobs.slice_vert, blobs.slice_frag, vol_pl_, nullptr, nullptr, 0,
             /*depth=*/false, VK_CULL_MODE_NONE, kBlendPremultiplied,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
         marker_pipe_ = build_pipeline(
-            blobs.mesh_vert, blobs.mesh_vert_size, blobs.marker_frag,
-            blobs.marker_frag_size, mesh_pl_, &mesh_bind, mesh_attrs, 3,
+            blobs.mesh_vert, blobs.marker_frag, mesh_pl_, &mesh_bind,
+            mesh_attrs, 3,
             /*depth=*/true, VK_CULL_MODE_NONE, kBlendPremultiplied,
-            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, /*depth_write=*/0);
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, DepthWrite::Off);
         return mesh_pipe_ != VK_NULL_HANDLE && volume_pipe_ != VK_NULL_HANDLE &&
                slice_pipe_ != VK_NULL_HANDLE &&
                marker_pipe_ != VK_NULL_HANDLE;
     }
 
     enum BlendMode { kBlendOff, kBlendPremultiplied, kBlendAdditive };
+    enum class DepthWrite { Follow, Off, On };  // Follow: write iff depth test
 
-    VkPipeline build_pipeline(const unsigned char* vs_spv, std::size_t vs_size,
-                              const unsigned char* fs_spv, std::size_t fs_size,
+    VkPipeline build_pipeline(const Blob& vs_blob, const Blob& fs_blob,
                               VkPipelineLayout layout,
                               const VkVertexInputBindingDescription* bind,
                               const VkVertexInputAttributeDescription* attrs,
                               std::uint32_t attr_count, bool depth,
                               VkCullModeFlags cull, BlendMode blend,
                               VkPrimitiveTopology topo,
-                              int depth_write = -1) {  // -1: follow depth
-        VkShaderModule vs = make_module(vs_spv, vs_size);
-        VkShaderModule fs = make_module(fs_spv, fs_size);
+                              DepthWrite depth_write = DepthWrite::Follow) {
+        VkShaderModule vs = make_module(vs_blob.data, vs_blob.size);
+        VkShaderModule fs = make_module(fs_blob.data, fs_blob.size);
         if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE) {
             std::fprintf(stderr, "vk_render: shader module create failed\n");
             return VK_NULL_HANDLE;
@@ -1244,9 +1255,17 @@ private:
         ds.sType =
             VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
         ds.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
-        ds.depthWriteEnable = depth_write < 0
-                                  ? (depth ? VK_TRUE : VK_FALSE)
-                                  : (depth_write != 0 ? VK_TRUE : VK_FALSE);
+        switch (depth_write) {
+            case DepthWrite::Follow:
+                ds.depthWriteEnable = depth ? VK_TRUE : VK_FALSE;
+                break;
+            case DepthWrite::Off:
+                ds.depthWriteEnable = VK_FALSE;
+                break;
+            case DepthWrite::On:
+                ds.depthWriteEnable = VK_TRUE;
+                break;
+        }
         ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
         VkPipelineColorBlendAttachmentState ba{};
@@ -1320,13 +1339,14 @@ private:
         const auto simg = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         const auto cis = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         const auto ubo = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        if (!accum_k_.create(*ctx_, blobs.accum, blobs.accum_size,
+        if (!accum_k_.create(*ctx_, blobs.accum.data, blobs.accum.size,
                              {{0, simg}, {1, simg}, {2, ubo}}) ||
-            !down_k_.create(*ctx_, blobs.bloom_down, blobs.bloom_down_size,
+            !down_k_.create(*ctx_, blobs.bloom_down.data,
+                            blobs.bloom_down.size,
                             {{0, cis}, {1, simg}, {2, ubo}}) ||
-            !up_k_.create(*ctx_, blobs.bloom_up, blobs.bloom_up_size,
+            !up_k_.create(*ctx_, blobs.bloom_up.data, blobs.bloom_up.size,
                           {{0, cis}, {1, simg}}) ||
-            !compose_k_.create(*ctx_, blobs.compose, blobs.compose_size,
+            !compose_k_.create(*ctx_, blobs.compose.data, blobs.compose.size,
                                {{0, simg}, {1, cis}, {2, simg}, {3, ubo}})) {
             return false;
         }
@@ -1352,7 +1372,8 @@ private:
         const auto sbuf = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         const auto cis = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         const auto ubo = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        if (!particles_k_.create(*ctx_, blobs.particles, blobs.particles_size,
+        if (!particles_k_.create(*ctx_, blobs.particles.data,
+                                 blobs.particles.size,
                                  {{0, sbuf}, {1, ubo}, {2, cis}, {3, cis}})) {
             return false;
         }
@@ -1389,8 +1410,7 @@ private:
             return false;
         }
         flow_pipe_ = build_pipeline(
-            blobs.flow_vert, blobs.flow_vert_size, blobs.flow_frag,
-            blobs.flow_frag_size, flow_pl_, nullptr, nullptr, 0,
+            blobs.flow_vert, blobs.flow_frag, flow_pl_, nullptr, nullptr, 0,
             /*depth=*/false, VK_CULL_MODE_NONE, kBlendPremultiplied,
             VK_PRIMITIVE_TOPOLOGY_LINE_STRIP);
         if (flow_pipe_ == VK_NULL_HANDLE) {
@@ -1444,21 +1464,20 @@ private:
         }
         std::memcpy(staging_.mapped, seed.data(), bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        OneShot shot;
-        if (!shot.begin(*ctx_)) {
+        if (!one_shot([&](VkCommandBuffer cb) {
+                const VkBufferCopy up{0, 0, bytes};
+                vkCmdCopyBuffer(cb, staging_.buf, flow_buf_.buf, 1, &up);
+                memory_barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               VK_ACCESS_TRANSFER_WRITE_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_ACCESS_SHADER_READ_BIT |
+                                   VK_ACCESS_SHADER_WRITE_BIT);
+            })) {
             return false;
         }
-        const VkBufferCopy up{0, 0, bytes};
-        vkCmdCopyBuffer(shot.cb(), staging_.buf, flow_buf_.buf, 1, &up);
-        memory_barrier(shot.cb(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_ACCESS_TRANSFER_WRITE_BIT,
-                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-        shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
 
-        const std::uint32_t zero16[4] = {0, 0, 0, 0};
-        if (!write_host(&flow_ubo_, zero16, sizeof(FlowParams),
+        const FlowParams zero_params{};
+        if (!write_host(&flow_ubo_, &zero_params, sizeof(FlowParams),
                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)) {
             return false;
         }
@@ -1520,16 +1539,16 @@ private:
             return false;
         }
         overlay_pipe_ = build_pipeline(
-            blobs.overlay_vert, blobs.overlay_vert_size, blobs.overlay_frag,
-            blobs.overlay_frag_size, overlay_pl_, nullptr, nullptr, 0,
+            blobs.overlay_vert, blobs.overlay_frag, overlay_pl_, nullptr,
+            nullptr, 0,
             /*depth=*/false, VK_CULL_MODE_NONE, kBlendPremultiplied,
             VK_PRIMITIVE_TOPOLOGY_LINE_STRIP);
         if (overlay_pipe_ == VK_NULL_HANDLE) {
             return false;
         }
         overlay_fill_pipe_ = build_pipeline(
-            blobs.overlay_vert, blobs.overlay_vert_size, blobs.overlay_frag,
-            blobs.overlay_frag_size, overlay_pl_, nullptr, nullptr, 0,
+            blobs.overlay_vert, blobs.overlay_frag, overlay_pl_, nullptr,
+            nullptr, 0,
             /*depth=*/false, VK_CULL_MODE_NONE, kBlendPremultiplied,
             VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
         if (overlay_fill_pipe_ == VK_NULL_HANDLE) {
@@ -1624,7 +1643,8 @@ private:
         auto dispatch_2d = [cb](const Kernel& k, VkDescriptorSet set,
                                 std::uint32_t w, std::uint32_t h) {
             k.bind(cb, set);
-            vkCmdDispatch(cb, (w + 15) / 16, (h + 15) / 16, 1);
+            vkCmdDispatch(cb, group_count(w, kPostGroup),
+                          group_count(h, kPostGroup), 1);
         };
         if (use_accum) {
             dispatch_2d(accum_k_, accum_set_, width_, height_);
@@ -1726,19 +1746,14 @@ private:
         }
         std::memcpy(staging_.mapped, data, bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        OneShot shot;
-        if (!shot.begin(*ctx_)) {
-            return false;
-        }
-        const VkBufferCopy up{0, 0, bytes};
-        vkCmdCopyBuffer(shot.cb(), staging_.buf, dst->buf, 1, &up);
-        memory_barrier(shot.cb(), VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_ACCESS_TRANSFER_WRITE_BIT,
-                       VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                       VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT);
-        const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
-        return ok;
+        return one_shot([&](VkCommandBuffer cb) {
+            const VkBufferCopy up{0, 0, bytes};
+            vkCmdCopyBuffer(cb, staging_.buf, dst->buf, 1, &up);
+            memory_barrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT);
+        });
     }
 
     bool ensure_staging(VkDeviceSize bytes) {
@@ -1906,35 +1921,30 @@ private:
         }
         std::memcpy(staging_.mapped, data, bytes);
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        OneShot shot;
-        if (!shot.begin(*ctx_)) {
-            return false;
-        }
-        image_layout_barrier(
-            shot.cb(), img,
-            first ? VK_IMAGE_LAYOUT_UNDEFINED
-                  : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            first ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                  : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            first ? 0 : VK_ACCESS_SHADER_READ_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = extent;
-        vkCmdCopyBufferToImage(shot.cb(), staging_.buf, img,
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                               &region);
-        image_layout_barrier(shot.cb(), img,
-                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_ACCESS_TRANSFER_WRITE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             VK_ACCESS_SHADER_READ_BIT);
-        const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
-        return ok;
+        return one_shot([&](VkCommandBuffer cb) {
+            image_layout_barrier(
+                cb, img,
+                first ? VK_IMAGE_LAYOUT_UNDEFINED
+                      : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                first ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                      : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                first ? 0 : VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = extent;
+            vkCmdCopyBufferToImage(cb, staging_.buf, img,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                   &region);
+            image_layout_barrier(cb, img,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_ACCESS_SHADER_READ_BIT);
+        });
     }
 
     // CPU fallback (no GPU engine): the RG staging IS the texel layout, whole
@@ -2054,8 +2064,10 @@ private:
         std::memcpy(gizmo_ubuf_.mapped, &gizmo_u, sizeof(gizmo_u));
 
         const std::vector<float> zdata = build_z_label_verts(gview, geye);
+        assert(zdata.size() == kZLabelVerts * 9u);
         std::memcpy(zlabel_vbuf_.mapped, zdata.data(),
-                    zdata.size() * sizeof(float));
+                    std::min<std::size_t>(zdata.size(), kZLabelVerts * 9u) *
+                        sizeof(float));
 
         VolumeUbo vol_u{};
         store_corrected_mvp(mvp, vol_u.mvp);
@@ -2115,6 +2127,8 @@ private:
     }
 
     // Billboarded "z" glyph just past the +Z arrow tip.
+    // 18 verts = 3 quads; buffer size, draw count, and builder share it.
+    static constexpr std::uint32_t kZLabelVerts = 18;
     static std::vector<float> build_z_label_verts(const ses::Mat4& view,
                                                   const ses::Vec3d& eye) {
         const ses::Vec3d right{view.m[0], view.m[4], view.m[8]};
@@ -2208,6 +2222,12 @@ private:
     std::uint32_t flow_frame_ = 0;   // frames advected since enable (RNG + head)
     bool flow_was_on_ = false;       // enable-edge detect -> one reset dispatch
     // Occupancy skipping + self-shadow.
+    // Aux volume sides + workgroup sides; mirror the *.comp.slang numthreads.
+    static constexpr std::uint32_t kOccSize = 32;     // occupancy cells/axis
+    static constexpr std::uint32_t kShadowSize = 64;  // shadow texels/axis
+    static constexpr std::uint32_t kDilateGroup = 4;  // occ_dilate.comp
+    static constexpr std::uint32_t kShadowGroup = 4;  // shadow.comp
+    static constexpr std::uint32_t kPostGroup = 16;   // 2D post kernels
     Kernel occ_k_;
     Kernel dilate_k_;
     Kernel shadow_k_;

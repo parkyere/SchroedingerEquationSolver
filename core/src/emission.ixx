@@ -132,6 +132,12 @@ inline std::vector<DipoleMatrixElement> shell_dipole_vectors(
     return d;
 }
 
+// Defined after the collective machinery; declared here so the calls below
+// bind by ordinary lookup, not ADL-at-instantiation.
+template <class U01>
+inline PhotonRecord sample_photon_emission(
+    const std::vector<DipoleMatrixElement>& dipoles, U01&& u01);
+
 // ---- collective E1 jump (equal-gap ladders) -------------------------------
 // When every transition shares ONE frequency (harmonic ladder), the photon
 // cannot resolve which rung fired: the jump operator is the collective
@@ -158,13 +164,9 @@ inline CollectiveDipoles collective_jump_dipoles(
     CollectiveDipoles out;
     for (const DipoleChannel& ch : channels) {
         const std::complex<double> a = c[static_cast<std::size_t>(ch.from)];
-        std::size_t slot = out.to_states.size();
-        for (std::size_t i = 0; i < out.to_states.size(); ++i) {
-            if (out.to_states[i] == ch.to) {
-                slot = i;
-                break;
-            }
-        }
+        const std::size_t slot = static_cast<std::size_t>(
+            std::find(out.to_states.begin(), out.to_states.end(), ch.to) -
+            out.to_states.begin());
         if (slot == out.to_states.size()) {
             out.to_states.push_back(ch.to);
             out.dipoles.push_back(DipoleMatrixElement{});

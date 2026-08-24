@@ -30,6 +30,17 @@ export import ses.propagator;
 
 export namespace ses_shell {
 
+// Potential-curve display: no clamp (curve may leave the frame honestly).
+constexpr double kNoYClamp = 1e30;
+
+// y += a x; scene superposition builders.
+inline void axpy(ses::Field1D& y, std::complex<double> a,
+                 const ses::Field1D& x) {
+    for (int i = 0; i < y.size(); ++i) {
+        y[i] += a * x[i];
+    }
+}
+
 class Line1DDirector : public ScenarioDirector {
 public:
     // ---- lifecycle ----
@@ -124,18 +135,20 @@ public:
 
     int overlay_curve_count() const override { return 4; }
     OverlayCurve overlay_curve(int i) const override {
-        if (i == 0) {
-            return {plane_quad_.data(), 4, 0.45f, 0.55f, 0.75f, 0.07f, true};
+        switch (i) {
+            case 0:
+                return {plane_quad_.data(), 4, 0.45f, 0.55f, 0.75f, 0.07f,
+                        true};
+            case 1:
+                // The constant rgba here is ignored -- the color array wins.
+                return {dens_band_.data(), 2 * grid1d_.n, 1.0f, 1.0f,
+                        1.0f,              1.0f,          true, dens_cols_.data()};
+            case 2:
+                return {pot_curve_.data(), grid1d_.n, 1.0f, 0.30f, 0.25f,
+                        0.9f};
+            default:
+                return {psi_curve_.data(), grid1d_.n, 1.0f, 1.0f, 1.0f, 1.0f};
         }
-        if (i == 1) {
-            // The constant rgba here is ignored -- the color array wins.
-            return {dens_band_.data(), 2 * grid1d_.n, 1.0f, 1.0f,
-                    1.0f,              1.0f,          true, dens_cols_.data()};
-        }
-        if (i == 2) {
-            return {pot_curve_.data(), grid1d_.n, 1.0f, 0.30f, 0.25f, 0.9f};
-        }
-        return {psi_curve_.data(), grid1d_.n, 1.0f, 1.0f, 1.0f, 1.0f};
     }
 
 protected:

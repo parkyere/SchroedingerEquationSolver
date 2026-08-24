@@ -42,6 +42,7 @@ constexpr double kLd2dK0 = 1.5;
 constexpr double kLd2dK0Min = 0.5;
 constexpr double kLd2dK0Max = 2.5;
 constexpr double kLd2dSigma = 2.0;
+constexpr double kLd2dEdgeW = 4.0;  // open-plane absorber frame width (Bohr)
 constexpr int kLd2dStepsPerTick = 32;
 constexpr int kLd2dTrailCap = 900;
 
@@ -87,7 +88,8 @@ public:
     // One quantum up/down; a level jump invalidates the old orbit records.
     // CONTRACT: lattice2d LandauLadder test.
     bool ladder(bool up) override {
-        ses::Field3D next = ses::landau_ladder(psi_, b_, up);
+        ses::Field3D next = ses::landau_ladder(
+            psi_, b_, up ? ses::Rung::Raise : ses::Rung::Lower);
         if (ses::norm_sq(next) < 1e-6) {
             return false;  // a|lowest> = 0: refuse the down-jump
         }
@@ -114,10 +116,7 @@ public:
         push_trail();
         antipode_dist_ = -1.0;
         closure_dist_ = -1.0;
-        display_changed_ = true;
-        vol_dirty_ = true;
-        staging_dirty_ = true;
-        title_dirty_ = true;
+        dirt_.mark_all_dirty();
         return true;
     }
 
@@ -166,7 +165,7 @@ public:
                 if (eng_ok_) {
                     eng_.step(chunk);  // GPU applies the edge absorber per step
                     eng_.download();
-                    store_engine_state();
+                    unpack_interleaved(eng_.state(), psi_.data());
                     // contained orbit never reaches the frame absorber, so the
                     // GPU norm stays ~1; normalize the display/measure copy only.
                     ses::normalize(psi_);
@@ -186,16 +185,15 @@ public:
                 push_trail();
                 record_crossings();
             }
-            display_changed_ = true;
-            vol_dirty_ = true;
-            staging_dirty_ = true;
+            dirt_.mark_display();
+            dirt_.staging_dirty = true;
         }
-        if (staging_dirty_) {
-            staging_dirty_ = false;
-            rebuild_staging();
+        if (dirt_.staging_dirty) {
+            dirt_.staging_dirty = false;
+            pack_plane_staging(psi_.data(), kLd2dNz, staging_);
         }
         if (++frames_ % 10 == 0) {
-            title_dirty_ = true;
+            dirt_.title_dirty = true;
         }
     }
     void tick() override {
@@ -209,17 +207,17 @@ public:
     void measure_now() override {}
     void toggle_view_mode() override {}
     bool handle_key(char key) override {
-        if (key == '2') {
+        switch (key) {
+        case '2':
             fire();
             return true;
-        }
-        if (key == '3') {
+        case '3':
             return ladder(true);
-        }
-        if (key == '4') {
+        case '4':
             return ladder(false);
+        default:
+            return false;
         }
-        return false;
     }
 
     bool solving() const override { return false; }
@@ -238,19 +236,12 @@ public:
     VkImageView psi_volume_view() override { return VK_NULL_HANDLE; }
     float next_flash_intensity() override { return 0.0f; }
     bool take_volume_written() override {
-        return std::exchange(display_changed_, false);
+        return dirt_.take_volume_written();
     }
-    bool take_volume_dirty() override {
-        return std::exchange(vol_dirty_, false);
-    }
+    bool take_volume_dirty() override { return dirt_.take_volume_dirty(); }
     bool take_mesh_dirty() override { return false; }
-    void mark_display_dirty() override {
-        display_changed_ = true;
-        vol_dirty_ = true;
-    }
-    bool take_title_dirty() override {
-        return std::exchange(title_dirty_, false);
-    }
+    void mark_display_dirty() override { dirt_.mark_display(); }
+    bool take_title_dirty() override { return dirt_.take_title_dirty(); }
     const std::vector<float>& psi_staging() const override {
         return staging_;
     }
@@ -295,7 +286,7 @@ private:
         prop_->set_uniform_field(b_);
         // Open plane, not a torus: absorb tunneled amplitude at the frame,
         // renormalize each chunk (corral rule).
-        mask_ = ses::absorbing_mask(phys_grid_, 4.0);
+        mask_ = ses::absorbing_mask(phys_grid_, kLd2dEdgeW);
     }
 
     // Launch on the y=0 row (mechanical = canonical momentum in this gauge),
@@ -310,9 +301,7 @@ private:
                 const double env =
                     std::exp(-(dx * dx + y * y) /
                              (4.0 * kLd2dSigma * kLd2dSigma));
-                psi_(i, j, 0) =
-                    env * std::complex<double>{std::cos(k0_ * y),
-                                               std::sin(k0_ * y)};
+                psi_(i, j, 0) = env * std::polar(1.0, k0_ * y);
             }
         });
         ses::normalize(psi_);
@@ -334,10 +323,7 @@ private:
         }
         peak_ = pk;
         eng_dirty_ = true;  // psi_ rebuilt on the CPU: re-upload before stepping
-        display_changed_ = true;
-        vol_dirty_ = true;
-        staging_dirty_ = true;
-        title_dirty_ = true;
+        dirt_.mark_all_dirty();
     }
 
     void measure() {
@@ -420,40 +406,6 @@ private:
         put(center_[0], center_[1] + 0.8);
     }
 
-    void rebuild_staging() {
-        const std::size_t plane = static_cast<std::size_t>(kLd2dN) *
-                                  static_cast<std::size_t>(kLd2dN);
-        staging_.resize(plane * kLd2dNz * 2);
-        ses::parallel_for(kLd2dN, [&](int j) {
-            for (int i = 0; i < kLd2dN; ++i) {
-                const std::complex<double> z = psi_(i, j, 0);
-                const std::size_t o =
-                    2 * (static_cast<std::size_t>(j) *
-                             static_cast<std::size_t>(kLd2dN) +
-                         static_cast<std::size_t>(i));
-                staging_[o] = static_cast<float>(z.real());
-                staging_[o + 1] = static_cast<float>(z.imag());
-            }
-        });
-        for (int k = 1; k < kLd2dNz; ++k) {
-            std::copy(staging_.begin(),
-                      staging_.begin() +
-                          static_cast<std::ptrdiff_t>(plane * 2),
-                      staging_.begin() +
-                          static_cast<std::ptrdiff_t>(plane * 2) * k);
-        }
-    }
-
-    void store_engine_state() {
-        const float* s = eng_.state();
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(s[2 * i]),
-                                        static_cast<double>(s[2 * i + 1])};
-        }
-    }
-
-
     ses::Grid3D phys_grid_;
     ses::Grid3D disp_grid_;
     ses::Field3D psi_;
@@ -477,10 +429,7 @@ private:
     int pending_steps_ = 0;
     int time_scale_ = 1;
     std::uint64_t frames_ = 0;
-    bool display_changed_ = true;
-    bool vol_dirty_ = true;
-    bool staging_dirty_ = true;
-    bool title_dirty_ = true;
+    DisplayFlags dirt_;
     bool compute_attempted_ = false;
 
     ses::Mesh no_mesh_;

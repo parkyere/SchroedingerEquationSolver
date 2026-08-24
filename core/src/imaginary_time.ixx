@@ -18,23 +18,19 @@ import ses.parallel;
 
 export namespace ses {
 
+namespace itp_detail {
+
+inline double exp_weight(double th) noexcept { return std::exp(th); }
+
+}  // namespace itp_detail
+
 class ImaginaryTimePropagator1D {
 public:
     ImaginaryTimePropagator1D(const Grid1D& g, const std::vector<double>& potential,
-                              double dtau) {
+                              double dtau)
+        : half_v_(build_half_potential_table(potential, dtau, itp_detail::exp_weight)),
+          kinetic_(build_kinetic_table(g, 1.0, dtau, itp_detail::exp_weight)) {
         assert(static_cast<int>(potential.size()) == g.n);
-        const std::size_t n = potential.size();
-
-        half_v_.resize(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            half_v_[i] = std::exp(-0.5 * potential[i] * dtau);
-        }
-
-        const std::vector<double> k = wavenumbers(g);
-        kinetic_.resize(n);
-        for (std::size_t j = 0; j < n; ++j) {
-            kinetic_[j] = std::exp(-0.5 * k[j] * k[j] * dtau);
-        }
     }
 
     void relax(Field1D& psi, int nsteps) const {
@@ -65,47 +61,17 @@ class ImaginaryTimePropagator3D {
 public:
     // mass default 1.0: bitwise-identical to legacy tables (MassParameter tests).
     ImaginaryTimePropagator3D(const Grid3D& g, const std::vector<double>& potential,
-                              double dtau, double mass = 1.0) {
+                              double dtau, double mass = 1.0)
+        : half_v_(build_half_potential_table(potential, dtau, itp_detail::exp_weight)),
+          kinetic_(build_kinetic_table(g, mass, dtau, itp_detail::exp_weight)) {
         assert(static_cast<int>(potential.size()) == g.size());
-        const std::size_t n = potential.size();
-
-        half_v_.resize(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            half_v_[i] = std::exp(-0.5 * potential[i] * dtau);
-        }
-
-        const std::vector<double> kx = wavenumbers(g.x);
-        const std::vector<double> ky = wavenumbers(g.y);
-        const std::vector<double> kz = wavenumbers(g.z);
-        kinetic_.resize(n);
-        for (int k = 0; k < g.z.n; ++k) {
-            for (int j = 0; j < g.y.n; ++j) {
-                for (int i = 0; i < g.x.n; ++i) {
-                    const double kxx = kx[static_cast<std::size_t>(i)];
-                    const double kyy = ky[static_cast<std::size_t>(j)];
-                    const double kzz = kz[static_cast<std::size_t>(k)];
-                    kinetic_[static_cast<std::size_t>(g.flat(i, j, k))] = std::exp(
-                        -0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) / mass * dtau);
-                }
-            }
-        }
     }
 
     // GPU relax path consumes these TESTED tables instead of re-deriving.
     const std::vector<double>& half_potential_weight() const noexcept { return half_v_; }
     const std::vector<double>& kinetic_weight() const noexcept { return kinetic_; }
 
-    void relax(Field3D& psi, int nsteps) const {
-        assert(psi.data().size() == half_v_.size());
-        for (int s = 0; s < nsteps; ++s) {
-            apply_weight(half_v_, psi.data());
-            fft(psi);
-            apply_weight(kinetic_, psi.data());
-            ifft(psi);
-            apply_weight(half_v_, psi.data());
-            normalize(psi);
-        }
-    }
+    void relax(Field3D& psi, int nsteps) const { relax_deflated(psi, {}, nsteps); }
 
     // Gram-Schmidt deflation of `lower` each step -> converges to the next excited state.
     void relax_deflated(Field3D& psi, const std::vector<const Field3D*>& lower,

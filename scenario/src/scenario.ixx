@@ -1,17 +1,17 @@
 module;
 #include <volk.h>
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <format>
-#include <utility>
-#include <vector>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 export module ses.scenario;
 export import ses.vk.device;
@@ -28,6 +28,9 @@ export import ses.colormap;
 
 export namespace ses_shell {
 
+// Laser pump polarization; toggle_laser cycles Off -> Z -> X -> Off.
+enum class LaserAxis { Off, Z, X };
+
 // Capability seams: the shell never down-casts; a scene returning non-null from
 // the matching ScenarioDirector accessor exposes that control surface.
 struct HydrogenApi {
@@ -38,6 +41,9 @@ struct HydrogenApi {
     virtual void excite_n3() = 0;
     virtual void toggle_decay() = 0;
     virtual void toggle_laser() = 0;
+    // Absolute forms (arcs must not depend on boot defaults / cycle order).
+    virtual void set_decay(bool on) = 0;
+    virtual void set_laser_axis(LaserAxis a) = 0;
     virtual void measure_energy_now() = 0;
     virtual void measure_n_shell_now() = 0;
     virtual void measure_l_now() = 0;
@@ -81,14 +87,17 @@ struct TunnelApi {
     virtual double transmitted_max() const = 0;
 };
 
+// Ladder direction (bool-trap guard: call sites name the rung).
+enum class Rung { Up, Down };
+
 // 1D harmonic-oscillator ladder (the 1D trap scene).
 struct Ladder1dApi {
     virtual ~Ladder1dApi() = default;
     // Fock level n; -1 = superposition (classified by Var(H)).
     virtual int level() const = 0;
     virtual double level_energy() const = 0;  // live <H> (Ha)
-    // a-dag (up) / a (down); false = refused (a|0> = 0, or spectral-band cap).
-    virtual bool ladder(bool up) = 0;
+    // a-dag (Up) / a (Down); false = refused (a|0> = 0, or spectral-band cap).
+    virtual bool ladder(Rung r) = 0;
     // Well stiffness omega (width ~ 1/sqrt(w)); setting it is a sudden QUENCH
     // (psi kept, breathes in the new well; reset target becomes the new ground).
     virtual void set_omega(double w) = 0;
@@ -161,7 +170,7 @@ struct MorseApi {
     virtual ~MorseApi() = default;
     virtual int level() const = 0;           // -1 = pair superposition
     virtual double level_energy() const = 0;
-    virtual bool jump(bool up) = 0;
+    virtual bool jump(Rung r) = 0;
     virtual int bound_count() const = 0;
 };
 
@@ -179,6 +188,9 @@ struct SlitApi {
     virtual double transmitted_fraction() const = 0;
     // Accumulated screen density at the row nearest y (arcs probe fringes).
     virtual double screen_at(double y) const = 0;
+    // Fringe geometry, single-sourced from the scene (arcs derive lambda and L).
+    virtual double k0() const = 0;               // launch wavenumber
+    virtual double screen_distance() const = 0;  // wall mid -> screen (Bohr)
 };
 
 // Landau / cyclotron scene: uniform B along z on the 2D lattice.
@@ -261,6 +273,9 @@ struct QdotApi {
     virtual double spectrum_weight(int i) = 0;
 };
 
+// Rotation pulse about x (bool-trap guard: call sites name the angle).
+enum class Pulse { Half, Pi };  // pi/2, pi
+
 // Pinned electron spin on the Bloch sphere (Pauli two-level stage).
 struct SpinApi {
     virtual ~SpinApi() = default;
@@ -270,8 +285,9 @@ struct SpinApi {
     virtual double e(int axis) const = 0;
     virtual void toggle_rf() = 0;  // co-rotating Rabi drive at omega_L
     virtual bool rf_on() const = 0;
-    virtual void pulse(bool half) = 0;  // pi/2 (true) / pi about x
-    virtual void spin_echo() = 0;       // detuned-ensemble sequence
+    virtual void pulse(Pulse p) = 0;
+    virtual void spin_echo() = 0;  // detuned-ensemble sequence
+    virtual double echo_tau() const = 0;  // Hahn pulse spacing (au)
     virtual double echo_peak() const = 0;
     virtual double bloch_x() = 0;
     virtual double bloch_y() = 0;
@@ -380,15 +396,100 @@ inline std::string strf(std::format_string<Args...> fmt, Args&&... args) {
 }
 
 // Pacing invariants shared by every director (the sticky-x16 contract):
-// the dial clamps to [1,16]; catch-up ticks DROP instead of bundling -- at
-// most one tick's steps run per rendered frame. CONTRACT:
+// the dial clamps to [1, kTimeScaleMax]; catch-up ticks DROP instead of
+// bundling -- at most one tick's steps run per rendered frame. CONTRACT:
 // tests/time_scale_realtime_test.cpp.
+inline constexpr int kTimeScaleMax = 16;
 inline constexpr int clamp_time_scale(int scale) noexcept {
-    return std::clamp(scale, 1, 16);
+    return std::clamp(scale, 1, kTimeScaleMax);
 }
 inline constexpr int pending_after_tick(int pending, int per_tick) noexcept {
     return std::min(pending + per_tick, per_tick);
 }
+
+// Display normalizer decay per frame: peaks snap up instantly, bleed down 2%
+// (no flicker as a packet dilutes).
+inline constexpr double kPeakDecay = 0.98;
+
+// GPU-readback interleaved float pairs -> the CPU complex field (reads
+// 2 * d.size() floats).
+inline void unpack_interleaved(const float* s,
+                               std::vector<std::complex<double>>& d) {
+    for (std::size_t i = 0; i < d.size(); ++i) {
+        d[i] = std::complex<double>{static_cast<double>(s[2 * i]),
+                                    static_cast<double>(s[2 * i + 1])};
+    }
+}
+
+// z = 0 plane -> interleaved float pairs, replicated nz-deep into the display
+// slab (x-fastest flat layout: the plane IS the field's linear data).
+// SERIAL on purpose: ses::parallel_for in a shared module function crashes a
+// pool worker (MSVC modules footgun; fine in leaf scene modules). ~1 ms at 512^2.
+inline void pack_plane_staging(const std::vector<std::complex<double>>& plane,
+                               int nz, std::vector<float>& staging) {
+    const std::size_t n = plane.size();
+    staging.resize(n * static_cast<std::size_t>(nz) * 2);
+    for (std::size_t i = 0; i < n; ++i) {
+        staging[2 * i] = static_cast<float>(plane[i].real());
+        staging[2 * i + 1] = static_cast<float>(plane[i].imag());
+    }
+    for (int k = 1; k < nz; ++k) {
+        std::copy(staging.begin(),
+                  staging.begin() + static_cast<std::ptrdiff_t>(n * 2),
+                  staging.begin() + static_cast<std::ptrdiff_t>(n * 2) * k);
+    }
+}
+
+// TRIANGLE_STRIP splice: repeat the last vertex + the next strip's head so
+// disjoint strips share one buffer (the degenerate triangles are invisible).
+// No-op on an empty buffer.
+inline void strip_bridge(std::vector<float>& v, float x, float y, float z) {
+    if (v.empty()) {
+        return;
+    }
+    const std::size_t n = v.size();
+    v.push_back(v[n - 3]);
+    v.push_back(v[n - 2]);
+    v.push_back(v[n - 1]);
+    v.push_back(x);
+    v.push_back(y);
+    v.push_back(z);
+}
+
+// Axis-aligned z = 0 wall slab [x0,x1]x[y0,y1] as a bridged 4-vertex strip.
+inline void strip_wall_quad(std::vector<float>& v, double x0, double x1,
+                            double y0, double y1) {
+    const float xa = static_cast<float>(x0);
+    const float xb = static_cast<float>(x1);
+    const float ya = static_cast<float>(y0);
+    const float yb = static_cast<float>(y1);
+    strip_bridge(v, xa, ya, 0.0f);
+    const float quad[12] = {xa, ya, 0.0f, xb, ya, 0.0f,
+                            xa, yb, 0.0f, xb, yb, 0.0f};
+    v.insert(v.end(), quad, quad + 12);
+}
+
+// Dirty-flag block for the standalone 2D directors (doubleslit / landau --
+// deliberately NOT rebased onto Lattice2DDirectorBase, two-track design).
+struct DisplayFlags {
+    bool display_changed = true;
+    bool vol_dirty = true;
+    bool staging_dirty = true;
+    bool title_dirty = true;
+    bool take_volume_written() { return std::exchange(display_changed, false); }
+    bool take_volume_dirty() { return std::exchange(vol_dirty, false); }
+    bool take_title_dirty() { return std::exchange(title_dirty, false); }
+    void mark_display() {
+        display_changed = true;
+        vol_dirty = true;
+    }
+    void mark_all_dirty() {
+        display_changed = true;
+        vol_dirty = true;
+        staging_dirty = true;
+        title_dirty = true;
+    }
+};
 
 // A 1D-scene overlay primitive: packed (x, y, z) world-space triples; LINE_STRIP,
 // or with `fill` a TRIANGLE_STRIP sheet. `rgba` (premultiplied) REPLACES the
@@ -402,6 +503,12 @@ struct OverlayCurve {
     float a = 1.0f;
     bool fill = false;
     const float* rgba = nullptr;  // per-vertex premultiplied color
+};
+
+// A potential slab [lo, hi) on x (display hint; physics never reads it).
+struct Slab {
+    double lo;
+    double hi;
 };
 
 // A nucleus marker BALL (world space, symbolic radius): proton / CPK atoms.
@@ -453,14 +560,12 @@ public:
 
     // Scene-prop hints, display only (physics never reads them): nucleus marker
     // BALLS (default single origin sphere; molecules supply a CPK list; barrier
-    // scenes return 0) and a potential slab [lo, hi) on x.
+    // scenes return 0) and a potential slab on x (nullopt = none).
     virtual int marker_count() const { return 1; }
     virtual SceneMarker marker(int /*i*/) const {
         return {0.0f, 0.0f, 0.0f, 0.35f, 1.0f, 0.45f, 0.20f};
     }
-    virtual bool barrier_slab(double& /*lo*/, double& /*hi*/) const {
-        return false;
-    }
+    virtual std::optional<Slab> barrier_slab() const { return std::nullopt; }
 
     // Scene-chosen boot camera (shell owns it afterwards); generic 3/4 view,
     // tunneling wants the slab edge-on.

@@ -1,4 +1,11 @@
 // Sample count packed in accum .a (scene alpha unused downstream).
+// SES_ACCUM_CAP mirrors host kAccumCap (vk_render.ixx, bake -D).
+import viz_util;
+
+#ifndef SES_ACCUM_CAP
+#define SES_ACCUM_CAP 512
+#endif
+
 [[vk::binding(0, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> scene;
 [[vk::binding(1, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> accum;
 
@@ -10,11 +17,8 @@ struct Params {
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 gid : SV_DispatchThreadID) {
-    int2 p = int2(gid.xy);
-    uint w, h;
-    accum.GetDimensions(w, h);
-    int2 size = int2(w, h);
-    if (p.x >= size.x || p.y >= size.y) {
+    int2 p, size;
+    if (oob(gid, accum, p, size)) {
         return;
     }
     float3 cur = scene[p].rgb;
@@ -23,7 +27,7 @@ void main(uint3 gid : SV_DispatchThreadID) {
         return;
     }
     float4 prev = accum[p];
-    float n = min(prev.a + 1.0, 512.0);  // cap the window
+    float n = min(prev.a + 1.0, float(SES_ACCUM_CAP));  // cap the window
     float3 avg = prev.rgb + (cur - prev.rgb) / n;
     accum[p] = float4(avg, n);
 }

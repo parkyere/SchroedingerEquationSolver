@@ -1,5 +1,4 @@
 module;
-#include <numbers>
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -28,6 +27,7 @@ struct H2plusOrbital {
     int n_eta = 0;     // interior nodes of M(eta)
     int n_xi = 0;      // interior nodes of Lambda(xi)
     int parity = 1;
+    bool valid = true;    // false: p^2 bracket failed (h2plus_orbital); skip
     double energy = 0.0;  // E_elec (Ha), no nuclear 1/R
     double p = 0.0;
     double R = 0.0;
@@ -39,7 +39,6 @@ struct H2plusOrbital {
 
 namespace spheroidal_detail {
 
-constexpr double kPi = std::numbers::pi;
 constexpr int kNeta = 400;
 constexpr int kNxi = 1200;       // covers the wide box + high MOs
 constexpr double kXiReach = 40.0;  // radial reach (bohr)
@@ -231,14 +230,12 @@ inline H2plusOrbital h2plus_orbital(double R, int m, int n_eta, int n_xi) {
     double lo = 1e-4;
     double glo = g(lo);
     double hi = lo;
-    double ghi = glo;
     const double p2_ceiling = R * R + 8.0;  // bound branch crosses below this
     bool bracketed = false;
     for (double p2 = 0.05; p2 <= p2_ceiling; p2 += 0.05) {
         const double gp = g(p2);
         if (glo * gp <= 0.0) {
             hi = p2;
-            ghi = gp;
             bracketed = true;
             break;
         }
@@ -252,7 +249,6 @@ inline H2plusOrbital h2plus_orbital(double R, int m, int n_eta, int n_xi) {
             const double gm = g(p2);
             if (glo * gm <= 0.0) {
                 hi = p2;
-                (void)ghi;
             } else {
                 lo = p2;
                 glo = gm;
@@ -266,6 +262,7 @@ inline H2plusOrbital h2plus_orbital(double R, int m, int n_eta, int n_xi) {
     o.n_eta = n_eta;
     o.n_xi = n_xi;
     o.parity = ((n_eta + m) % 2 == 0) ? +1 : -1;
+    o.valid = bracketed;  // no crossing: p2 is a stale midpoint, not a root
     o.p = std::sqrt(std::max(0.0, p2));
     o.energy = -2.0 * p2 / (R * R);
     o.R = R;
@@ -301,9 +298,12 @@ inline H2plusOrbital h2plus_orbital(double R, int m, int n_eta, int n_xi) {
 // Lowest bound orbitals (E_elec<0), sorted by energy, up to max_states;
 // sweeps small (m, n_eta, n_xi).
 inline std::vector<H2plusOrbital> h2plus_atlas(double R, int max_states) {
+    // Shell sweep emits low-energy states late: keep extra candidates alive
+    // so the post-sort resize cannot drop one that outranks an early find.
+    constexpr int kOverscan = 12;
     std::vector<H2plusOrbital> out;
     for (int shell = 0; shell <= 6 && static_cast<int>(out.size()) <
-                                          max_states + 12; ++shell) {
+                                          max_states + kOverscan; ++shell) {
         for (int m = 0; m <= shell; ++m) {
             for (int n_eta = 0; n_eta + m <= shell; ++n_eta) {
                 const int n_xi = shell - m - n_eta;
@@ -311,7 +311,7 @@ inline std::vector<H2plusOrbital> h2plus_atlas(double R, int max_states) {
                     continue;
                 }
                 H2plusOrbital o = h2plus_orbital(R, m, n_eta, n_xi);
-                if (o.energy < -1e-3) {  // bound
+                if (o.valid && o.energy < -1e-3) {  // bound, real root
                     out.push_back(std::move(o));
                 }
             }
@@ -372,9 +372,7 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
                 eta = std::clamp(eta, -1.0, 1.0);
                 double ang = 1.0;
                 if (o.m > 0) {
-                    const double rho = std::sqrt(y * y + z * z);
                     const double phi = std::atan2(z, y);
-                    (void)rho;
                     ang = partner == 0 ? std::cos(o.m * phi)
                                        : std::sin(o.m * phi);
                 }

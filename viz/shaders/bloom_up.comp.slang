@@ -1,15 +1,14 @@
 // Dual-filter 3x3 tent upsample, additively accumulated into dst (progressive per-mip bloom).
+import viz_util;
+
 [[vk::binding(0, 0)]] Sampler2D<float4> src;  // smaller mip (combined sampler)
 [[vk::binding(1, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> dst;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 gid : SV_DispatchThreadID) {
-    int2 p = int2(gid.xy);
-    uint w, h;
-    dst.GetDimensions(w, h);
-    int2 size = int2(w, h);
-    if (p.x >= size.x || p.y >= size.y) {
+    int2 p, size;
+    if (oob(gid, dst, p, size)) {
         return;
     }
     float2 uv = (float2(p) + 0.5) / float2(size);

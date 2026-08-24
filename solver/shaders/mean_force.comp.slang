@@ -1,5 +1,6 @@
 // Ehrenfest force <grad V> = sum |psi|^2 grad V: central differences of the
 // R32 potential on the periodic grid; host sums per-workgroup partials.
+#include "reduce.slang"
 import complex;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Complex, Std430DataLayout> psi;
@@ -44,13 +45,8 @@ void main(uint3 gid : SV_DispatchThreadID,
         acc += w * float4(gx, gy, gz, 0.0);
     }
     s_acc[tid] = acc;
-    GroupMemoryBarrierWithGroupSync();
-    for (uint half_len = 128u; half_len > 0u; half_len >>= 1u) {
-        if (tid < half_len) {
-            s_acc[tid] += s_acc[tid + half_len];
-        }
-        GroupMemoryBarrierWithGroupSync();
-    }
+#define MF_FOLD(a, b) { s_acc[a] += s_acc[b]; }
+    REDUCE_FOLD_256(MF_FOLD, tid);
     if (tid == 0u) {
         partials[grp.x] = s_acc[0];
     }

@@ -4,6 +4,7 @@ module;
 #include <cmath>
 #include <complex>
 export module ses.spin;
+export import ses.vec;
 
 
 // Pinned single-electron spin: 2-spinor under H = (1/2) B . sigma
@@ -42,36 +43,33 @@ inline void spin_step(Spinor& s, double bx, double by, double bz,
     spin_rotate(s, bx / b, by / b, bz / b, b * dt);
 }
 
-inline void bloch_vector(const Spinor& s, double* x, double* y,
-                         double* z) {
+inline Vec3d bloch_vector(const Spinor& s) {
     const std::complex<double> cr = std::conj(s.up) * s.dn;
-    *x = 2.0 * cr.real();
-    *y = 2.0 * cr.imag();
-    *z = std::norm(s.up) - std::norm(s.dn);
+    return Vec3d{2.0 * cr.real(), 2.0 * cr.imag(),
+                 std::norm(s.up) - std::norm(s.dn)};
+}
+
+// |+n> for Bloch (x,y,z): |up> rotated onto the axis (pole fallback at -z).
+inline Spinor spinor_from_bloch(double x, double y, double z) {
+    Spinor s;
+    const double th = std::acos(std::clamp(z, -1.0, 1.0));
+    const double axn = std::hypot(-y, x);  // z x n
+    if (axn > 1e-12) {
+        spin_rotate(s, -y / axn, x / axn, 0.0, th);
+    } else if (z < 0.0) {
+        spin_rotate(s, 1.0, 0.0, 0.0, std::numbers::pi);
+    }
+    return s;
 }
 
 // Born measurement along UNIT axis n: return +1 (|+n>) if u<p_plus else -1;
 // collapsed state = |up> rotated onto the outcome axis.
 inline int spin_measure(Spinor& s, double nx, double ny, double nz,
                         double u) {
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    bloch_vector(s, &x, &y, &z);
-    const double p_plus = 0.5 * (1.0 + x * nx + y * ny + z * nz);
+    const Vec3d p = bloch_vector(s);
+    const double p_plus = 0.5 * (1.0 + p.x * nx + p.y * ny + p.z * nz);
     const int outcome = u < p_plus ? +1 : -1;
-    const double tx = outcome * nx;
-    const double ty = outcome * ny;
-    const double tz = outcome * nz;
-    Spinor eig;
-    const double th = std::acos(std::clamp(tz, -1.0, 1.0));
-    const double axn = std::hypot(-ty, tx);  // z x t
-    if (axn > 1e-12) {
-        spin_rotate(eig, -ty / axn, tx / axn, 0.0, th);
-    } else if (tz < 0.0) {
-        spin_rotate(eig, 1.0, 0.0, 0.0, std::numbers::pi);
-    }
-    s = eig;
+    s = spinor_from_bloch(outcome * nx, outcome * ny, outcome * nz);
     return outcome;
 }
 

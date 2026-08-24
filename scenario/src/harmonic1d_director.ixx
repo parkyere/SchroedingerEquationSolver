@@ -27,8 +27,8 @@ constexpr int kHo1dPoints = 65536;
 constexpr double kHo1dDt = 0.04;
 constexpr double kHo1dRScale = 18.0;  // radius ~ |psi|^2
 constexpr double kHo1dEScale = 0.8;   // V display: Ha -> Bohr height
-// effectively no clamp; a clamped parabola would read as a finite well.
-constexpr double kHo1dYClamp = 1e30;
+// no clamp; a clamped parabola would read as a finite well.
+constexpr double kHo1dYClamp = kNoYClamp;
 // eigenstate iff Var(H) < this; grid eigenstates ~1e-13, superpositions
 // far above.
 constexpr double kHo1dVarEigenTol = 1e-8;
@@ -36,14 +36,15 @@ constexpr int kHo1dRandomTop = 5;
 // cat lobe offset x0 (coherent alpha = x0 sqrt(w/2)); photon-loss rate.
 constexpr double kHo1dCatX0 = 8.0;
 constexpr double kHo1dKappa = 0.05;
+// ladder_fock gates: in-band residual acceptance vs annihilated-norm refusal.
+constexpr double kHo1dFockResidualTol = 1e-6;
+constexpr double kHo1dNorm2ZeroTol = 1e-6;
 
 class Harmonic1DDirector final : public Line1DDirector, public Ladder1dApi {
 public:
     Harmonic1DDirector()
-        : Line1DDirector(ses::Grid1D{-kHo1dBox, kHo1dBox, kHo1dPoints},
-                         ses::harmonic_potential(
-                             ses::Grid1D{-kHo1dBox, kHo1dBox, kHo1dPoints},
-                             kHo1dOmega),
+        : Line1DDirector(scene_grid(),
+                         ses::harmonic_potential(scene_grid(), kHo1dOmega),
                          kHo1dDt, kHo1dRScale, kHo1dEScale, kHo1dYClamp),
           rng_(20260718u) {
         remeasure_caps();
@@ -63,7 +64,8 @@ public:
     }
     double omega() const override { return omega_; }
 
-    bool ladder(bool up) override {
+    bool ladder(Rung r) override {
+        const bool up = r == Rung::Up;
         const bool eigen = level_ >= 0;
         if (up) {
             const int cap = eigen ? cap_level_ : fock_top();
@@ -76,15 +78,17 @@ public:
                 return false;
             }
         }
+        const ses::Rung rung = up ? ses::Rung::Raise : ses::Rung::Lower;
         double norm2 = 0.0;
         if (eigen) {
-            norm2 = ses::ladder_rung_stable(psi_, omega_, level_, up);
+            norm2 = ses::ladder_rung_stable(psi_, omega_, level_, rung);
         } else {
-            double residual = 0.0;
             ses::Field1D trial = psi_;
-            norm2 = ses::ladder_fock(trial, omega_, up, fock_top(), &residual);
-            if (residual < 1e-6) {
-                if (norm2 >= 1e-6) {
+            const ses::LadderBand band =
+                ses::ladder_fock(trial, omega_, rung, fock_top());
+            norm2 = band.norm2;
+            if (band.residual < kHo1dFockResidualTol) {
+                if (norm2 >= kHo1dNorm2ZeroTol) {
                     psi_ = std::move(trial);
                 }
             } else {
@@ -93,7 +97,7 @@ public:
                            : ses::ladder_lower(psi_, omega_);
             }
         }
-        if (norm2 < 1e-6) {
+        if (norm2 < kHo1dNorm2ZeroTol) {
             note_ = "a|0> = 0: refused";
             title_dirty_ = true;
             return false;
@@ -122,10 +126,7 @@ public:
         const int top = std::min(kHo1dRandomTop, fock_top());
         for (int n = 0; n <= top; ++n) {
             const ses::Field1D basis = ses::ho_eigenstate(grid1d_, omega_, n);
-            const std::complex<double> c{gauss(rng_), gauss(rng_)};
-            for (int i = 0; i < acc.size(); ++i) {
-                acc[i] += c * basis[i];
-            }
+            axpy(acc, {gauss(rng_), gauss(rng_)}, basis);
         }
         ses::normalize(acc);
         replace_state(std::move(acc));
@@ -142,9 +143,7 @@ public:
             ses::gaussian_wavepacket(grid1d_, kHo1dCatX0, sig, 0.0);
         const ses::Field1D b =
             ses::gaussian_wavepacket(grid1d_, -kHo1dCatX0, sig, 0.0);
-        for (int i = 0; i < a.size(); ++i) {
-            a[i] += b[i];
-        }
+        axpy(a, 1.0, b);
         ses::normalize(a);
         replace_state(std::move(a));
         jumps_ = 0;
@@ -175,31 +174,15 @@ public:
     }
 
     bool handle_key(char key) override {
-        if (key == 'C') {
-            cat();
-            return true;
+        switch (key) {
+            case 'C': cat(); return true;
+            case 'X': toggle_loss(); return true;
+            case 'U': ladder(Rung::Up); return true;
+            case 'D': ladder(Rung::Down); return true;
+            case 'S': random_superposition(); return true;
+            case '2': reset_simulation(); return true;
+            default: return false;
         }
-        if (key == 'X') {
-            toggle_loss();
-            return true;
-        }
-        if (key == 'U') {
-            ladder(true);
-            return true;
-        }
-        if (key == 'D') {
-            ladder(false);
-            return true;
-        }
-        if (key == 'S') {
-            random_superposition();
-            return true;
-        }
-        if (key == '2') {
-            reset_simulation();
-            return true;
-        }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.35; }
@@ -244,16 +227,16 @@ protected:
         bool flipped = false;
         for (int s = 0; s < n; ++s) {
             prop_->step(psi_);
-            if (ses::photon_loss_step(psi_, omega_, potential_, kappa_,
-                                      dt_, uni(rng_), *damp_)) {
+            if (ses::photon_loss_step(psi_, uni(rng_), *damp_)) {
                 ++jumps_;
                 flipped = true;
             }
         }
         if (flipped) {
             note_ = strf("photon #{}: parity flip", jumps_);
-            classify();
         }
+        // no-jump damping mutates psi every step: level/spectrum must track.
+        classify();
     }
 
     void after_reset() override {
@@ -262,6 +245,10 @@ protected:
     }
 
 private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{-kHo1dBox, kHo1dBox, kHo1dPoints};
+    }
+
     ses::Field1D ground() const {
         return ses::gaussian_wavepacket(grid1d_, 0.0,
                                         1.0 / std::sqrt(2.0 * omega_), 0.0);
@@ -281,8 +268,8 @@ private:
         if (damp_ && damp_w_ == omega_ && damp_k_ == kappa_) {
             return;
         }
-        damp_ = std::make_unique<ses::ImaginaryTimePropagator1D>(
-            grid1d_, potential_, kappa_ * dt_ / (2.0 * omega_));
+        damp_ = std::make_unique<ses::PhotonLossDamper>(
+            grid1d_, potential_, omega_, kappa_, dt_);
         damp_w_ = omega_;
         damp_k_ = kappa_;
     }
@@ -322,7 +309,7 @@ private:
     std::vector<std::pair<double, double>> spec_;
     bool spec_dirty_ = true;
     double kappa_ = 0.0;
-    std::unique_ptr<ses::ImaginaryTimePropagator1D> damp_;
+    std::unique_ptr<ses::PhotonLossDamper> damp_;
     double damp_w_ = -1.0;
     double damp_k_ = -1.0;
     long long jumps_ = 0;

@@ -130,22 +130,19 @@ inline double probability_in_range(const Field1D& f, double a, double b) noexcep
 }
 
 // ---- 3D observables ----
+// Voxel sweeps share ses.grid for_each_cell (i inner, bitwise-fixed order).
 
 inline Vec3d mean_position(const Field3D& f) noexcept {
     const Grid3D& g = f.grid();
     Vec3d num{};
     double den = 0.0;
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double w = std::norm(f(i, j, k));
-                num.x += g.x.coord(i) * w;
-                num.y += g.y.coord(j) * w;
-                num.z += g.z.coord(k) * w;
-                den += w;
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double w = std::norm(f(i, j, k));
+        num.x += g.x.coord(i) * w;
+        num.y += g.y.coord(j) * w;
+        num.z += g.z.coord(k) * w;
+        den += w;
+    });
     return Vec3d{obs_ratio(num.x, den), obs_ratio(num.y, den),
                  obs_ratio(num.z, den)};
 }
@@ -154,20 +151,16 @@ inline Vec3d sigma_position(const Field3D& f) noexcept {
     const Grid3D& g = f.grid();
     Vec3d num{};
     double den = 0.0;
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double w = std::norm(f(i, j, k));
-                const double x = g.x.coord(i);
-                const double y = g.y.coord(j);
-                const double z = g.z.coord(k);
-                num.x += x * x * w;
-                num.y += y * y * w;
-                num.z += z * z * w;
-                den += w;
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double w = std::norm(f(i, j, k));
+        const double x = g.x.coord(i);
+        const double y = g.y.coord(j);
+        const double z = g.z.coord(k);
+        num.x += x * x * w;
+        num.y += y * y * w;
+        num.z += z * z * w;
+        den += w;
+    });
     const Vec3d m = mean_position(f);
     return Vec3d{obs_sigma(obs_ratio(num.x, den), m.x),
                  obs_sigma(obs_ratio(num.y, den), m.y),
@@ -183,17 +176,13 @@ inline Vec3d mean_momentum(const Field3D& f) {
     const std::vector<double> kz = wavenumbers(g.z);
     Vec3d num{};
     double den = 0.0;
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double w = std::norm(phi(i, j, k));
-                num.x += kx[static_cast<std::size_t>(i)] * w;
-                num.y += ky[static_cast<std::size_t>(j)] * w;
-                num.z += kz[static_cast<std::size_t>(k)] * w;
-                den += w;
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double w = std::norm(phi(i, j, k));
+        num.x += kx[static_cast<std::size_t>(i)] * w;
+        num.y += ky[static_cast<std::size_t>(j)] * w;
+        num.z += kz[static_cast<std::size_t>(k)] * w;
+        den += w;
+    });
     return Vec3d{obs_ratio(num.x, den), obs_ratio(num.y, den),
                  obs_ratio(num.z, den)};
 }
@@ -217,18 +206,14 @@ inline double mean_energy(const Field3D& f, const std::vector<double>& potential
     const std::vector<double> kz = wavenumbers(g.z);
     double num_t = 0.0;
     double den_k = 0.0;
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double w = std::norm(phi(i, j, k));
-                const double kxx = kx[static_cast<std::size_t>(i)];
-                const double kyy = ky[static_cast<std::size_t>(j)];
-                const double kzz = kz[static_cast<std::size_t>(k)];
-                num_t += 0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) / mass * w;
-                den_k += w;
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double w = std::norm(phi(i, j, k));
+        const double kxx = kx[static_cast<std::size_t>(i)];
+        const double kyy = ky[static_cast<std::size_t>(j)];
+        const double kzz = kz[static_cast<std::size_t>(k)];
+        num_t += 0.5 * (kxx * kxx + kyy * kyy + kzz * kzz) / mass * w;
+        den_k += w;
+    });
 
     return obs_ratio(num_v, den_x) + obs_ratio(num_t, den_k);
 }

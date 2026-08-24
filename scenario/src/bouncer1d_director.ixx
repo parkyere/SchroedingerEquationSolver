@@ -54,15 +54,17 @@ constexpr double kBo1dDropSigma = 2.0;
 constexpr double kBo1dRScale = 150.0;
 constexpr double kBo1dEScale = 0.15;
 constexpr int kBo1dStepsPerTick = 20;
+// two-stage ITP anneal (fine polish clears the coarse Trotter bias).
+constexpr double kBo1dItpCoarseDtau = 0.005;
+constexpr double kBo1dItpFineDtau = 0.0005;
+constexpr int kBo1dItpIters = 3000;
 
 class Bouncer1DDirector final : public Line1DDirector, public BouncerApi {
 public:
     Bouncer1DDirector()
-        : Line1DDirector(ses::Grid1D{kBo1dZLo, kBo1dZHi, kBo1dPoints},
-                         bouncer_potential(
-                             ses::Grid1D{kBo1dZLo, kBo1dZHi, kBo1dPoints},
-                             kBo1dGrav, kBo1dWall),
-                         kBo1dDt, kBo1dRScale, kBo1dEScale, 1e30) {
+        : Line1DDirector(scene_grid(),
+                         bouncer_potential(scene_grid(), kBo1dGrav, kBo1dWall),
+                         kBo1dDt, kBo1dRScale, kBo1dEScale, kNoYClamp) {
         relax_ground();
     }
 
@@ -72,13 +74,14 @@ public:
     // bias (corral rule).
     void relax_ground() override {
         const ses::ImaginaryTimePropagator1D coarse{grid1d_, potential_,
-                                                    0.005};
+                                                    kBo1dItpCoarseDtau};
         const ses::ImaginaryTimePropagator1D fine{grid1d_, potential_,
-                                                  0.0005};
+                                                  kBo1dItpFineDtau};
         ses::Field1D psi = ses::gaussian_wavepacket(grid1d_, 3.0, 1.5, 0.0);
-        coarse.relax(psi, 3000);
-        fine.relax(psi, 3000);
+        coarse.relax(psi, kBo1dItpIters);
+        fine.relax(psi, kBo1dItpIters);
         set_state(std::move(psi));
+        e1_soft_ = energy();  // measured soft-floor E1 (title truth)
         sim_time_ = 0.0;
         pending_steps_ = 0;
         title_dirty_ = true;
@@ -98,15 +101,11 @@ public:
     }
 
     bool handle_key(char key) override {
-        if (key == '2') {
-            relax_ground();
-            return true;
+        switch (key) {
+            case '2': relax_ground(); return true;
+            case 'F': drop(); return true;
+            default: return false;
         }
-        if (key == 'F') {
-            drop();
-            return true;
-        }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.25; }
@@ -122,13 +121,21 @@ protected:
     std::string title_suffix() override {
         return strf(
             "  g = {:.1f}  <H> = {:.3f} eV  Airy E1 = {:.3f} eV (soft floor "
-            "~ -8.16 eV)  T_bounce = {:.1f} au  keys: 2 ground / "
+            "{:+.2f} eV)  T_bounce = {:.1f} au  keys: 2 ground / "
             "F drop",
             kBo1dGrav, energy() * kHaToEv, airy_e1() * kHaToEv,
+            (e1_soft_ - airy_e1()) * kHaToEv,
             2.0 * std::sqrt(2.0 * kBo1dDropZ / kBo1dGrav));
     }
 
     void after_reset() override { relax_ground(); }
+
+private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{kBo1dZLo, kBo1dZHi, kBo1dPoints};
+    }
+
+    double e1_soft_ = 0.0;  // relaxed <H>: soft-floor E1
 };
 
 }  // namespace ses_shell

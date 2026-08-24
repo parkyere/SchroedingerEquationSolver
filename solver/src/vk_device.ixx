@@ -1,15 +1,8 @@
 module;
 #include <volk.h>
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include <vk_mem_alloc.h>
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ses_vma.h"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -25,15 +18,19 @@ export module ses.vk.device;
 export namespace ses_vk {
 
 // Harnesses check nonzero after GPU work: catches a barrier/usage bug even when
-// the numbers came out right.
-inline std::atomic<int> g_validation_errors{0};
+// the numbers came out right. Non-inline: module-attached single definition
+// (MSVC duplicates inline module statics per TU). Reaches the callback via
+// pUserData, not name lookup.
+std::atomic<int> g_validation_errors{0};
 
 inline VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT /*types*/,
-    const VkDebugUtilsMessengerCallbackDataEXT* data, void* /*user*/) {
-    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
-        g_validation_errors.fetch_add(1, std::memory_order_relaxed);
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* user) {
+    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0 &&
+        user != nullptr) {
+        static_cast<std::atomic<int>*>(user)->fetch_add(
+            1, std::memory_order_relaxed);
     }
     std::fprintf(stderr, "[vk-validation] %s\n",
                  (data != nullptr && data->pMessage != nullptr) ? data->pMessage
@@ -205,6 +202,7 @@ struct DeviceContext {
                 VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
             mi.pfnUserCallback = debug_utils_callback;
+            mi.pUserData = &g_validation_errors;
             if (vkCreateDebugUtilsMessengerEXT(instance, &mi, nullptr,
                                                &messenger) != VK_SUCCESS) {
                 messenger = VK_NULL_HANDLE;  // non-fatal: layer still logs
@@ -550,8 +548,14 @@ struct DeviceContext {
 
 private:
     bool owns_device_ = true;
-
-public:
 };
+
+// Host-visible UBO write: memcpy into the persistent mapping + flush. The one
+// shared implementation (SpinEngine/SpinMeanFieldEngine/Lattice2DEngine).
+inline void write_ubo(DeviceContext& ctx, Buffer& b, const void* src,
+                      std::size_t bytes) {
+    std::memcpy(b.mapped, src, bytes);
+    vmaFlushAllocation(ctx.allocator, b.alloc, 0, VK_WHOLE_SIZE);
+}
 
 }  // namespace ses_vk

@@ -4,6 +4,8 @@ module vec;
 
 public float comp(float3 v, int i) { return i == 0 ? v.x : (i == 1 ? v.y : v.z); }
 
+public int comp(int3 v, int i) { return i == 0 ? v.x : (i == 1 ? v.y : v.z); }
+
 public void set_comp(inout float3 v, int i, float x) {
     if (i == 0) v.x = x;
     else if (i == 1) v.y = x;

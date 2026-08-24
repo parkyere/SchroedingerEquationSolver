@@ -12,7 +12,6 @@ module;
 export module ses.scenario.qdot2d_director;
 export import ses.scenario.lattice2d_director;
 import ses.parallel;
-import ses.heightfield;
 
 
 // Fock-Darwin 2D quantum dot: parabolic well + uniform B along z.
@@ -32,9 +31,9 @@ constexpr double kQd2dW0Max = 1.0;
 constexpr double kQd2dB = 0.6;
 constexpr double kQd2dBMax = 1.2;
 constexpr double kQd2dDisplace = 4.0;
+constexpr double kQd2dSeedSigma = 3.0;  // relax seed exp(-r^2 / (4 sigma^2))
 constexpr double kQd2dConvTol = 1e-8;
 constexpr int kQd2dTrailCap = 900;
-// STM height surface: peak-snap then 0.98-decay (decay-only boots ~100x high, blacks the cloud out).
 constexpr double kQd2dSurfH = 6.0;
 constexpr int kQd2dMeshStride = 1;
 // Crop the surface mesh to the |psi|^2 >= eps*peak box: the dot fills only a
@@ -74,8 +73,9 @@ public:
             const double y = phys_grid_.y.coord(j);
             for (int i = 0; i < kQd2dN; ++i) {
                 const double x = phys_grid_.x.coord(i);
-                psi_(i, j, 0) = std::exp(-((x - 1.0) * (x - 1.0) + y * y) /
-                                         (4.0 * 3.0 * 3.0));
+                psi_(i, j, 0) =
+                    std::exp(-((x - 1.0) * (x - 1.0) + y * y) /
+                             (4.0 * kQd2dSeedSigma * kQd2dSeedSigma));
             }
         });
         ses::normalize(psi_);
@@ -125,7 +125,8 @@ public:
             title_dirty_ = true;
             return false;
         }
-        ses::Field3D next = ses::ho2d_ladder(psi_, w0_, up);
+        ses::Field3D next = ses::ho2d_ladder(
+            psi_, w0_, up ? ses::Rung::Raise : ses::Rung::Lower);
         if (ses::norm_sq(next) < 1e-6) {
             note_ = "a|0> = 0: refused";
             title_dirty_ = true;
@@ -147,7 +148,7 @@ public:
     void random_packet() override {
         relaxing_ = false;
         std::uniform_real_distribution<double> ang(0.0,
-                                                   6.28318530717958647692);
+                                                   2.0 * std::numbers::pi);
         std::uniform_real_distribution<double> rad(2.0, 5.0);
         std::uniform_real_distribution<double> kick(0.0, 2.0 * w0_);
         const double th = ang(rng_);
@@ -165,9 +166,8 @@ public:
                 const double x = phys_grid_.x.coord(i) - x0;
                 const double ph = kx * phys_grid_.x.coord(i) +
                                   ky * phys_grid_.y.coord(j);
-                psi_(i, j, 0) =
-                    std::exp(-0.5 * om * (x * x + y * y)) *
-                    std::complex<double>{std::cos(ph), std::sin(ph)};
+                psi_(i, j, 0) = std::exp(-0.5 * om * (x * x + y * y)) *
+                                std::polar(1.0, ph);
             }
         });
         ses::normalize(psi_);
@@ -246,27 +246,25 @@ public:
     void reset_simulation() override { relax_ground(); }
 
     bool handle_key(char key) override {
-        if (key == '2') {
+        switch (key) {
+        case '2':
             relax_ground();
             return true;
-        }
-        if (key == 'F') {
+        case 'F':
             fire_displaced();
             return true;
-        }
-        if (key == '3') {
+        case '3':
             ho_ladder(true);
             return true;
-        }
-        if (key == '4') {
+        case '4':
             ho_ladder(false);
             return true;
-        }
-        if (key == 'S') {
+        case 'S':
             random_packet();
             return true;
+        default:
+            return false;
         }
-        return false;
     }
 
     double sim_dt() const override { return kQd2dDt; }
@@ -275,13 +273,6 @@ public:
 
     // ---- STM-style surface display ----
     bool cloud() const override { return false; }
-    const ses::Mesh& mesh() const override { return hf_.mesh; }
-    const std::vector<ses::Rgb>& colors() const override {
-        return hf_.colors;
-    }
-    bool take_mesh_dirty() override {
-        return std::exchange(mesh_dirty_, false);
-    }
     // Tilted so the height relief reads (face-on hides it).
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.95; }
@@ -289,17 +280,7 @@ public:
 
 protected:
     void rebuild_display() override {
-        double cur = 0.0;
-        for (int j = 0; j < kQd2dN; ++j) {
-            for (int i = 0; i < kQd2dN; ++i) {
-                cur = std::max(cur, std::norm(psi_(i, j, 0)));
-            }
-        }
-        disp_peak_ = disp_peak_ <= 0.0 ? cur
-                                       : std::max(cur, 0.98 * disp_peak_);
-        hf_ = ses::heightfield_surface(psi_, kQd2dSurfH, disp_peak_,
-                                       kQd2dMeshStride, kQd2dSurfEps);
-        mesh_dirty_ = true;
+        rebuild_surface(psi_, kQd2dSurfH, kQd2dMeshStride, kQd2dSurfEps);
     }
 
 public:
@@ -422,14 +403,9 @@ private:
         for (int k = 0; k < kQd2dParaRings; ++k) {
             const double r0 = r_top * k / kQd2dParaRings;
             const double r1 = r_top * (k + 1) / kQd2dParaRings;
-            if (!para_.empty()) {
-                // degenerate bridge: repeat last vertex + the next head
-                const std::size_t n = para_.size();
-                para_.push_back(para_[n - 3]);
-                para_.push_back(para_[n - 2]);
-                para_.push_back(para_[n - 1]);
-                put(r0, 0.0);
-            }
+            strip_bridge(para_, static_cast<float>(r0), 0.0f,
+                         static_cast<float>(kQd2dEScale * 0.5 * w0_ * w0_ *
+                                            r0 * r0));
             for (int t = 0; t <= kQd2dParaSegs; ++t) {
                 const double th = 2.0 * pi * t / kQd2dParaSegs;
                 put(r0, th);
@@ -460,9 +436,6 @@ private:
 
     std::unique_ptr<ses::PeierlsLattice2D> prop_;
     std::vector<double> v_;  // on-site potential, mirrored to prop_ and the GPU
-    ses::Heightfield hf_;
-    bool mesh_dirty_ = false;
-    double disp_peak_ = 0.0;
     std::vector<float> trail_;
     double w0_ = kQd2dW0;
     double b_ = kQd2dB;

@@ -10,7 +10,6 @@ module;
 #include <vector>
 export module ses.scenario.corral2d_director;
 export import ses.scenario.lattice2d_director;
-import ses.heightfield;
 import ses.potential;
 import ses.imaginary_time;
 import ses.observables;
@@ -42,6 +41,9 @@ constexpr double kCr2dRMin = 6.0;
 constexpr double kCr2dRMax = 12.0;
 constexpr double kCr2dBumpA = 1.5;
 constexpr double kCr2dBumpSigma = 0.6;
+// Gaussian envelopes exp(-r^2 / (4 sigma^2)).
+constexpr double kCr2dPacketSigma = 1.5;  // fired probe packet
+constexpr double kCr2dSeedSigma = 4.0;    // relax seed
 // Cu(111) surface-state effective mass (Crommie et al.), atomic units.
 constexpr double kCr2dMass = 0.38;
 // outer absorber width (Bohr)
@@ -137,7 +139,8 @@ public:
             for (int i = 0; i < kCr2dN; ++i) {
                 const double x = phys_grid_.x.coord(i);
                 psi_(i, j, 0) =
-                    std::exp(-(x * x + y * y) / (4.0 * 1.5 * 1.5));
+                    std::exp(-(x * x + y * y) /
+                             (4.0 * kCr2dPacketSigma * kCr2dPacketSigma));
             }
         });
         ses::normalize(psi_);
@@ -182,36 +185,28 @@ public:
     }
 
     bool handle_key(char key) override {
-        if (key == '5') {
+        switch (key) {
+        case '5':
             fermi_wave();
             return true;
-        }
-        if (key == '2') {
+        case '2':
             reset_simulation();
             return true;
-        }
-        if (key == '3') {
+        case '3':
             relax_next();
             return true;
-        }
-        if (key == 'F') {
+        case 'F':
             fire_packet();
             return true;
+        default:
+            return false;
         }
-        return false;
     }
 
     double sim_dt() const override { return kCr2dDt; }
 
     // ---- STM-style surface display ----
     bool cloud() const override { return false; }
-    const ses::Mesh& mesh() const override { return hf_.mesh; }
-    const std::vector<ses::Rgb>& colors() const override {
-        return hf_.colors;
-    }
-    bool take_mesh_dirty() override {
-        return std::exchange(mesh_dirty_, false);
-    }
 
     // tilted so the height relief reads
     double default_camera_azimuth() const override { return 0.35; }
@@ -247,20 +242,8 @@ public:
     }
 
 protected:
-    // Surface normalizer snaps to the first observed max then 0.98-decays;
-    // the base peak_ decays too slow (2%/frame) to reach the ~1e-2 relax scale.
     void rebuild_display() override {
-        double cur = 0.0;
-        for (int j = 0; j < kCr2dN; ++j) {
-            for (int i = 0; i < kCr2dN; ++i) {
-                cur = std::max(cur, std::norm(psi_(i, j, 0)));
-            }
-        }
-        disp_peak_ = disp_peak_ <= 0.0 ? cur
-                                       : std::max(cur, 0.98 * disp_peak_);
-        hf_ = ses::heightfield_surface(psi_, kCr2dSurfH, disp_peak_,
-                                       kCr2dMeshStride);
-        mesh_dirty_ = true;
+        rebuild_surface(psi_, kCr2dSurfH, kCr2dMeshStride);
     }
 
     void do_steps(int n) override {
@@ -286,7 +269,7 @@ protected:
                         eng_.relax_deflated_step(defl_, c);
                     }
                     eng_.readback(rb_);
-                    store_readback();
+                    unpack_interleaved(rb_.data(), psi_.data());
                     project_disc();  // CPU Dirichlet cut + renorm
                     eng_.upload_state(psi_.data());  // re-sync the projection
                     left -= c;
@@ -330,11 +313,11 @@ protected:
             int left = n;
             while (left > 0) {
                 const int c = std::min(left, 8);
-                eng_.step(c, true);  // absorb=true applies damp_ each step
+                eng_.step(c, {.absorb = true});  // damp_ applied each step
                 left -= c;
             }
             eng_.readback(rb_);
-            store_readback();
+            unpack_interleaved(rb_.data(), psi_.data());
             ses::normalize(psi_);  // display/confinement copy (GPU state left as is)
         } else {
             for (int s2 = 0; s2 < n; ++s2) {
@@ -351,13 +334,6 @@ protected:
     }
 
 private:
-    void store_readback() {
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(rb_[2 * i]),
-                                        static_cast<double>(rb_[2 * i + 1])};
-        }
-    }
     // Load the coarse or fine ITP weights (m* baked in) into the engine.
     void ensure_gpu_relax_tables() {
         const int want = fine_ ? 1 : 0;
@@ -450,7 +426,8 @@ private:
                 const double x = phys_grid_.x.coord(i);
                 const double dx = x - off;
                 psi_(i, j, 0) =
-                    std::exp(-(dx * dx + y * y) / (4.0 * 4.0 * 4.0));
+                    std::exp(-(dx * dx + y * y) /
+                             (4.0 * kCr2dSeedSigma * kCr2dSeedSigma));
             }
         });
         ses::normalize(psi_);
@@ -509,13 +486,10 @@ private:
     std::unique_ptr<ses::SplitOperator3D> prop_;
     std::unique_ptr<ses::ImaginaryTimePropagator3D> itp_coarse_;
     std::unique_ptr<ses::ImaginaryTimePropagator3D> itp_fine_;
-    ses::Heightfield hf_;
-    bool mesh_dirty_ = false;
     std::vector<ses::Field3D> captured_;
     std::vector<double> energies_;
     double radius_ = kCr2dR;
     double last_e_ = 1e30;
-    double disp_peak_ = 0.0;  // surface height normalizer
     int conv_streak_ = 0;
     bool relaxing_ = false;
     bool fine_ = false;  // anneal stage: coarse -> fine

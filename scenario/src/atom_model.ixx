@@ -23,6 +23,13 @@ import ses.harmonics;
 
 export namespace ses_shell {
 
+// Radial solve resolutions: box-grid samples for the hydrogen manifold, plus
+// the free-atom reference grid (r to 600 a0 holds n = 10).
+constexpr int kAtomRadialSamples = 5119;
+constexpr double kFreeAtomRMax = 600.0;  // a0
+constexpr int kFreeAtomRadialSamples = 14999;
+constexpr double kAuToSec = 2.4188843e-17;  // au time -> seconds
+
 class AtomModel {
 public:
     // SPEC CONVENTION: index 0 is the ground state; the p_z-like state sits at
@@ -53,7 +60,7 @@ public:
 
     // Hydrogen: bare -1/r manifold + a free-atom E1 lifetime table (to stderr).
     void solve_radial_atom(double r_box) {
-        const ses::RadialGrid rg{r_box, 5119};
+        const ses::RadialGrid rg{r_box, kAtomRadialSamples};
         std::vector<double> v(static_cast<std::size_t>(rg.n));
         for (int i = 0; i < rg.n; ++i) {
             v[static_cast<std::size_t>(i)] = -1.0 / rg.r(i);  // r=(i+1)h>0
@@ -61,7 +68,7 @@ public:
         solve_radial_manifold(rg, v, kStateSpec, kNumStates, kLevelSpec,
                               kNumLevels);
 
-        const ses::RadialGrid free_grid{600.0, 14999};
+        const ses::RadialGrid free_grid{kFreeAtomRMax, kFreeAtomRadialSamples};
         std::vector<double> vf(static_cast<std::size_t>(free_grid.n));
         for (int i = 0; i < free_grid.n; ++i) {
             vf[static_cast<std::size_t>(i)] = -1.0 / free_grid.r(i);
@@ -77,7 +84,7 @@ public:
             std::fprintf(stderr,
                          "spectrum: %2d%c  E = %11.6f Ha   tau = %.3e au (%.3e ns)%s\n",
                          e.n, kSpdf[e.l], e.energy, e.lifetime,
-                         e.lifetime * 2.4188843e-17 * 1e9,
+                         e.lifetime * kAuToSec * 1e9,
                          e.lifetime == 0.0 ? "  [E1-stable]" : "");
         }
     }
@@ -119,16 +126,22 @@ public:
         const std::size_t s = static_cast<std::size_t>(idx);
         const StateSpec& sp = spec_[s];
         state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
-        if (state_is_fp16(idx)) {
-            return engine.synthesize_state_half(
-                radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-                radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
-                &state_norm2_[s]);
+        const std::vector<double>& u =
+            radial_u_[static_cast<std::size_t>(sp.level)];
+        const ses_vk::Engine::SynthResult res =
+            state_is_fp16(idx)
+                ? engine.synthesize_state_half(u, sp.l, sp.m, radial_grid_.h(),
+                                               radial_grid_.rmax,
+                                               radial_grid_.n)
+                : engine.synthesize_state(u, sp.l, sp.m, radial_grid_.h(),
+                                          radial_grid_.rmax, radial_grid_.n);
+        if (res.handle >= 0) {
+            state_norm2_[s] = res.norm2;
+            if (out_peak != nullptr) {
+                *out_peak = res.peak;
+            }
         }
-        return engine.synthesize_state(
-            radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n, out_peak,
-            &state_norm2_[s]);
+        return res.handle;
     }
 
     // Normalized <n|psi> from the last project_psi() pass (MCWF no-jump damping
@@ -137,7 +150,7 @@ public:
                                                  int idx) const {
         const StateSpec& sp = spec_[static_cast<std::size_t>(idx)];
         const double n2 = state_norm2_[static_cast<std::size_t>(idx)];
-        if (n2 <= 0.0) {
+        if (!norm_warm(idx, n2)) {
             return {};
         }
         return engine.project_amplitude(
@@ -150,7 +163,7 @@ public:
     double project_population(const ses_vk::Engine& engine, int idx) const {
         const StateSpec& sp = spec_[static_cast<std::size_t>(idx)];
         const double n2 = state_norm2_[static_cast<std::size_t>(idx)];
-        if (n2 <= 0.0) {
+        if (!norm_warm(idx, n2)) {
             return 0.0;
         }
         return std::norm(engine.project_amplitude(
@@ -175,9 +188,16 @@ public:
         const std::size_t s = static_cast<std::size_t>(idx);
         const StateSpec& sp = spec_[s];
         state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
-        return engine.synthesize_state(radial_u_[static_cast<std::size_t>(sp.level)],
-                                       sp.l, sp.m, radial_grid_.h(), radial_grid_.rmax,
-                                       radial_grid_.n, out_peak, &state_norm2_[s]);
+        const ses_vk::Engine::SynthResult res = engine.synthesize_state(
+            radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
+            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n);
+        if (res.handle >= 0) {
+            state_norm2_[s] = res.norm2;
+            if (out_peak != nullptr) {
+                *out_peak = res.peak;
+            }
+        }
+        return res.handle;
     }
 
     // Fused-MCWF term for state idx, coeff d. False if the norm cache is cold
@@ -201,10 +221,14 @@ public:
         const std::size_t s = static_cast<std::size_t>(idx);
         const StateSpec& sp = spec_[s];
         state_energy_[s] = radial_energy_[static_cast<std::size_t>(sp.level)];
-        return engine.synthesize_state_over(
+        const ses_vk::Engine::SynthResult res = engine.synthesize_state_over(
             handle, radial_u_[static_cast<std::size_t>(sp.level)], sp.l, sp.m,
-            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n,
-            &state_norm2_[s]);
+            radial_grid_.h(), radial_grid_.rmax, radial_grid_.n);
+        if (res.handle < 0) {
+            return false;
+        }
+        state_norm2_[s] = res.norm2;
+        return true;
     }
 
     bool ensure_state(ses_vk::Engine& engine, int idx) {
@@ -388,6 +412,23 @@ public:
     }
 
 private:
+    // Cold state_norm2_ = silently dead projections/rates (a past incident).
+    // Debug: assert. Release: one stderr warning, then the zero fallback.
+    bool norm_warm(int idx, double n2) const {
+        assert(n2 > 0.0 && "state_norm2_ cold: prepare_*/synth must run first");
+        if (n2 > 0.0) {
+            return true;
+        }
+        if (!warned_cold_norm_) {
+            warned_cold_norm_ = true;
+            std::fprintf(stderr,
+                         "atom: state_norm2_ cold for state %d -- projections "
+                         "read 0 (run prepare_*/synth first)\n",
+                         idx);
+        }
+        return false;
+    }
+
     static std::array<int, kNumStates> make_unset_handles() {
         std::array<int, kNumStates> a{};
         a.fill(-1);
@@ -414,6 +455,7 @@ private:
     std::vector<ShellChannel> channels_;
     double accel_display_ = 0.0;
     double dipole_z_ = 0.0;  // |<2p_z| z |1s>|, the laser drive strength
+    mutable bool warned_cold_norm_ = false;
 };
 
 // Scoped transient state: synthesized on construction, released on scope

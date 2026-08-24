@@ -1,30 +1,13 @@
 // psi_tex = RG16F (re, im). Transcribes tested ses.volume formulas. UBO (binding 0) shared with the vertex stage.
 import vec;
+import viz_ubo;
+import viz_util;
 
 struct FSIn {
     float4 fragCoord : SV_Position;
     [[vk::location(0)]] float3 v_world : TEXCOORD0;
 };
 
-struct Ubo {
-    float4x4 mvp;
-    float4 eye;
-    float4 box_min;
-    float4 box_max;
-    float4 proton_center;   // reserved (layout)
-    float4 proton_color;    // reserved (layout)
-    float inv_peak;
-    float absorbance;
-    float proton_radius;    // reserved (layout)
-    float jitter_frame;
-    float4 clip;   // .x enable, .y axis(0/1/2), .z sign(+-1), .w offset
-    float4 slice;  // slice pass; shared UBO layout
-    float4 barrier;  // .x enable, .y x_lo, .z x_hi, .w fog density
-    // marker_cr = xyz center + w radius; marker_col = rgb; count = marker_meta.x
-    float4 marker_cr[64];
-    float4 marker_col[64];
-    float4 marker_meta;
-};
 [[vk::binding(0, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
 [[vk::binding(1, 0)]] Sampler3D<float4> psi_tex;
@@ -97,14 +80,11 @@ float4 main(FSIn input) : SV_Target {
 
     const int kSteps = 384;  // ~0.42 Bohr/sample across the box
     float step_len = (t_stop - tn) / float(kSteps);
-    // Interleaved gradient noise + per-frame golden-ratio rotate: kills banding, decorrelates accumulation.
-    float2 jp = input.fragCoord.xy + 5.588238 * ubo.jitter_frame;
-    float jitter = frac(52.9829189 * frac(0.06711056 * jp.x + 0.00583715 * jp.y));
+    // IGN jitter kills banding, decorrelates accumulation.
+    float jitter = ign(input.fragCoord.xy, ubo.jitter_frame);
 
-    // Half-texel align: texel i center = (i+0.5)/n vs grid point i, else cloud is half a cell off.
     uint tw, th, tdp;
     psi_tex.GetDimensions(tw, th, tdp);
-    float3 half_texel = 0.5 / float3(tw, th, tdp);
     float3 ext = ubo.box_max.xyz - ubo.box_min.xyz;
     // Empty-space skip: jump a block where occupancy is empty; fine-march at original step elsewhere.
     float skip_len = min(min(ext.x, ext.y), ext.z) / 32.0;
@@ -128,13 +108,12 @@ float4 main(FSIn input) : SV_Target {
         for (int k = 0; k < 8 && t_cur < t_stop && fine_budget > 0 &&
                         A < 0.999; ++k) {
             float3 p = ubo.eye.xyz + t_cur * dir;
-            float3 uvw = (p - ubo.box_min.xyz) / ext + half_texel;
+            float3 uvw = world_to_uvw(p, ubo.box_min.xyz, ubo.box_max.xyz,
+                                      float3(tw, th, tdp));
             float2 s = psi_tex.Sample(uvw).rg;
             float dens = dot(s, s) * ubo.inv_peak;
             float alpha = 1.0 - exp(-ubo.absorbance * dens * step_len);
-            float phase01 =
-                (atan2(s.g, s.r) + 3.14159265358979) / 6.28318530717959;
-            float3 col = phase_tex.Sample(phase01).rgb;
+            float3 col = phase_tex.Sample(phase01(s)).rgb;
             // 0.35 ambient floor keeps nodes readable.
             float T = shadow_tex.Sample(uvw_c).r;
             col *= 0.35 + 0.65 * T;

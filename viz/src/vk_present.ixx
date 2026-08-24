@@ -1,21 +1,18 @@
 module;
 #include <volk.h>
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <source_location>
 #include <vector>
-#include <algorithm>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <functional>
-#include <vector>
 export module ses.vk.present;
 export import ses.vk.compute;
+import ses.vk.render;  // kSceneClearColor
 
 
 // Raw-Vulkan presentation: swapchain over the SDL surface; one fullscreen-
@@ -125,6 +122,9 @@ public:
             return false;
         }
         if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
+            std::fprintf(stderr, "vk: acquire image %s\n",
+                         ses_vk::vk_result_str(r));
+            ctx_->device_lost = true;
             return false;
         }
         acquired_ = true;
@@ -165,7 +165,9 @@ public:
         color_att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color_att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color_att.clearValue.color = {{0.04f, 0.05f, 0.09f, 1.0f}};
+        color_att.clearValue.color = {{ses_vk::kSceneClearColor[0],
+                                       ses_vk::kSceneClearColor[1],
+                                       ses_vk::kSceneClearColor[2], 1.0f}};
         VkRenderingInfo rinfo{};
         rinfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         rinfo.renderArea = {{0, 0}, extent_};
@@ -215,7 +217,7 @@ public:
             return false;
         }
         const VkResult wr = vkWaitForFences(ctx_->device, 1, &fence_, VK_TRUE,
-                                            10ull * 1000 * 1000 * 1000);
+                                            ses_vk::kFenceTimeoutNs);
         if (wr != VK_SUCCESS) {
             std::fprintf(stderr, "vk: present-blit fence wait %s\n",
                          ses_vk::vk_result_str(wr));
@@ -604,34 +606,55 @@ inline bool dump_scene_bmp(ses_vk::DeviceContext& ctx, VkImage img,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        shot.submit_and_wait(ctx);
+        if (!shot.submit_and_wait(ctx)) {
+            ctx.destroy_buffer(&host);
+            return false;
+        }
     }
 
-    // Hand-rolled BMP: 54-byte header, BGR rows padded to 4 bytes, bottom-up.
+    // Hand-rolled BMP: BITMAPFILEHEADER(14) + BITMAPINFOHEADER(40), 24bpp
+    // BGR rows padded to 4 bytes, bottom-up. Debug-only dump path.
+    constexpr std::uint32_t kBmpHeaderSize = 54;
+    constexpr std::uint32_t kBmpInfoHeaderSize = 40;
+    constexpr int kBmpOffFileSize = 2;
+    constexpr int kBmpOffDataStart = 10;
+    constexpr int kBmpOffInfoSize = 14;
+    constexpr int kBmpOffWidth = 18;
+    constexpr int kBmpOffHeight = 22;
+    constexpr int kBmpOffPlanes = 26;
+    constexpr int kBmpOffBpp = 28;
+    constexpr int kBmpOffDataSize = 34;
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)  // fopen: CRT deprecation, debug-only path
+#endif
     std::FILE* f = std::fopen(path, "wb");
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
     if (f == nullptr) {
         ctx.destroy_buffer(&host);
         return false;
     }
     const std::uint32_t row = (w * 3 + 3) & ~3u;
     const std::uint32_t data_size = row * h;
-    const std::uint32_t file_size = 54 + data_size;
-    unsigned char hdr[54] = {'B', 'M'};
+    const std::uint32_t file_size = kBmpHeaderSize + data_size;
+    unsigned char hdr[kBmpHeaderSize] = {'B', 'M'};
     auto put32 = [&hdr](int off, std::uint32_t v) {
         hdr[off] = static_cast<unsigned char>(v);
         hdr[off + 1] = static_cast<unsigned char>(v >> 8);
         hdr[off + 2] = static_cast<unsigned char>(v >> 16);
         hdr[off + 3] = static_cast<unsigned char>(v >> 24);
     };
-    put32(2, file_size);
-    put32(10, 54);
-    put32(14, 40);
-    put32(18, w);
-    put32(22, h);
-    hdr[26] = 1;   // planes
-    hdr[28] = 24;  // bpp
-    put32(34, data_size);
-    std::fwrite(hdr, 1, 54, f);
+    put32(kBmpOffFileSize, file_size);
+    put32(kBmpOffDataStart, kBmpHeaderSize);
+    put32(kBmpOffInfoSize, kBmpInfoHeaderSize);
+    put32(kBmpOffWidth, w);
+    put32(kBmpOffHeight, h);
+    hdr[kBmpOffPlanes] = 1;
+    hdr[kBmpOffBpp] = 24;
+    put32(kBmpOffDataSize, data_size);
+    std::fwrite(hdr, 1, kBmpHeaderSize, f);
     const unsigned char* px = static_cast<const unsigned char*>(host.mapped);
     std::vector<unsigned char> line(row, 0);
     for (std::uint32_t y = 0; y < h; ++y) {

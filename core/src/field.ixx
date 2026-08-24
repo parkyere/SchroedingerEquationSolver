@@ -8,6 +8,9 @@ export import ses.grid;
 
 export namespace ses {
 
+// Direction tag for every ladder-operator API (ses.ladder, ses.lattice2d).
+enum class Rung { Raise, Lower };
+
 class Field1D {
 public:
     explicit Field1D(Grid1D grid)
@@ -36,10 +39,27 @@ inline double norm_sq(const Field1D& f) noexcept {
 }
 
 inline void normalize(Field1D& f) noexcept {
-    const double inv = 1.0 / std::sqrt(norm_sq(f));
+    const double n2 = norm_sq(f);
+    if (n2 <= 0.0) {
+        return;  // zero field: 1/0 -> Inf -> NaN
+    }
+    const double inv = 1.0 / std::sqrt(n2);
     for (int i = 0; i < f.size(); ++i) {
         f[i] = inv * f[i];
     }
+}
+
+// <a|b> with the grid weight h; mirrors the Field3D overload.
+inline std::complex<double> inner_product(const Field1D& a, const Field1D& b) noexcept {
+    double re = 0.0;
+    double im = 0.0;
+    for (int i = 0; i < a.size(); ++i) {
+        const std::complex<double> t = std::conj(a[i]) * b[i];
+        re += t.real();
+        im += t.imag();
+    }
+    const double h = a.grid().spacing();
+    return std::complex<double>{re * h, im * h};
 }
 
 class Field3D {

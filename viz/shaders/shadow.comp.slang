@@ -1,18 +1,9 @@
 // shadow_img holds transmittance T; consumed downstream as ambient + (1-ambient)*T.
+import viz_ubo;
+import viz_util;
+
 [[vk::binding(0, 0)]] [[vk::image_format("r32f")]] RWTexture3D<float4> shadow_img;
 
-struct Ubo {
-    float4x4 mvp;
-    float4 eye;
-    float4 box_min;
-    float4 box_max;
-    float4 proton_center;
-    float4 proton_color;
-    float inv_peak;
-    float absorbance;
-    float proton_radius;
-    float jitter_frame;
-};
 [[vk::binding(1, 0)]] ConstantBuffer<Ubo, Std140DataLayout> ubo;
 
 [[vk::binding(2, 0)]] Sampler3D<float4> psi_tex;
@@ -41,11 +32,11 @@ void main(uint3 gid : SV_DispatchThreadID) {
     float dl = t_exit / float(kSteps);
     uint pw, ph, pd;
     psi_tex.GetDimensions(pw, ph, pd);
-    float3 half_texel = 0.5 / float3(pw, ph, pd);
     float tau = 0.0;
     for (int i = 0; i < kSteps; ++i) {
         float3 q = p + (float(i) + 0.5) * dl * kLightDir;
-        float3 uvw = (q - ubo.box_min.xyz) / ext + half_texel;
+        float3 uvw = world_to_uvw(q, ubo.box_min.xyz, ubo.box_max.xyz,
+                                  float3(pw, ph, pd));
         float2 s = psi_tex.SampleLevel(uvw, 0.0).xy;
         tau += dot(s, s) * ubo.inv_peak * dl;
     }

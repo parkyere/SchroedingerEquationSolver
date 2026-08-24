@@ -1,3 +1,5 @@
+import viz_util;
+
 [[vk::binding(0, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> accum;
 [[vk::binding(1, 0)]] Sampler2D<float4> bloom;  // half-res, linear-upsampled
 [[vk::binding(2, 0)]] [[vk::image_format("rgba8")]] RWTexture2D<float4> present;
@@ -15,25 +17,17 @@ float3 aces(float3 x) {
                  1.0);
 }
 
-float ign(float2 p) {
-    p += 5.588238 * params.frame;
-    return frac(52.9829189 * frac(0.06711056 * p.x + 0.00583715 * p.y));
-}
-
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 gid : SV_DispatchThreadID) {
-    int2 p = int2(gid.xy);
-    uint w, h;
-    present.GetDimensions(w, h);
-    int2 size = int2(w, h);
-    if (p.x >= size.x || p.y >= size.y) {
+    int2 p, size;
+    if (oob(gid, present, p, size)) {
         return;
     }
     float2 uv = (float2(p) + 0.5) / float2(size);
     float3 hdr = accum[p].rgb;
     hdr += params.bloom_strength * bloom.SampleLevel(uv, 0.0).rgb;
     float3 ldr = aces(hdr * params.exposure);
-    ldr += (ign(float2(p)) - 0.5) / 255.0;  // kill 8-bit banding
+    ldr += (ign(float2(p), params.frame) - 0.5) / 255.0;  // kill 8-bit banding
     present[p] = float4(ldr, 1.0);
 }

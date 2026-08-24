@@ -35,12 +35,15 @@ constexpr double kBl1dRScale = 150.0;
 constexpr double kBl1dEScale = 8.0;           // V display: Ha -> Bohr
 constexpr int kBl1dBands = 3;
 constexpr int kBl1dQSamples = 65;
+// band inset frame: x = xmin + kBl1dInsetX0 .. + kBl1dInsetW (see band_x).
+constexpr double kBl1dInsetX0 = 3.0;
+constexpr double kBl1dInsetW = 24.0;
 
 class Bloch1DDirector final : public Line1DDirector, public BlochApi {
 public:
     Bloch1DDirector()
         : Line1DDirector(box_grid(), lattice_potential(box_grid(), kBl1dV0),
-                         kBl1dDt, kBl1dRScale, kBl1dEScale, 1e30) {
+                         kBl1dDt, kBl1dRScale, kBl1dEScale, kNoYClamp) {
         rebuild_prop();
         rebuild_band_inset();
         fire();
@@ -78,11 +81,10 @@ public:
     double excursion() const override { return excursion_; }
 
     bool handle_key(char key) override {
-        if (key == '2') {
-            fire();
-            return true;
+        switch (key) {
+            case '2': fire(); return true;
+            default: return false;
         }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.25; }
@@ -92,17 +94,18 @@ public:
     // 4 base + band inset + q marker.
     int overlay_curve_count() const override { return 6; }
     OverlayCurve overlay_curve(int i) const override {
-        if (i == 4) {  // band inset
-            return {band_curve_.data(),
-                    static_cast<int>(band_curve_.size() / 3),
-                    1.0f, 0.70f, 0.20f, 0.9f};
+        switch (i) {
+            case 4:  // band inset
+                return {band_curve_.data(),
+                        static_cast<int>(band_curve_.size() / 3),
+                        1.0f, 0.70f, 0.20f, 0.9f};
+            case 5:  // q marker on band 0
+                return {q_marker_.data(),
+                        static_cast<int>(q_marker_.size() / 3),
+                        0.35f, 0.85f, 1.0f, 1.0f};
+            default:
+                return Line1DDirector::overlay_curve(i);
         }
-        if (i == 5) {  // q marker on band 0
-            return {q_marker_.data(),
-                    static_cast<int>(q_marker_.size() / 3),
-                    0.35f, 0.85f, 1.0f, 1.0f};
-        }
-        return Line1DDirector::overlay_curve(i);
     }
 
 protected:
@@ -179,14 +182,18 @@ private:
         excursion_ = std::max(excursion_, std::abs(mean_x_ - x0_));
     }
 
+    // Inset x for q in [-kL, kL]; the ONE band-frame mapping.
+    double band_x(double q) const {
+        return grid1d_.xmin + kBl1dInsetX0 +
+               kBl1dInsetW * (q + kBl1dKl) / (2.0 * kBl1dKl);
+    }
+
     // Band inset E_n(q); serpentine chaining so zone-edge connectors trace gaps.
     void rebuild_band_inset() {
         band_curve_.clear();
-        const double x_lo = grid1d_.xmin + 3.0;
-        const double x_w = 24.0;
-        e_ref_ = ses::lattice_bands(v0_, kBl1dKl, 0.0, kBl1dBands + 1);
-        const double e_top =
-            e_ref_[static_cast<std::size_t>(kBl1dBands)];
+        const std::vector<double> e_ref =
+            ses::lattice_bands(v0_, kBl1dKl, 0.0, kBl1dBands + 1);
+        const double e_top = e_ref[static_cast<std::size_t>(kBl1dBands)];
         y_scale_ = 13.0 / std::max(e_top, 1e-6);
         y_off_ = 12.0;
         for (int band = 0; band < kBl1dBands; ++band) {
@@ -198,8 +205,7 @@ private:
                     2.0 * kBl1dKl * idx / (kBl1dQSamples - 1);
                 const std::vector<double> e =
                     ses::lattice_bands(v0_, kBl1dKl, q, band + 1);
-                band_curve_.push_back(static_cast<float>(
-                    x_lo + x_w * (q + kBl1dKl) / (2.0 * kBl1dKl)));
+                band_curve_.push_back(static_cast<float>(band_x(q)));
                 band_curve_.push_back(static_cast<float>(
                     y_off_ + y_scale_ * e[static_cast<std::size_t>(band)]));
                 band_curve_.push_back(0.0f);
@@ -212,10 +218,7 @@ private:
         const double q = quasimomentum();
         const std::vector<double> e =
             ses::lattice_bands(v0_, kBl1dKl, q, 1);
-        const double x_lo = grid1d_.xmin + 3.0;
-        const double x_w = 24.0;
-        const float mx = static_cast<float>(
-            x_lo + x_w * (q + kBl1dKl) / (2.0 * kBl1dKl));
+        const float mx = static_cast<float>(band_x(q));
         const float my =
             static_cast<float>(y_off_ + y_scale_ * e[0]);
         q_marker_ = {mx, my - 1.0f, 0.0f, mx, my + 1.0f, 0.0f};
@@ -229,7 +232,6 @@ private:
     std::unique_ptr<ses::TiltedSplitOperator1D> tilted_;
     std::vector<float> band_curve_;
     std::vector<float> q_marker_;
-    std::vector<double> e_ref_;
     double v0_ = kBl1dV0;
     double force_ = kBl1dF;
     double mean_x_ = 0.0;

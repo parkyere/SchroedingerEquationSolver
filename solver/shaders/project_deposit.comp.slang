@@ -6,6 +6,7 @@
 import complex;
 import ylm;
 import grid;
+import radial_sample;
 
 [[vk::binding(0, 0)]] StructuredBuffer<Complex, Std430DataLayout> psi;
 [[vk::binding(6, 0)]] StructuredBuffer<uint, Std430DataLayout> sorted_cell;
@@ -56,22 +57,16 @@ void main(uint3 grp : SV_GroupID, uint tid : SV_GroupIndex) {
         float y = pos.y;
         float z = pos.z;
         float r = sqrt(x * x + y * y + z * z);
+        RadialBin rb = radial_bin(r, params.h_radial);
         float w;
         if (primary) {
-            if (r < params.h_radial) {
-                w = 1.0 / params.h_radial;  // origin: u[0]/h
-            } else {
-                float t = r / params.h_radial - 1.0;
-                float frac = t - float(int(t));
-                w = (1.0 - frac) / r;
-            }
+            w = rb.origin ? 1.0 / params.h_radial  // origin: u[0]/h
+                          : (1.0 - rb.frac) / r;
         } else {
-            if (r < params.h_radial) {
+            if (rb.origin) {
                 continue;  // no secondary partner at origin
             }
-            float t = r / params.h_radial - 1.0;
-            float frac = t - float(int(t));
-            w = frac / r;
+            w = rb.frac / r;
         }
         Complex pv = psi[cell] * (w * params.dv);
         for (int l = 0; l <= 5; ++l) {

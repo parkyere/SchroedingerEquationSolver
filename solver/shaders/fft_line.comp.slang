@@ -1,6 +1,26 @@
-// Radix-2 line FFT, N=256 (NHALF=128, LOG2N=8; bit_reverse uses 32-8). SPIR-V baked offline at fixed size => N is a concrete constant (256^3 grid). See fft_line64.comp for stage layout.
-// numthreads=128 (=N/2): one workgroup per line, each thread does a 2-elem butterfly.
-// Params enumerate lines along an axis; n_lines=1,stride=1,base=0 = plain 1-D FFT.
+// Radix-2 in-place line FFT, unnormalized; one workgroup per line, N/2 threads
+// x 2-elem butterfly in groupshared. SPIR-V baked offline per size via -DFFT_N
+// (8/64/256/512). Params enumerate lines along an axis; n_lines=1,stride=1,
+// base=0 = plain 1-D FFT.
+#ifndef FFT_N
+#define FFT_N 256
+#endif
+#if FFT_N == 8
+#define FFT_LOG2N 3
+#define FFT_NHALF 4
+#elif FFT_N == 64
+#define FFT_LOG2N 6
+#define FFT_NHALF 32
+#elif FFT_N == 256
+#define FFT_LOG2N 8
+#define FFT_NHALF 128
+#elif FFT_N == 512
+#define FFT_LOG2N 9
+#define FFT_NHALF 256
+#else
+#error "FFT_N must be 8/64/256/512"
+#endif
+
 import complex;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> data;
@@ -14,14 +34,12 @@ struct Params {
 };
 [[vk::binding(1, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
-groupshared Complex line_sm[256];
+groupshared Complex line_sm[FFT_N];
 
-static const float kTwoPi = 6.28318530717958647692;
-
-uint bit_reverse(uint v) { return reversebits(v) >> (32u - 8u); }
+uint bit_reverse(uint v) { return reversebits(v) >> uint(32 - FFT_LOG2N); }
 
 [shader("compute")]
-[numthreads(128, 1, 1)]
+[numthreads(FFT_NHALF, 1, 1)]
 void main(uint3 grp : SV_GroupID, uint3 lid : SV_GroupThreadID) {
     int l = int(grp.x);
     if (l >= params.n_lines) {
@@ -30,13 +48,13 @@ void main(uint3 grp : SV_GroupID, uint3 lid : SV_GroupThreadID) {
     int base = (l % params.mod_a) * params.mul_b + (l / params.mod_a) * params.mul_c;
     uint t = lid.x;
     uint i0 = t;
-    uint i1 = t + 128u;
+    uint i1 = t + uint(FFT_NHALF);
 
     line_sm[i0] = data[base + int(bit_reverse(i0)) * params.stride];
     line_sm[i1] = data[base + int(bit_reverse(i1)) * params.stride];
     GroupMemoryBarrierWithGroupSync();
 
-    for (uint len = 2u; len <= 256u; len <<= 1u) {
+    for (uint len = 2u; len <= uint(FFT_N); len <<= 1u) {
         uint half_len = len >> 1u;
         uint j = t % half_len;
         uint pos = (t / half_len) * len + j;

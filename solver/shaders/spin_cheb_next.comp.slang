@@ -10,6 +10,7 @@ import complex;
 
 struct Params {
     float ckre, ckim, R, factor;
+    uint n, pad0, pad1, pad2;
 };
 [[vk::binding(4, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
@@ -17,6 +18,9 @@ struct Params {
 [numthreads(256, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint m = tid.x;
+    if (m >= params.n) {
+        return;
+    }
     Complex tn = hbuf[m] * (params.factor / params.R) - tprev[m];
     tnext[m] = tn;
     result[m] = result[m] + Complex(params.ckre, params.ckim) * tn;

@@ -12,7 +12,7 @@ struct Params {
     uint n;
     uint plo;
     uint phi;
-    uint pad;
+    uint n_sites;  // qubit count; 4-bit perm packing caps it at 16
 };
 [[vk::binding(2, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
@@ -24,7 +24,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
     uint i = 0u;
-    for (uint b = 0u; b < 16u; ++b) {
+    for (uint b = 0u; b < params.n_sites; ++b) {
         if (((j >> b) & 1u) != 0u) {
             uint pb = (b < 8u) ? ((params.plo >> (4u * b)) & 0xFu)
                                : ((params.phi >> (4u * (b - 8u))) & 0xFu);

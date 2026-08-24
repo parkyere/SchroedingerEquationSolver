@@ -97,8 +97,42 @@ inline void ifft(std::vector<std::complex<double>>& a) {
     }
 }
 
+namespace fft_detail {
+
+// Strided-line pass: gather line m (start base_of(m), step `stride`, length
+// `len`) into per-worker scratch, FFT, scatter back. Each line owned by one
+// worker -> bitwise identical to serial.
+template <class BaseOf>
+inline void strided_line_pass(std::vector<std::complex<double>>& a,
+                              std::vector<std::vector<std::complex<double>>>& scratch,
+                              int lines, int len, int stride, BaseOf&& base_of) {
+    const std::vector<std::complex<double>> w =
+        fft_twiddles(static_cast<std::size_t>(len));
+    parallel_ranges(lines, [&](int worker, int begin, int end) {
+        std::vector<std::complex<double>>& line =
+            scratch[static_cast<std::size_t>(worker)];
+        line.resize(static_cast<std::size_t>(len));
+        for (int m = begin; m < end; ++m) {
+            const std::size_t base = static_cast<std::size_t>(base_of(m));
+            for (int p = 0; p < len; ++p) {
+                line[static_cast<std::size_t>(p)] =
+                    a[base + static_cast<std::size_t>(p) *
+                                 static_cast<std::size_t>(stride)];
+            }
+            fft(line.data(), line.size(), w.data());
+            for (int p = 0; p < len; ++p) {
+                a[base + static_cast<std::size_t>(p) *
+                             static_cast<std::size_t>(stride)] =
+                    line[static_cast<std::size_t>(p)];
+            }
+        }
+    });
+}
+
+}  // namespace fft_detail
+
 // 3D forward: 1D FFT per axis. x-lines contiguous; y/z gathered into per-worker
-// scratch. Each line owned by one worker -> bitwise identical to serial.
+// scratch.
 inline void fft(Field3D& f) {
     std::vector<std::complex<double>>& a = f.data();
     const Grid3D& g = f.grid();
@@ -125,51 +159,12 @@ inline void fft(Field3D& f) {
     std::vector<std::vector<std::complex<double>>> scratch(
         static_cast<std::size_t>(parallel_workers()));
 
-    {
-        const std::vector<std::complex<double>> w =
-            fft_twiddles(static_cast<std::size_t>(ny));
-        parallel_ranges(nz * nx, [&](int worker, int begin, int end) {
-            std::vector<std::complex<double>>& line =
-                scratch[static_cast<std::size_t>(worker)];
-            line.resize(static_cast<std::size_t>(ny));
-            for (int m = begin; m < end; ++m) {
-                const int k = m / nx;
-                const int i = m % nx;
-                for (int j = 0; j < ny; ++j) {
-                    line[static_cast<std::size_t>(j)] =
-                        a[static_cast<std::size_t>(g.flat(i, j, k))];
-                }
-                fft(line.data(), line.size(), w.data());
-                for (int j = 0; j < ny; ++j) {
-                    a[static_cast<std::size_t>(g.flat(i, j, k))] =
-                        line[static_cast<std::size_t>(j)];
-                }
-            }
-        });
-    }
-
-    {
-        const std::vector<std::complex<double>> w =
-            fft_twiddles(static_cast<std::size_t>(nz));
-        parallel_ranges(ny * nx, [&](int worker, int begin, int end) {
-            std::vector<std::complex<double>>& line =
-                scratch[static_cast<std::size_t>(worker)];
-            line.resize(static_cast<std::size_t>(nz));
-            for (int m = begin; m < end; ++m) {
-                const int j = m / nx;
-                const int i = m % nx;
-                for (int k = 0; k < nz; ++k) {
-                    line[static_cast<std::size_t>(k)] =
-                        a[static_cast<std::size_t>(g.flat(i, j, k))];
-                }
-                fft(line.data(), line.size(), w.data());
-                for (int k = 0; k < nz; ++k) {
-                    a[static_cast<std::size_t>(g.flat(i, j, k))] =
-                        line[static_cast<std::size_t>(k)];
-                }
-            }
-        });
-    }
+    fft_detail::strided_line_pass(a, scratch, nz * nx, ny, nx, [&](int m) {
+        return g.flat(m % nx, 0, m / nx);
+    });
+    fft_detail::strided_line_pass(a, scratch, ny * nx, nz, nx * ny, [&](int m) {
+        return g.flat(m % nx, m / nx, 0);
+    });
 }
 
 // 3D inverse: conjugation identity. Elementwise loops threaded

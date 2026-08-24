@@ -100,10 +100,14 @@ inline Vec3d orbit_eye(double azimuth, double elevation, double distance, Vec3d 
 
 // Unproject an NDC point onto the z=0 stage plane. Contract:
 // tests/pick_test.cpp round-trips perspective * look_at.
-inline bool unproject_to_z0(double azimuth, double elevation,
-                            double distance, double fovy, double aspect,
-                            double ndc_x, double ndc_y, double* out_x,
-                            double* out_y) noexcept {
+struct StagePick {
+    bool hit{};
+    double x{};
+    double y{};
+};
+inline StagePick unproject_to_z0(double azimuth, double elevation,
+                                 double distance, double fovy, double aspect,
+                                 double ndc_x, double ndc_y) noexcept {
     const Vec3d eye = orbit_eye(azimuth, elevation, distance, Vec3d{});
     const Vec3d f = normalized(Vec3d{} - eye);
     const Vec3d s = normalized(cross(f, Vec3d{0.0, 1.0, 0.0}));
@@ -114,15 +118,13 @@ inline bool unproject_to_z0(double azimuth, double elevation,
     const Vec3d dir{f.x + s.x * cx + u.x * cy, f.y + s.y * cx + u.y * cy,
                     f.z + s.z * cx + u.z * cy};
     if (std::abs(dir.z) < 1e-12) {
-        return false;  // ray parallel to plane
+        return {};  // ray parallel to plane
     }
     const double t = -eye.z / dir.z;
     if (t <= 0.0) {
-        return false;  // behind the eye
+        return {};  // behind the eye
     }
-    *out_x = eye.x + t * dir.x;
-    *out_y = eye.y + t * dir.y;
-    return true;
+    return StagePick{true, eye.x + t * dir.x, eye.y + t * dir.y};
 }
 
 }  // namespace ses

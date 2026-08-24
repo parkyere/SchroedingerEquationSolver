@@ -34,21 +34,32 @@ inline int sample_energy_eigenstate(const std::vector<double>& populations, doub
     return -1;
 }
 
-inline int sample_collapse_index(const Field3D& psi, double u) noexcept {
+namespace measurement_detail {
+
+// Discrete inverse-CDF in flat-index order (cell volume cancels); last-index
+// fallback absorbs u ~ 1 rounding. SINGLE SOURCE for the samplers below.
+template <class T, class Density>
+inline int invert_cdf(const std::vector<T>& d, double u, Density&& density) noexcept {
     double total = 0.0;
-    for (const std::complex<double>& z : psi.data()) {
-        total += std::norm(z);
+    for (const T& v : d) {
+        total += density(v);
     }
     const double target = u * total;
     double cum = 0.0;
-    const std::size_t n = psi.data().size();
-    for (std::size_t i = 0; i < n; ++i) {
-        cum += std::norm(psi.data()[i]);
+    for (std::size_t i = 0; i < d.size(); ++i) {
+        cum += density(d[i]);
         if (cum > target) {
             return static_cast<int>(i);
         }
     }
-    return static_cast<int>(n - 1);  // u ~ 1 rounding fallback
+    return static_cast<int>(d.size() - 1);
+}
+
+}  // namespace measurement_detail
+
+inline int sample_collapse_index(const Field3D& psi, double u) noexcept {
+    return measurement_detail::invert_cdf(
+        psi.data(), u, [](const std::complex<double>& z) { return std::norm(z); });
 }
 
 // Per-axis Gaussian (std sigma_m) convolution of |psi|^2; periodic wrap
@@ -74,7 +85,9 @@ inline std::vector<double> povm_outcome_density(const Field3D& psi,
         double sum = 0.0;
         for (int t = -radius; t <= radius; ++t) {
             const double x = t * h / sigma_m;
-            sum += w[static_cast<std::size_t>(t + radius)] = std::exp(-0.5 * x * x);
+            const double weight = std::exp(-0.5 * x * x);
+            w[static_cast<std::size_t>(t + radius)] = weight;
+            sum += weight;
         }
         for (double& v : w) {
             v /= sum;
@@ -128,19 +141,7 @@ inline RealPair pair_from_signed_m(std::complex<double> a, int sign) noexcept {
 // of |psi|^2 that a sigma_m detector cannot resolve.
 inline int sample_povm_index(const Field3D& psi, double sigma_m, double u) {
     const std::vector<double> d = povm_outcome_density(psi, sigma_m);
-    double total = 0.0;
-    for (double p : d) {
-        total += p;
-    }
-    const double target = u * total;
-    double cum = 0.0;
-    for (std::size_t i = 0; i < d.size(); ++i) {
-        cum += d[i];
-        if (cum > target) {
-            return static_cast<int>(i);
-        }
-    }
-    return static_cast<int>(d.size() - 1);  // u ~ 1 with rounding
+    return measurement_detail::invert_cdf(d, u, [](double p) { return p; });
 }
 
 // Same amplitude convention as gaussian_wavepacket (4 sigma^2, not 2), so
@@ -148,17 +149,13 @@ inline int sample_povm_index(const Field3D& psi, double sigma_m, double u) {
 inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) noexcept {
     const Grid3D& g = psi.grid();
     const double inv4s2 = 1.0 / (4.0 * sigma_m * sigma_m);
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double dx = g.x.coord(i) - center.x;
-                const double dy = g.y.coord(j) - center.y;
-                const double dz = g.z.coord(k) - center.z;
-                const double mask = std::exp(-(dx * dx + dy * dy + dz * dz) * inv4s2);
-                psi(i, j, k) = mask * psi(i, j, k);
-            }
-        }
-    }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double dx = g.x.coord(i) - center.x;
+        const double dy = g.y.coord(j) - center.y;
+        const double dz = g.z.coord(k) - center.z;
+        const double mask = std::exp(-(dx * dx + dy * dy + dz * dz) * inv4s2);
+        psi(i, j, k) = mask * psi(i, j, k);
+    });
     normalize(psi);
 }
 

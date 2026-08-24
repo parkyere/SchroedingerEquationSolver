@@ -1,4 +1,5 @@
 module;
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <complex>
@@ -23,6 +24,24 @@ import ses.parallel;
 
 
 export namespace ses {
+
+namespace lattice2d_detail {
+
+// Uniform-axis cell bracket: largest i with coord(i) <= v < coord(i+1), -1 if
+// none. Index arithmetic; the +-1 sweep absorbs coord()/spacing() round-off.
+inline int bracket_cell(const Grid1D& ax, double v) noexcept {
+    const double t = std::floor((v - ax.coord(0)) / ax.spacing());
+    const int guess =
+        static_cast<int>(std::clamp(t, -1.0, static_cast<double>(ax.n)));
+    for (int i = guess - 1; i <= guess + 1; ++i) {
+        if (i >= 0 && i + 1 < ax.n && ax.coord(i) <= v && v < ax.coord(i + 1)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+}  // namespace lattice2d_detail
 
 class PeierlsLattice2D {
 public:
@@ -65,18 +84,8 @@ public:
     // cut_down e^{+i phi} below -- gauge-equivalent (tested as such).
     void set_solenoid(double phi, double xs, double ys, bool cut_up = true) {
         link_x_.assign(link_x_.size(), 1.0);
-        int is = -1;
-        for (int i = 0; i + 1 < nx_; ++i) {
-            if (g_->x.coord(i) <= xs && xs < g_->x.coord(i + 1)) {
-                is = i;
-            }
-        }
-        int js = -1;
-        for (int j = 0; j + 1 < ny_; ++j) {
-            if (g_->y.coord(j) <= ys && ys < g_->y.coord(j + 1)) {
-                js = j;
-            }
-        }
+        const int is = lattice2d_detail::bracket_cell(g_->x, xs);
+        const int js = lattice2d_detail::bracket_cell(g_->y, ys);
         if (is < 0 || js < 0) {
             return;  // solenoid outside the lattice
         }
@@ -138,6 +147,14 @@ private:
     // One y-bond parity group (bond-rows disjoint by parity -> parallel-safe).
     void sweep_y(std::vector<std::complex<double>>& a, int parity, double c,
                  std::complex<double> mix) const;
+
+    // The Strang palindrome shared by step (cos/i*sin) and relax (cosh/sinh):
+    // ONE owner of the sweep order.
+    void palindrome(std::vector<std::complex<double>>& a,
+                    const std::vector<std::complex<double>>& half, double cx,
+                    std::complex<double> mx, double cy,
+                    std::complex<double> my, double cy2,
+                    std::complex<double> my2) const;
 
     const Grid3D* g_;
     int nx_;
@@ -216,19 +233,28 @@ void PeierlsLattice2D::sweep_y(std::vector<std::complex<double>>& a,
     });
 }
 
+void PeierlsLattice2D::palindrome(std::vector<std::complex<double>>& a,
+                                  const std::vector<std::complex<double>>& half,
+                                  double cx, std::complex<double> mx,
+                                  double cy, std::complex<double> my,
+                                  double cy2, std::complex<double> my2) const {
+    phase(a, half);
+    sweep_x(a, 0, cx, mx);
+    sweep_x(a, 1, cx, mx);
+    sweep_y(a, 0, cy, my);
+    sweep_y(a, 1, cy2, my2);
+    sweep_y(a, 0, cy, my);
+    sweep_x(a, 1, cx, mx);
+    sweep_x(a, 0, cx, mx);
+    phase(a, half);
+}
+
 void PeierlsLattice2D::step(Field3D& psi, int nsteps) const {
     assert(psi.data().size() == half_v_.size());
     std::vector<std::complex<double>>& a = psi.data();
     for (int s = 0; s < nsteps; ++s) {
-        phase(a, half_v_);
-        sweep_x(a, 0, cx_, {0.0, sx_});
-        sweep_x(a, 1, cx_, {0.0, sx_});
-        sweep_y(a, 0, cy_, {0.0, sy_});
-        sweep_y(a, 1, cy2_, {0.0, sy2_});
-        sweep_y(a, 0, cy_, {0.0, sy_});
-        sweep_x(a, 1, cx_, {0.0, sx_});
-        sweep_x(a, 0, cx_, {0.0, sx_});
-        phase(a, half_v_);
+        palindrome(a, half_v_, cx_, {0.0, sx_}, cy_, {0.0, sy_}, cy2_,
+                   {0.0, sy2_});
     }
 }
 
@@ -236,15 +262,8 @@ void PeierlsLattice2D::relax(Field3D& psi, int nsteps) const {
     assert(psi.data().size() == half_v_.size());
     std::vector<std::complex<double>>& a = psi.data();
     for (int s = 0; s < nsteps; ++s) {
-        phase(a, relax_half_v_);
-        sweep_x(a, 0, rcx_, {rsx_, 0.0});
-        sweep_x(a, 1, rcx_, {rsx_, 0.0});
-        sweep_y(a, 0, rcy_, {rsy_, 0.0});
-        sweep_y(a, 1, rcy2_, {rsy2_, 0.0});
-        sweep_y(a, 0, rcy_, {rsy_, 0.0});
-        sweep_x(a, 1, rcx_, {rsx_, 0.0});
-        sweep_x(a, 0, rcx_, {rsx_, 0.0});
-        phase(a, relax_half_v_);
+        palindrome(a, relax_half_v_, rcx_, {rsx_, 0.0}, rcy_, {rsy_, 0.0},
+                   rcy2_, {rsy2_, 0.0});
         normalize(psi);
     }
 }
@@ -273,16 +292,14 @@ double PeierlsLattice2D::energy(const Field3D& psi) const {
     return e / den;
 }
 
-// Landau-level ladder in the SAME gauge as set_uniform_field. pi = -i grad
-// - A, central differences with periodic wrap; the gauge is not wrap-
-// consistent, so states must stay off the boundary (magnetic length
-// 1/sqrt(B) << box, as the scene guarantees). UNNORMALIZED; callers renormalize.
-// CONTRACT: tests/lattice2d_test.cpp LandauLadderClimbsOneCyclotronQuantum.
-inline Field3D landau_ladder(const Field3D& psi, double b, bool up) {
+namespace lattice2d_detail {
+
+// Shared periodic central-difference harness for the 2D ladder operators:
+// core(x, y, psi_ij, ddx, ddy) supplies the physics.
+template <class Core>
+inline Field3D stencil2d(const Field3D& psi, Core&& core) {
     const Grid3D& g = psi.grid();
-    const double h = g.x.spacing();
-    const double inv2h = 1.0 / (2.0 * h);
-    const double s = 1.0 / std::sqrt(2.0 * b);
+    const double inv2h = 1.0 / (2.0 * g.x.spacing());
     Field3D out{g};
     parallel_for(g.y.n, [&](int j) {
         const int ny = g.y.n;
@@ -290,7 +307,6 @@ inline Field3D landau_ladder(const Field3D& psi, double b, bool up) {
         const double y = g.y.coord(j);
         const int jp = (j + 1) % ny;
         const int jm = (j - 1 + ny) % ny;
-        const std::complex<double> kI{0.0, 1.0};
         for (int i = 0; i < nx; ++i) {
             const int ip = (i + 1) % nx;
             const int im = (i - 1 + nx) % nx;
@@ -298,15 +314,36 @@ inline Field3D landau_ladder(const Field3D& psi, double b, bool up) {
                 (psi(ip, j, 0) - psi(im, j, 0)) * inv2h;
             const std::complex<double> ddy =
                 (psi(i, jp, 0) - psi(i, jm, 0)) * inv2h;
-            // A_x = +B y, sign pinned by the contract (guiding-center pair,
-            // <H> unchanged).
-            const std::complex<double> pix = -kI * ddx - b * y * psi(i, j, 0);
-            const std::complex<double> piy = -kI * ddy;
-            out(i, j, 0) = s * (up ? (pix + kI * piy) : (pix - kI * piy));
+            out(i, j, 0) = core(g.x.coord(i), y, psi(i, j, 0), ddx, ddy);
         }
     });
     return out;
 }
+
+}  // namespace lattice2d_detail
+
+// Landau-level ladder in the SAME gauge as set_uniform_field. pi = -i grad
+// - A, central differences with periodic wrap; the gauge is not wrap-
+// consistent, so states must stay off the boundary (magnetic length
+// 1/sqrt(B) << box, as the scene guarantees). UNNORMALIZED; callers renormalize.
+// CONTRACT: tests/lattice2d_test.cpp LandauLadderClimbsOneCyclotronQuantum.
+inline Field3D landau_ladder(const Field3D& psi, double b, Rung rung) {
+    const bool up = rung == Rung::Raise;
+    const double s = 1.0 / std::sqrt(2.0 * b);
+    const std::complex<double> kI{0.0, 1.0};
+    return lattice2d_detail::stencil2d(
+        psi, [&](double, double y, const std::complex<double>& p,
+                 const std::complex<double>& ddx,
+                 const std::complex<double>& ddy) {
+            // A_x = +B y, sign pinned by the contract (guiding-center pair,
+            // <H> unchanged).
+            const std::complex<double> pix = -kI * ddx - b * y * p;
+            const std::complex<double> piy = -kI * ddy;
+            return s * (up ? (pix + kI * piy) : (pix - kI * piy));
+        });
+}
+
+enum class Chirality { Right, Left };  // Rung lives in ses.field (re-exported)
 
 // 2D isotropic-HO circular ladder at B=0: a_R = (a_x - i a_y)/sqrt(2)
 // (dagger adds omega to <H>, +1 to <L_z>). UNNORMALIZED; callers renormalize.
@@ -315,8 +352,8 @@ inline Field3D landau_ladder(const Field3D& psi, double b, bool up) {
 // project onto the circular HO basis at Omega, ladder the energies. Returns
 // (E, |c|^2) up to e_max, largest-E last.
 // CONTRACT: tests/ho_spectrum_test.cpp (delta lines + <H> reconstruction).
-inline Field3D ho2d_ladder(const Field3D& psi, double omega, bool up,
-                           bool left = false);
+inline Field3D ho2d_ladder(const Field3D& psi, double omega, Rung rung,
+                           Chirality chi = Chirality::Right);
 
 inline std::vector<std::pair<double, double>> fock_darwin_spectrum(
     const Field3D& psi, double omega0, double b, double e_max) {
@@ -324,7 +361,6 @@ inline std::vector<std::pair<double, double>> fock_darwin_spectrum(
     const double om = std::sqrt(omega0 * omega0 + 0.25 * b * b);
     const double w_r = om - 0.5 * b;  // right = CCW cyclotron (slow)
     const double w_l = om + 0.5 * b;
-    const double cell = g.x.spacing() * g.y.spacing() * g.z.spacing();
     // Rotate the lattice-gauge state into the symmetric gauge: chi = -B x y/2.
     Field3D rot{g};
     for (int j = 0; j < g.y.n; ++j) {
@@ -359,20 +395,15 @@ inline std::vector<std::pair<double, double>> fock_darwin_spectrum(
             if (e > e_max) {
                 break;
             }
-            std::complex<double> ov{};
-            for (std::size_t c = 0; c < cur.data().size(); ++c) {
-                ov += std::conj(cur.data()[c]) * rot.data()[c];
-            }
-            ov *= cell;
-            lines.emplace_back(e, std::norm(ov));
-            Field3D next = ho2d_ladder(cur, om, true, true);
+            lines.emplace_back(e, std::norm(inner_product(cur, rot)));
+            Field3D next = ho2d_ladder(cur, om, Rung::Raise, Chirality::Left);
             if (norm_sq(next) < 1e-12) {
                 break;
             }
             normalize(next);
             cur = std::move(next);
         }
-        Field3D nxt = ho2d_ladder(right, om, true, false);
+        Field3D nxt = ho2d_ladder(right, om, Rung::Raise, Chirality::Right);
         if (norm_sq(nxt) < 1e-12) {
             break;
         }
@@ -382,40 +413,23 @@ inline std::vector<std::pair<double, double>> fock_darwin_spectrum(
     return lines;
 }
 
-inline Field3D ho2d_ladder(const Field3D& psi, double omega, bool up,
-                           bool left) {
-    const Grid3D& g = psi.grid();
-    const double inv2h = 1.0 / (2.0 * g.x.spacing());
+inline Field3D ho2d_ladder(const Field3D& psi, double omega, Rung rung,
+                           Chirality chi) {
     const double cx = std::sqrt(omega / 2.0);
     const double cd = 1.0 / std::sqrt(2.0 * omega);
     const double s = 1.0 / std::sqrt(2.0);
-    Field3D out{g};
-    parallel_for(g.y.n, [&](int j) {
-        const int ny = g.y.n;
-        const int nx = g.x.n;
-        const double y = g.y.coord(j);
-        const int jp = (j + 1) % ny;
-        const int jm = (j - 1 + ny) % ny;
-        const std::complex<double> kI{0.0, 1.0};
-        for (int i = 0; i < nx; ++i) {
-            const int ip = (i + 1) % nx;
-            const int im = (i - 1 + nx) % nx;
-            const double x = g.x.coord(i);
-            const std::complex<double> ddx =
-                (psi(ip, j, 0) - psi(im, j, 0)) * inv2h;
-            const std::complex<double> ddy =
-                (psi(i, jp, 0) - psi(i, jm, 0)) * inv2h;
-            // a_R = (a_x - i a_y)/sqrt(2); LEFT chirality (+i a_y) flips q,
-            // dagger flips the derivative sign.
-            const std::complex<double> qI = left ? -kI : kI;
-            out(i, j, 0) =
-                up ? s * (cx * (x + qI * y) * psi(i, j, 0) -
-                          cd * (ddx + qI * ddy))
-                   : s * (cx * (x - qI * y) * psi(i, j, 0) +
-                          cd * (ddx - qI * ddy));
-        }
-    });
-    return out;
+    const std::complex<double> kI{0.0, 1.0};
+    // a_R = (a_x - i a_y)/sqrt(2); LEFT chirality (+i a_y) flips q,
+    // dagger flips the derivative sign.
+    const std::complex<double> qI = chi == Chirality::Left ? -kI : kI;
+    const bool up = rung == Rung::Raise;
+    return lattice2d_detail::stencil2d(
+        psi, [&](double x, double y, const std::complex<double>& p,
+                 const std::complex<double>& ddx,
+                 const std::complex<double>& ddy) {
+            return up ? s * (cx * (x + qI * y) * p - cd * (ddx + qI * ddy))
+                      : s * (cx * (x - qI * y) * p + cd * (ddx - qI * ddy));
+        });
 }
 
 }  // namespace ses

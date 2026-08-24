@@ -9,6 +9,7 @@ export module ses.bloch;
 export import ses.field;
 export import ses.grid;
 import ses.fft;
+import ses.radial;
 import ses.spectral;
 
 
@@ -19,30 +20,6 @@ import ses.spectral;
 
 
 export namespace ses {
-
-namespace bloch_detail {
-
-// Count eigenvalues below lambda. RATIO-form Sturm (not product): the product
-// form sticks at 0 when a dyadic midpoint hits a leading-minor eigenvalue
-// exactly; the ratio nudges past it (LAPACK dlaebz style).
-inline int sturm_count(const std::vector<double>& d,
-                       const std::vector<double>& o, double lambda) {
-    int count = 0;
-    double q = 1.0;
-    for (std::size_t i = 0; i < d.size(); ++i) {
-        const double off2 = i > 0 ? o[i - 1] * o[i - 1] : 0.0;
-        if (q == 0.0) {
-            q = -1e-300;
-        }
-        q = (d[i] - lambda) - off2 / q;
-        if (q < 0.0) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-}  // namespace bloch_detail
 
 inline std::vector<double> lattice_bands(double v0, double kl, double q,
                                          int n_bands) {
@@ -55,7 +32,8 @@ inline std::vector<double> lattice_bands(double v0, double kl, double q,
         const double k = q + m * g2;
         d[static_cast<std::size_t>(m + m_max)] = 0.5 * k * k + 0.5 * v0;
     }
-    // Sturm bisection per band (Gershgorin bracket).
+    // Ratio-form Sturm bisection per band (Gershgorin bracket); shared
+    // ses.radial helper owns the exact-hit pivot convention.
     double lo = d[0];
     double hi = d[0];
     for (std::size_t i = 0; i < d.size(); ++i) {
@@ -67,17 +45,9 @@ inline std::vector<double> lattice_bands(double v0, double kl, double q,
     std::vector<double> bands;
     bands.reserve(static_cast<std::size_t>(n_bands));
     for (int band = 0; band < n_bands; ++band) {
-        double a = lo;
-        double b = hi;
-        for (int it = 0; it < 200; ++it) {
-            const double mid = 0.5 * (a + b);
-            if (bloch_detail::sturm_count(d, o, mid) <= band) {
-                a = mid;
-            } else {
-                b = mid;
-            }
-        }
-        bands.push_back(0.5 * (a + b));
+        bands.push_back(bisect_kth_eigenvalue(
+            lo, hi, band, 0.0,
+            [&](double mid) { return sturm_count_below(d, o, mid); }));
     }
     return bands;
 }
@@ -90,11 +60,7 @@ public:
                           double dt, double force)
         : dt_(dt), force_(force), k_(wavenumbers(g)) {
         assert(static_cast<int>(potential.size()) == g.n);
-        half_v_.resize(potential.size());
-        for (std::size_t i = 0; i < potential.size(); ++i) {
-            const double th = -0.5 * potential[i] * dt;
-            half_v_[i] = std::complex<double>{std::cos(th), std::sin(th)};
-        }
+        half_v_ = build_half_potential_table(potential, dt, unit_phase);
         kinetic_.resize(k_.size());
     }
 
@@ -109,9 +75,7 @@ public:
             const double a_mid = -force_ * (t_ + 0.5 * dt_);
             for (std::size_t j = 0; j < k_.size(); ++j) {
                 const double km = k_[j] - a_mid;
-                const double th = -0.5 * km * km * dt_;
-                kinetic_[j] =
-                    std::complex<double>{std::cos(th), std::sin(th)};
+                kinetic_[j] = unit_phase(-0.5 * km * km * dt_);
             }
             apply_phase(half_v_, psi.data());
             fft(psi.data());
@@ -123,13 +87,6 @@ public:
     }
 
 private:
-    static void apply_phase(const std::vector<std::complex<double>>& phase,
-                            std::vector<std::complex<double>>& a) noexcept {
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            a[i] = a[i] * phase[i];
-        }
-    }
-
     double dt_;
     double force_;
     double t_ = 0.0;

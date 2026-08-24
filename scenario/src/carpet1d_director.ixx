@@ -37,6 +37,10 @@ constexpr double kCp1dK0 = 1.0;
 constexpr int kCp1dStepsPerTick = 64;
 constexpr double kCp1dSurfH = 6.0;
 constexpr int kCp1dMeshStride = 2;
+constexpr double kCp1dPeakDecay = 0.98;  // display-peak decay per rebuild
+// revival oracle window: t/T_rev in (lo, hi) = scrambled, >= hi = revival.
+constexpr double kCp1dMidLo = 0.15;
+constexpr double kCp1dMidHi = 0.6;
 
 class Carpet1DDirector final : public Lattice2DDirectorBase,
                                public CarpetApi {
@@ -52,7 +56,7 @@ public:
         // One carpet height = one revival: rows * row_steps * dt = T_rev.
         const double t_rev = carpet_revival_time(2.0 * kCp1dHalf);
         row_steps_ = std::max(
-            1, static_cast<int>(t_rev / (kCp1dDt * kCp1dN) + 0.5));
+            1, static_cast<int>(std::lround(t_rev / (kCp1dDt * kCp1dN))));
         fire();
     }
 
@@ -77,11 +81,10 @@ public:
     void reset_simulation() override { fire(); }
 
     bool handle_key(char key) override {
-        if (key == '2') {
-            fire();
-            return true;
+        switch (key) {
+            case '2': fire(); return true;
+            default: return false;
         }
-        return false;
     }
 
     double sim_dt() const override { return kCp1dDt; }
@@ -118,8 +121,9 @@ protected:
                 cur = std::max(cur, std::norm(psi_(i, j, 0)));
             }
         }
-        disp_peak_ = disp_peak_ <= 0.0 ? cur
-                                       : std::max(cur, 0.98 * disp_peak_);
+        disp_peak_ = disp_peak_ <= 0.0
+                         ? cur
+                         : std::max(cur, kCp1dPeakDecay * disp_peak_);
         if (disp_peak_ > 0.0) {
             hf_ = ses::heightfield_surface(psi_, kCp1dSurfH, disp_peak_,
                                            kCp1dMeshStride);
@@ -140,9 +144,9 @@ protected:
                 const double t_rev = revival_time();
                 const double frac = sim_time_ / t_rev;
                 const double ov = revival_overlap();
-                if (frac > 0.15 && frac < 0.6) {
+                if (frac > kCp1dMidLo && frac < kCp1dMidHi) {
                     mid_max_ = std::max(mid_max_, ov);
-                } else if (frac >= 0.6) {
+                } else if (frac >= kCp1dMidHi) {
                     best_ = std::max(best_, ov);
                 }
             }

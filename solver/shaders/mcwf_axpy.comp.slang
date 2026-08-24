@@ -1,8 +1,8 @@
 // Fused MCWF no-jump update: psi[i] += sum_s coef_s * (u_s(|r|)/|r|) * Y_{l_s m_s} * inv_norm_s.
-// Radial interp must match synth.comp verbatim.
 import complex;
 import ylm;
 import grid;
+import radial_sample;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> psi;
 [[vk::binding(5, 0)]] StructuredBuffer<float, Std430DataLayout> u;
@@ -33,32 +33,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
     int3 ijk = unflatten_moddiv(idx, params.nx, params.ny);
     float3 p = cell_pos(ijk, params.box_min.xyz, params.cell_h.xyz);
     float r = length(p);
-    bool origin = (r < params.h_radial);
-    bool inside = (r < params.rmax);
-    int i0 = 0;
-    float frac = 0.0;
-    if (!origin && inside) {
-        float t = r / params.h_radial - 1.0;  // r_i = (i+1) h
-        i0 = int(t);
-        frac = t - float(i0);
-    }
+    RadialBin rb = radial_bin(r, params.h_radial);
     Complex add = Complex(0.0, 0.0);
-    for (int s = 0; s < params.n_states; ++s) {
-        int base = s * params.n_radial;
-        float uor;
-        if (origin) {
-            uor = u[base] / params.h_radial;  // u(0)=0 pinned: l=0 limit u_0/h
-        } else if (inside) {
-            float ua = u[base + i0];
-            float ub = (i0 + 1 < params.n_radial) ? u[base + i0 + 1] : 0.0;
-            float ui = (1.0 - frac) * ua + frac * ub;  // outer: u(rmax)=0
-            uor = ui / r;
-        } else {
-            continue;
+    if (rb.origin || r < params.rmax) {
+        for (int s = 0; s < params.n_states; ++s) {
+            int base = s * params.n_radial;
+            float uor =
+                radial_u_over_r(u, base, rb, r, params.h_radial, params.n_radial);
+            float R = uor * real_Ylm(params.lm[s].x, params.lm[s].y, p.x, p.y, p.z) *
+                      params.coef[s].z;
+            add = add + Complex(params.coef[s].xy) * R;
         }
-        float R = uor * real_Ylm(params.lm[s].x, params.lm[s].y, p.x, p.y, p.z) *
-                  params.coef[s].z;
-        add = add + Complex(params.coef[s].xy) * R;
     }
     psi[idx] = psi[idx] + add;
 }

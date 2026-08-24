@@ -23,9 +23,9 @@ namespace mc_detail {
 
 inline Vec3d gradient(const std::vector<double>& f, const Grid3D& g, int i, int j, int k) noexcept {
     auto at = [&](int ii, int jj, int kk) {
-        ii = ii < 0 ? 0 : (ii >= g.x.n ? g.x.n - 1 : ii);
-        jj = jj < 0 ? 0 : (jj >= g.y.n ? g.y.n - 1 : jj);
-        kk = kk < 0 ? 0 : (kk >= g.z.n ? g.z.n - 1 : kk);
+        ii = std::clamp(ii, 0, g.x.n - 1);
+        jj = std::clamp(jj, 0, g.y.n - 1);
+        kk = std::clamp(kk, 0, g.z.n - 1);
         return f[static_cast<std::size_t>(g.flat(ii, jj, kk))];
     };
     return Vec3d{(at(i + 1, j, k) - at(i - 1, j, k)) / (2.0 * g.x.spacing()),

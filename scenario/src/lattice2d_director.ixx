@@ -16,10 +16,12 @@ export import ses.scenario;
 export import ses.field;
 export import ses.grid;
 export import ses.lattice2d;
+import ses.heightfield;
+import ses.parallel;
 import ses.vk.lattice2d_engine;
 
 
-// 2D lattice base for corral/qdot. Physics on one z-plane (nz=1), replicated
+// 2D lattice base (corral/qdot/billiard/qpc/carpet). Physics on one z-plane (nz=1), replicated
 // into the display slab. Time evolution runs on the GPU (ses_vk::Lattice2DEngine,
 // a port of the CPU PeierlsLattice2D) when a device is present, else on the CPU
 // prop_. gpu_ok()=false stays: the RENDER path is the CPU-built heightfield/slab,
@@ -94,7 +96,9 @@ public:
     bool take_volume_dirty() override {
         return std::exchange(vol_dirty_, false);
     }
-    bool take_mesh_dirty() override { return false; }
+    bool take_mesh_dirty() override {
+        return std::exchange(mesh_dirty_, false);
+    }
     void mark_display_dirty() override {
         display_changed_ = true;
         vol_dirty_ = true;
@@ -105,9 +109,9 @@ public:
     const std::vector<float>& psi_staging() const override {
         return staging_;
     }
-    const ses::Mesh& mesh() const override { return no_mesh_; }
+    const ses::Mesh& mesh() const override { return hf_.mesh; }
     const std::vector<ses::Rgb>& colors() const override {
-        return no_colors_;
+        return hf_.colors;
     }
 
     int marker_count() const override { return 0; }
@@ -173,35 +177,29 @@ protected:
                 pk = std::max(pk, std::norm(psi_(i, j, 0)));
             }
         }
-        peak_ = std::max(pk, 0.98 * peak_);
+        peak_ = std::max(pk, kPeakDecay * peak_);
     }
 
-    void rebuild_staging() {
-        const int nx = phys_grid_.x.n;
-        const int ny = phys_grid_.y.n;
-        const std::size_t plane =
-            static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
-        staging_.resize(plane * static_cast<std::size_t>(nz_) * 2);
-        // SERIAL on purpose: ses::parallel_for in this shared base module's
-        // inline member crashes a pool worker (MSVC modules footgun; fine in
-        // leaf scene modules). Copy ~2 MB, serial ~1 ms.
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const std::complex<double> z = psi_(i, j, 0);
-                const std::size_t o =
-                    2 * (static_cast<std::size_t>(j) *
-                             static_cast<std::size_t>(nx) +
-                         static_cast<std::size_t>(i));
-                staging_[o] = static_cast<float>(z.real());
-                staging_[o + 1] = static_cast<float>(z.imag());
+    void rebuild_staging() { pack_plane_staging(psi_.data(), nz_, staging_); }
+
+    // STM surface path: the normalizer snaps to the first observed max then
+    // kPeakDecay-decays (decay-only boots ~100x high and blacks the relief
+    // out; the base peak_ decays too slow to reach the ~1e-2 relax scale).
+    void rebuild_surface(const ses::Field3D& f, double surf_h, int stride,
+                         double amp_eps = 0.0) {
+        double cur = 0.0;
+        for (int j = 0; j < phys_grid_.y.n; ++j) {
+            for (int i = 0; i < phys_grid_.x.n; ++i) {
+                cur = std::max(cur, std::norm(f(i, j, 0)));
             }
         }
-        for (int k = 1; k < nz_; ++k) {
-            std::copy(staging_.begin(),
-                      staging_.begin() +
-                          static_cast<std::ptrdiff_t>(plane * 2),
-                      staging_.begin() +
-                          static_cast<std::ptrdiff_t>(plane * 2) * k);
+        disp_peak_ = disp_peak_ <= 0.0
+                         ? cur
+                         : std::max(cur, kPeakDecay * disp_peak_);
+        if (disp_peak_ > 0.0) {
+            hf_ = ses::heightfield_surface(f, surf_h, disp_peak_, stride,
+                                           amp_eps);
+            mesh_dirty_ = true;
         }
     }
 
@@ -211,6 +209,9 @@ protected:
     int nz_;
     ses::Field3D psi_;
     std::vector<float> staging_;
+    ses::Heightfield hf_;          // surface scenes; empty for cloud scenes
+    bool mesh_dirty_ = false;
+    double disp_peak_ = 0.0;       // surface height normalizer
     double peak_ = 1.0;
     double sim_time_ = 0.0;
     int pending_steps_ = 0;
@@ -236,16 +237,8 @@ private:
     }
     void gpu_sync_down() {
         gpu_.download();
-        const float* s = gpu_.state();
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(s[2 * i]),
-                                        static_cast<double>(s[2 * i + 1])};
-        }
+        unpack_interleaved(gpu_.state(), psi_.data());
     }
-
-    ses::Mesh no_mesh_;
-    std::vector<ses::Rgb> no_colors_;
 };
 
 }  // namespace ses_shell

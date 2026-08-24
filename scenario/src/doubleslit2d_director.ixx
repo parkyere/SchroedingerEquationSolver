@@ -18,6 +18,7 @@ export import ses.field;
 export import ses.grid;
 export import ses.lattice2d;
 import ses.parallel;
+import ses.potential;
 import ses.vk.lattice2d_engine;
 
 
@@ -54,7 +55,7 @@ constexpr double kDs2dWidthMin = 1.0;
 constexpr double kDs2dWidthMax = 4.0;
 constexpr double kDs2dScreenX = 45.0;
 constexpr double kDs2dAbsorb = 10.0;
-// Quadratic CAP: cos^2 too stiff for the slow shot (~30% reflection at k0 = 1).
+// Quadratic CAP peak (ses::quadratic_cap_mask).
 // CONTRACT: lattice2d_test SinglePacketDrainsThroughTheOpenBoundary.
 constexpr double kDs2dAbsorbW0 = 4.0;
 constexpr int kDs2dStepsPerTick = 16;  // ~9.6 au/s at 60 fps: ~9 s transit
@@ -69,7 +70,9 @@ public:
                      ses::Grid1D{-kDs2dBoxY, kDs2dBoxY, kDs2dNy},
                      ses::Grid1D{-kDs2dZHalf, kDs2dZHalf, kDs2dNz}},
           psi_{phys_grid_} {
-        build_mask();
+        mask_ = ses::quadratic_cap_mask(phys_grid_, kDs2dAbsorb,
+                                        kDs2dAbsorbW0, kDs2dDt);
+        i_scr_ = ses::nearest_index(phys_grid_.x, kDs2dScreenX);
         rebuild_wall_and_prop();
         fire();
     }
@@ -115,14 +118,12 @@ public:
         return acc * cell;
     }
     double screen_at(double y) const override {
-        int best = 0;
-        for (int j = 1; j < kDs2dNy; ++j) {
-            if (std::abs(phys_grid_.y.coord(j) - y) <
-                std::abs(phys_grid_.y.coord(best) - y)) {
-                best = j;
-            }
-        }
-        return screen_[static_cast<std::size_t>(best)];
+        return screen_[static_cast<std::size_t>(
+            ses::nearest_index(phys_grid_.y, y))];
+    }
+    double k0() const override { return kDs2dK0; }
+    double screen_distance() const override {
+        return kDs2dScreenX - 0.5 * (kDs2dWallLo + kDs2dWallHi);
     }
 
     // ---- lifecycle ----
@@ -158,17 +159,16 @@ public:
             pending_steps_ = 0;
             step_batch(n);
             sim_time_ += n * kDs2dDt;
-            display_changed_ = true;
-            vol_dirty_ = true;
-            staging_dirty_ = true;
+            dirt_.mark_display();
+            dirt_.staging_dirty = true;
         }
-        if (staging_dirty_) {
-            staging_dirty_ = false;
-            rebuild_staging();
+        if (dirt_.staging_dirty) {
+            dirt_.staging_dirty = false;
+            pack_plane_staging(psi_.data(), kDs2dNz, staging_);
             rebuild_screen_curve();
         }
         if (++frames_ % 10 == 0) {
-            title_dirty_ = true;
+            dirt_.title_dirty = true;
         }
     }
     void tick() override {
@@ -205,19 +205,12 @@ public:
     VkImageView psi_volume_view() override { return VK_NULL_HANDLE; }
     float next_flash_intensity() override { return 0.0f; }
     bool take_volume_written() override {
-        return std::exchange(display_changed_, false);
+        return dirt_.take_volume_written();
     }
-    bool take_volume_dirty() override {
-        return std::exchange(vol_dirty_, false);
-    }
+    bool take_volume_dirty() override { return dirt_.take_volume_dirty(); }
     bool take_mesh_dirty() override { return false; }
-    void mark_display_dirty() override {
-        display_changed_ = true;
-        vol_dirty_ = true;
-    }
-    bool take_title_dirty() override {
-        return std::exchange(title_dirty_, false);
-    }
+    void mark_display_dirty() override { dirt_.mark_display(); }
+    bool take_title_dirty() override { return dirt_.take_title_dirty(); }
     const std::vector<float>& psi_staging() const override {
         return staging_;
     }
@@ -240,24 +233,20 @@ public:
 
     int overlay_curve_count() const override { return 4; }
     OverlayCurve overlay_curve(int i) const override {
-        if (i == 0) {
-            return {wall_curve_.data(),
-                    static_cast<int>(wall_curve_.size() / 3),
-                    1.0f, 0.30f, 0.25f, 0.55f, true};
-        }
-        if (i == 1) {
-            return {solenoid_curve_.data(),
-                    static_cast<int>(solenoid_curve_.size() / 3),
-                    1.0f, 0.70f, 0.20f, 1.0f};
-        }
-        if (i == 2) {
-            return {plate_curve_.data(),
-                    static_cast<int>(plate_curve_.size() / 3),
-                    0.85f, 0.85f, 0.90f, 0.35f};
-        }
-        return {screen_curve_.data(),
-                static_cast<int>(screen_curve_.size() / 3),
-                0.35f, 0.85f, 1.0f, 0.95f};
+        struct Desc {
+            const std::vector<float>* pts;
+            float r, g, b, a;
+            bool fill;
+        };
+        const Desc table[4] = {
+            {&wall_curve_, 1.0f, 0.30f, 0.25f, 0.55f, true},
+            {&solenoid_curve_, 1.0f, 0.70f, 0.20f, 1.0f, false},
+            {&plate_curve_, 0.85f, 0.85f, 0.90f, 0.35f, false},
+            {&screen_curve_, 0.35f, 0.85f, 1.0f, 0.95f, false},
+        };
+        const Desc& d = table[std::clamp(i, 0, 3)];
+        return {d.pts->data(), static_cast<int>(d.pts->size() / 3),
+                d.r, d.g, d.b, d.a, d.fill};
     }
 
     double default_camera_azimuth() const override { return 0.0; }
@@ -269,27 +258,6 @@ private:
         // Quarter-cell off a lattice line: unambiguous host plaquette.
         return 0.5 * (kDs2dWallLo + kDs2dWallHi) +
                0.25 * phys_grid_.x.spacing();
-    }
-
-    void build_mask() {
-        // 2D CAP frame (see kDs2dAbsorbW0).
-        auto ramp_w = [](const ses::Grid1D& ax, double x) {
-            const double d = std::min(x - ax.xmin, ax.xmax - x);
-            if (d >= kDs2dAbsorb) {
-                return 0.0;
-            }
-            const double t = 1.0 - d / kDs2dAbsorb;
-            return kDs2dAbsorbW0 * t * t;
-        };
-        mask_.resize(static_cast<std::size_t>(kDs2dNx * kDs2dNy));
-        for (int j = 0; j < kDs2dNy; ++j) {
-            const double wy = ramp_w(phys_grid_.y, phys_grid_.y.coord(j));
-            for (int i = 0; i < kDs2dNx; ++i) {
-                const double wx = ramp_w(phys_grid_.x, phys_grid_.x.coord(i));
-                mask_[static_cast<std::size_t>(j * kDs2dNx + i)] =
-                    std::exp(-(wx + wy) * kDs2dDt);
-            }
-        }
     }
 
     bool slit_open(double y) const {
@@ -335,8 +303,7 @@ private:
                 psi_(i, j, 0) =
                     std::exp(-(dx * dx + y * y) /
                              (4.0 * kDs2dSigma * kDs2dSigma)) *
-                    std::complex<double>{std::cos(kDs2dK0 * x),
-                                         std::sin(kDs2dK0 * x)};
+                    std::polar(1.0, kDs2dK0 * x);
             }
         });
         const double n = ses::norm_sq(psi_);
@@ -349,10 +316,7 @@ private:
         ++shots_;
         peak_ = 1.0;
         eng_dirty_ = true;  // new packet on the CPU: re-upload before stepping
-        display_changed_ = true;
-        vol_dirty_ = true;
-        staging_dirty_ = true;
-        title_dirty_ = true;
+        dirt_.mark_all_dirty();
     }
 
     // Full reset; geometry/flux edits route here.
@@ -365,13 +329,6 @@ private:
     }
 
     void step_batch(int n) {
-        int i_scr = 0;
-        for (int i = 1; i < kDs2dNx; ++i) {
-            if (std::abs(phys_grid_.x.coord(i) - kDs2dScreenX) <
-                std::abs(phys_grid_.x.coord(i_scr) - kDs2dScreenX)) {
-                i_scr = i;
-            }
-        }
         if (eng_ok_ && eng_dirty_) {
             eng_.upload(psi_.data());
             eng_dirty_ = false;
@@ -383,7 +340,7 @@ private:
                 // the GPU so the state stays in sync -- no re-upload.
                 eng_.step(1);
                 eng_.download();
-                store_engine_state();
+                unpack_interleaved(eng_.state(), psi_.data());
             } else {
                 prop_->step(psi_);
                 ses::parallel_for(kDs2dNy, [&](int j) {
@@ -398,67 +355,25 @@ private:
             }
             for (int j = 0; j < kDs2dNy; ++j) {
                 screen_[static_cast<std::size_t>(j)] +=
-                    std::norm(psi_(i_scr, j, 0)) * kDs2dDt;
+                    std::norm(psi_(i_scr_, j, 0)) * kDs2dDt;
             }
         }
-        // Brightness normalizer: decayed running max, no flicker as packet dilutes.
         double pk = 0.0;
         for (int j = 0; j < kDs2dNy; ++j) {
             for (int i = 0; i < kDs2dNx; ++i) {
                 pk = std::max(pk, std::norm(psi_(i, j, 0)));
             }
         }
-        peak_ = std::max(pk, 0.98 * peak_);
-    }
-
-    void rebuild_staging() {
-        const std::size_t plane =
-            static_cast<std::size_t>(kDs2dNx) *
-            static_cast<std::size_t>(kDs2dNy);
-        staging_.resize(plane * kDs2dNz * 2);
-        ses::parallel_for(kDs2dNy, [&](int j) {
-            for (int i = 0; i < kDs2dNx; ++i) {
-                const std::complex<double> z = psi_(i, j, 0);
-                const std::size_t o =
-                    2 * (static_cast<std::size_t>(j) *
-                             static_cast<std::size_t>(kDs2dNx) +
-                         static_cast<std::size_t>(i));
-                staging_[o] = static_cast<float>(z.real());
-                staging_[o + 1] = static_cast<float>(z.imag());
-            }
-        });
-        for (int k = 1; k < kDs2dNz; ++k) {
-            std::copy(staging_.begin(),
-                      staging_.begin() + static_cast<std::ptrdiff_t>(
-                                             plane * 2),
-                      staging_.begin() +
-                          static_cast<std::ptrdiff_t>(plane * 2) * k);
-        }
+        peak_ = std::max(pk, kPeakDecay * peak_);
     }
 
     void rebuild_props_overlays() {
         wall_curve_.clear();
         auto slab = [&](double y0, double y1) {
-            if (y1 <= y0) {
-                return;
+            if (y1 > y0) {  // middle slab can vanish at wide slits
+                strip_wall_quad(wall_curve_, kDs2dWallLo, kDs2dWallHi, y0,
+                                y1);
             }
-            const float x0 = static_cast<float>(kDs2dWallLo);
-            const float x1 = static_cast<float>(kDs2dWallHi);
-            const float a = static_cast<float>(y0);
-            const float b = static_cast<float>(y1);
-            const float quad[12] = {x0, a, 0.0f, x1, a, 0.0f,
-                                    x0, b, 0.0f, x1, b, 0.0f};
-            if (!wall_curve_.empty()) {
-                // degenerate bridge: repeat last vertex + this quad's head
-                const std::size_t n = wall_curve_.size();
-                wall_curve_.push_back(wall_curve_[n - 3]);
-                wall_curve_.push_back(wall_curve_[n - 2]);
-                wall_curve_.push_back(wall_curve_[n - 1]);
-                wall_curve_.push_back(quad[0]);
-                wall_curve_.push_back(quad[1]);
-                wall_curve_.push_back(quad[2]);
-            }
-            wall_curve_.insert(wall_curve_.end(), quad, quad + 12);
         };
         slab(-kDs2dBoxY, -0.5 * sep_ - 0.5 * width_);
         slab(-0.5 * sep_ + 0.5 * width_, 0.5 * sep_ - 0.5 * width_);
@@ -514,16 +429,6 @@ private:
         }
     }
 
-    void store_engine_state() {
-        const float* s = eng_.state();
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(s[2 * i]),
-                                        static_cast<double>(s[2 * i + 1])};
-        }
-    }
-
-
     ses::Grid3D phys_grid_;
     ses::Grid3D disp_grid_;
     ses::Field3D psi_;
@@ -546,11 +451,9 @@ private:
     double sim_time_ = 0.0;
     int pending_steps_ = 0;
     int time_scale_ = 1;
+    int i_scr_ = 0;  // screen column, fixed by the grid (set once in the ctor)
     std::uint64_t frames_ = 0;
-    bool display_changed_ = true;
-    bool vol_dirty_ = true;
-    bool staging_dirty_ = true;
-    bool title_dirty_ = true;
+    DisplayFlags dirt_;
     bool compute_attempted_ = false;
 
     ses::Mesh no_mesh_;

@@ -1,9 +1,9 @@
 // MC tri-count pass: one workgroup per 8^3 cell block, one thread per cell.
 // Block total via shared int atomic (order-independent sum) -> block_sums[wg]
 // for the downstream scan pass.
-// mc_tab from ses.mc.tables core module (single source of truth); layout:
-// edge [0,256), tri 256x16 [256,4352), counts [4352,4608).
+// mc_tab from ses.mc.tables core module; layout named in mc_common.
 import grid;
+import mc_common;
 
 [[vk::binding(0, 0)]] StructuredBuffer<float, Std430DataLayout> den;
 [[vk::binding(1, 0)]] StructuredBuffer<int, Std430DataLayout> mc_tab;
@@ -19,14 +19,7 @@ struct Params {
 };
 [[vk::binding(3, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
-static const int3 kCorner[8] = {
-    int3(0, 0, 0), int3(1, 0, 0), int3(1, 1, 0), int3(0, 1, 0),
-    int3(0, 0, 1), int3(1, 0, 1), int3(1, 1, 1), int3(0, 1, 1)
-};
-
 groupshared uint s_total;
-
-int flat_at(int3 p) { return p.x + params.npts.x * (p.y + params.npts.y * p.z); }
 
 [shader("compute")]
 [numthreads(512, 1, 1)]
@@ -42,13 +35,8 @@ void main(uint3 grp : SV_GroupID, uint lidx : SV_GroupIndex) {
     int3 cell = blk * 8 + unflatten_moddiv(lidx, 8, 8);
 
     if (all(cell < (params.npts.xyz - 1))) {
-        int cube = 0;
-        for (int c = 0; c < 8; ++c) {
-            if (den[flat_at(cell + kCorner[c])] < params.iso) {
-                cube |= 1 << c;
-            }
-        }
-        uint tris = uint(mc_tab[4352 + cube]);
+        int cube = mc_classify_cube(den, cell, params.npts.xyz, params.iso);
+        uint tris = uint(mc_tab[kMcCountOff + cube]);
         if (tris > 0u) {
             InterlockedAdd(s_total, tris);
         }

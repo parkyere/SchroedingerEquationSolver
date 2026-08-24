@@ -16,6 +16,7 @@ export module ses.scenario.spins_director;
 export import ses.scenario;
 export import ses.spinlattice;
 export import ses.spinexact;
+import ses.vec;
 import ses.vk.spin_engine;
 
 
@@ -68,8 +69,7 @@ public:
     double b(int axis) const override { return b_[axis]; }
     void seed_random() override {
         std::uniform_real_distribution<double> u(-1.0, 1.0);
-        std::uniform_real_distribution<double> ph(
-            0.0, 6.28318530717958647692);
+        std::uniform_real_distribution<double> ph(0.0, 2.0 * kPi);
         for (auto& s : lat_.s) {
             const double z = u(rng_);
             const double t = ph(rng_);
@@ -96,32 +96,12 @@ public:
         after_seed("Neel");
     }
     double magnetization() override {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        for (int i = 0; i < kSlN * kSlN; ++i) {
-            x += bloch_[static_cast<std::size_t>(3 * i)];
-            y += bloch_[static_cast<std::size_t>(3 * i + 1)];
-            z += bloch_[static_cast<std::size_t>(3 * i + 2)];
-        }
-        const double inv = 1.0 / (kSlN * kSlN);
-        return std::sqrt(x * x + y * y + z * z) * inv;
+        return signed_mean_norm([](int) { return 1.0; });
     }
     double staggered() override {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        for (int yy = 0; yy < kSlN; ++yy) {
-            for (int xx = 0; xx < kSlN; ++xx) {
-                const int i = yy * kSlN + xx;
-                const double sgn = ((xx + yy) & 1) != 0 ? -1.0 : 1.0;
-                x += sgn * bloch_[static_cast<std::size_t>(3 * i)];
-                y += sgn * bloch_[static_cast<std::size_t>(3 * i + 1)];
-                z += sgn * bloch_[static_cast<std::size_t>(3 * i + 2)];
-            }
-        }
-        const double inv = 1.0 / (kSlN * kSlN);
-        return std::sqrt(x * x + y * y + z * z) * inv;
+        return signed_mean_norm([](int i) {
+            return ((i % kSlN + i / kSlN) & 1) != 0 ? -1.0 : 1.0;
+        });
     }
 
     // ---- the exact/mean-field switch ----
@@ -136,21 +116,9 @@ public:
         } else {
             refresh_bloch();
             for (int i = 0; i < kSlN * kSlN; ++i) {
-                double x = bloch_[static_cast<std::size_t>(3 * i)];
-                double y = bloch_[static_cast<std::size_t>(3 * i + 1)];
-                double z = bloch_[static_cast<std::size_t>(3 * i + 2)];
-                const double n = std::sqrt(x * x + y * y + z * z);
-                if (n > 1e-9) {
-                    x /= n;
-                    y /= n;
-                    z /= n;
-                } else {
-                    x = 0.0;
-                    y = 0.0;
-                    z = 1.0;
-                }
+                const ses::Vec3d d = ses::unit_or_z(site_bloch(i));
                 lat_.s[static_cast<std::size_t>(i)] =
-                    ses::spinor_from_bloch(x, y, z);
+                    ses::spinor_from_bloch(d.x, d.y, d.z);
             }
             upload_mf_to_gpu();  // product state -> mean-field GPU engine
         }
@@ -162,10 +130,7 @@ public:
     double arrow_mean() override {
         double m = 0.0;
         for (int i = 0; i < kSlN * kSlN; ++i) {
-            const double x = bloch_[static_cast<std::size_t>(3 * i)];
-            const double y = bloch_[static_cast<std::size_t>(3 * i + 1)];
-            const double z = bloch_[static_cast<std::size_t>(3 * i + 2)];
-            m += std::sqrt(x * x + y * y + z * z);
+            m += ses::length(site_bloch(i));
         }
         return m / (kSlN * kSlN);
     }
@@ -244,25 +209,17 @@ public:
     void reset_simulation() override { seed_random(); }
     // [M]: Born-project every site onto +-B_hat (or +-z at B = 0).
     void measure_now() override {
-        double nx = b_[0];
-        double ny = b_[1];
-        double nz = b_[2];
-        const double bn = std::sqrt(nx * nx + ny * ny + nz * nz);
-        if (bn < 1e-9) {
-            nx = 0.0;
-            ny = 0.0;
-            nz = 1.0;
-        } else {
-            nx /= bn;
-            ny /= bn;
-            nz /= bn;
-        }
+        const ses::Vec3d nv = ses::unit_or_z({b_[0], b_[1], b_[2]});
+        const double nx = nv.x;
+        const double ny = nv.y;
+        const double nz = nv.z;
         std::uniform_real_distribution<double> uni(0.0, 1.0);
         // Delegate the Born measurement to the quantum core (GPU engine or CPU
         // oracle fallback); the orchestrator only chooses the axis and draws u.
         if (exact_mode_ && gpu_ready_) {
+            // Engine self-restores its field site UBOs; outcome bitstring unused
+            // here (HUD tally reads bloch()).
             gpu_.measure_exact(nx, ny, nz, uni(rng_));
-            sync_gpu_params();  // measure_exact repurposed the field site UBOs
         } else if (exact_mode_) {
             const double th = std::acos(std::clamp(nz, -1.0, 1.0));
             const double axn = std::hypot(-ny, nx);
@@ -304,23 +261,13 @@ public:
     }
     void toggle_view_mode() override {}
     bool handle_key(char key) override {
-        if (key == '2') {
-            seed_random();
-            return true;
+        switch (key) {
+            case '2': seed_random(); return true;
+            case '3': seed_ferro(); return true;
+            case '4': seed_neel(); return true;
+            case 'X': set_exact(!exact_mode_); return true;
+            default: return false;
         }
-        if (key == '3') {
-            seed_ferro();
-            return true;
-        }
-        if (key == '4') {
-            seed_neel();
-            return true;
-        }
-        if (key == 'X') {
-            set_exact(!exact_mode_);
-            return true;
-        }
-        return false;
     }
 
     bool solving() const override { return false; }
@@ -375,10 +322,8 @@ public:
     // one Bloch sphere per site (fresnel marker pass).
     int marker_count() const override { return kSlN * kSlN; }
     SceneMarker marker(int i) const override {
-        double cx = 0.0;
-        double cy = 0.0;
-        site_center(i, &cx, &cy);
-        return {static_cast<float>(cx), static_cast<float>(cy), 0.0f,
+        const SiteXY c = site_center(i);
+        return {static_cast<float>(c.x), static_cast<float>(c.y), 0.0f,
                 static_cast<float>(kSlR), 0.55f, 0.75f, 0.95f};
     }
 
@@ -410,11 +355,29 @@ public:
 private:
     static constexpr double kPi = std::numbers::pi;
 
-    static void site_center(int site, double* cx, double* cy) {
+    struct SiteXY {
+        double x;
+        double y;
+    };
+    static SiteXY site_center(int site) {
         const int x = site % kSlN;
         const int y = site / kSlN;
-        *cx = (x - (kSlN - 1) / 2.0) * kSlPitch;
-        *cy = (y - (kSlN - 1) / 2.0) * kSlPitch;
+        return {(x - (kSlN - 1) / 2.0) * kSlPitch,
+                (y - (kSlN - 1) / 2.0) * kSlPitch};
+    }
+
+    ses::Vec3d site_bloch(int i) const {
+        const std::size_t o = static_cast<std::size_t>(3 * i);
+        return {bloch_[o], bloch_[o + 1], bloch_[o + 2]};
+    }
+    // |sum_i sign(i) <s_i>| / N^2
+    template <typename Sign>
+    double signed_mean_norm(Sign sign) const {
+        ses::Vec3d acc{};
+        for (int i = 0; i < kSlN * kSlN; ++i) {
+            acc = acc + sign(i) * site_bloch(i);
+        }
+        return ses::length(acc) / (kSlN * kSlN);
     }
 
     void after_seed(const char* what) {
@@ -466,27 +429,20 @@ private:
             return;
         }
         for (int i = 0; i < kSlN * kSlN; ++i) {
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
-            if (exact_mode_) {
-                ses::exact_site_bloch(exact_, i, &x, &y, &z);
-            } else {
-                ses::bloch_vector(lat_.s[static_cast<std::size_t>(i)],
-                                  &x, &y, &z);
-            }
-            bloch_[static_cast<std::size_t>(3 * i)] = x;
-            bloch_[static_cast<std::size_t>(3 * i + 1)] = y;
-            bloch_[static_cast<std::size_t>(3 * i + 2)] = z;
+            const ses::Vec3d p =
+                exact_mode_
+                    ? ses::exact_site_bloch(exact_, i)
+                    : ses::bloch_vector(lat_.s[static_cast<std::size_t>(i)]);
+            bloch_[static_cast<std::size_t>(3 * i)] = p.x;
+            bloch_[static_cast<std::size_t>(3 * i + 1)] = p.y;
+            bloch_[static_cast<std::size_t>(3 * i + 2)] = p.z;
         }
     }
 
     void rebuild_rings() {
         rings_.assign(2 * kSlN * kSlN, {});
         for (int site = 0; site < kSlN * kSlN; ++site) {
-            double cx = 0.0;
-            double cy = 0.0;
-            site_center(site, &cx, &cy);
+            const SiteXY c = site_center(site);
             for (int part = 0; part < 2; ++part) {
                 std::vector<float>& r =
                     rings_[static_cast<std::size_t>(2 * site + part)];
@@ -495,12 +451,12 @@ private:
                     const double a = kSlR * std::cos(th);
                     const double b = kSlR * std::sin(th);
                     if (part == 0) {  // ring about z
-                        r.push_back(static_cast<float>(cx + a));
-                        r.push_back(static_cast<float>(cy + b));
+                        r.push_back(static_cast<float>(c.x + a));
+                        r.push_back(static_cast<float>(c.y + b));
                         r.push_back(0.0f);
                     } else {  // ring about x
-                        r.push_back(static_cast<float>(cx));
-                        r.push_back(static_cast<float>(cy + a));
+                        r.push_back(static_cast<float>(c.x));
+                        r.push_back(static_cast<float>(c.y + a));
                         r.push_back(static_cast<float>(b));
                     }
                 }
@@ -511,23 +467,17 @@ private:
     void rebuild_arrows() {
         arrows_.assign(static_cast<std::size_t>(kSlN * kSlN), {});
         for (int site = 0; site < kSlN * kSlN; ++site) {
-            double cx = 0.0;
-            double cy = 0.0;
-            site_center(site, &cx, &cy);
+            const SiteXY c = site_center(site);
             // Exact mode: |<sigma>| < 1 when entangled -> arrow shrinks.
-            const double x = bloch_[static_cast<std::size_t>(3 * site)];
-            const double y =
-                bloch_[static_cast<std::size_t>(3 * site + 1)];
-            const double z =
-                bloch_[static_cast<std::size_t>(3 * site + 2)];
+            const ses::Vec3d s = site_bloch(site);
             std::vector<float>& a =
                 arrows_[static_cast<std::size_t>(site)];
-            a.push_back(static_cast<float>(cx));
-            a.push_back(static_cast<float>(cy));
+            a.push_back(static_cast<float>(c.x));
+            a.push_back(static_cast<float>(c.y));
             a.push_back(0.0f);
-            a.push_back(static_cast<float>(cx + kSlR * x));
-            a.push_back(static_cast<float>(cy + kSlR * y));
-            a.push_back(static_cast<float>(kSlR * z));
+            a.push_back(static_cast<float>(c.x + kSlR * s.x));
+            a.push_back(static_cast<float>(c.y + kSlR * s.y));
+            a.push_back(static_cast<float>(kSlR * s.z));
         }
     }
 

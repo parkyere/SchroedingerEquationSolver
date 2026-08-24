@@ -1,6 +1,8 @@
 // Probability-flow streaklines: head advects a Bohmian step v = j/rho,
 // j = Im(conj(psi) grad psi) (au, ses.flow::probability_current). Respawn =
 // rejection-sample |psi|^2 (equivariant: streaks stay |psi|^2-distributed).
+import viz_util;
+
 [[vk::binding(0, 0)]] RWStructuredBuffer<float4, Std430DataLayout> trail;
 
 struct Params {
@@ -21,11 +23,10 @@ struct Params {
 [[vk::binding(3, 0)]] Sampler3D<float4> vel_tex;  // fp32 Bohmian velocity
 
 float2 psi_at(float3 p) {
-    // half-texel: grid point i at center (i+0.5)/n
     uint w, h, d;
     psi_tex.GetDimensions(w, h, d);
-    float3 uvw = (p - params.box_min.xyz) / (params.box_max.xyz - params.box_min.xyz) +
-                 0.5 / float3(w, h, d);
+    float3 uvw = world_to_uvw(p, params.box_min.xyz, params.box_max.xyz,
+                              float3(w, h, d));
     return psi_tex.SampleLevel(uvw, 0.0).xy;
 }
 
@@ -33,8 +34,8 @@ float2 psi_at(float3 p) {
 float3 vel_at(float3 p) {
     uint w, h, d;
     vel_tex.GetDimensions(w, h, d);
-    float3 uvw = (p - params.box_min.xyz) / (params.box_max.xyz - params.box_min.xyz) +
-                 0.5 / float3(w, h, d);
+    float3 uvw = world_to_uvw(p, params.box_min.xyz, params.box_max.xyz,
+                              float3(w, h, d));
     return vel_tex.SampleLevel(uvw, 0.0).xyz;
 }
 

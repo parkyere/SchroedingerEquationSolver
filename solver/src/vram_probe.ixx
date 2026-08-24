@@ -5,9 +5,6 @@ module;
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include <cstdint>
-#include <cstring>
-#include <vector>
 export module ses.vk.vram_probe;
 export import ses.vram_budget;
 

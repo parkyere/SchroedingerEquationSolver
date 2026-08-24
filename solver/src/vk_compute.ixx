@@ -1,13 +1,10 @@
 module;
 #include <volk.h>
 #include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <vector>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <source_location>
 #include <vector>
@@ -24,6 +21,18 @@ export import ses.vk.device;
 
 
 export namespace ses_vk {
+
+// Contract: every 1D compute shader declares local_size_x = kWorkgroupSize
+// (fused reductions use kFusedWorkgroup). Dispatch counts come from
+// group_count so a shader-side change cannot silently under-dispatch.
+inline constexpr std::uint32_t kWorkgroupSize = 256;
+inline constexpr std::uint32_t kFusedWorkgroup = 64;
+inline constexpr std::uint64_t kFenceTimeoutNs = 10ull * 1000 * 1000 * 1000;
+
+inline constexpr std::uint32_t group_count(
+    std::uint64_t n, std::uint32_t group = kWorkgroupSize) {
+    return static_cast<std::uint32_t>((n + group - 1) / group);
+}
 
 // Binding index matches the shader's layout(); spec-list order is irrelevant.
 struct BindingDesc {
@@ -300,8 +309,22 @@ public:
         if (ctx.device_lost) {
             return false;
         }
-        vkEndCommandBuffer(cb_);
-        vkResetFences(ctx.device, 1, &fence_);
+        const VkResult er = vkEndCommandBuffer(cb_);
+        if (er != VK_SUCCESS) {
+            std::fprintf(stderr, "vk: end command buffer %s in %s (%s:%u)\n",
+                         vk_result_str(er), loc.function_name(), loc.file_name(),
+                         static_cast<unsigned>(loc.line()));
+            ctx.device_lost = true;
+            return false;
+        }
+        const VkResult fr = vkResetFences(ctx.device, 1, &fence_);
+        if (fr != VK_SUCCESS) {
+            std::fprintf(stderr, "vk: fence reset %s in %s (%s:%u)\n",
+                         vk_result_str(fr), loc.function_name(), loc.file_name(),
+                         static_cast<unsigned>(loc.line()));
+            ctx.device_lost = true;
+            return false;
+        }
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
@@ -315,7 +338,7 @@ public:
             return false;
         }
         const VkResult wr = vkWaitForFences(ctx.device, 1, &fence_, VK_TRUE,
-                                            10ull * 1000 * 1000 * 1000);
+                                            kFenceTimeoutNs);
         if (wr != VK_SUCCESS) {
             std::fprintf(stderr, "vk: fence wait %s in %s (%s:%u)\n",
                          vk_result_str(wr), loc.function_name(), loc.file_name(),
@@ -423,6 +446,32 @@ inline void barrier_transfer_to_host(VkCommandBuffer cb) {
     memory_barrier(cb, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                    VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
                    VK_ACCESS_2_HOST_READ_BIT);
+}
+
+// One-shot staged full-buffer copy on the compute queue, fence-synced.
+// to_device: copy then transfer->compute barrier (data visible to later
+// dispatches, cross-submit included). to_host: compute->transfer barrier first,
+// then transfer->host; caller still vma-invalidates its host allocation.
+enum class CopyDir { to_device, to_host };
+
+inline bool copy_sync(DeviceContext& ctx, VkBuffer src, VkBuffer dst,
+                      VkDeviceSize bytes, CopyDir dir) {
+    OneShot shot;
+    if (!shot.begin_compute(ctx)) {
+        return false;
+    }
+    VkCommandBuffer cb = shot.cb();
+    if (dir == CopyDir::to_host) {
+        barrier_compute_to_transfer(cb);
+    }
+    const VkBufferCopy r{0, 0, bytes};
+    vkCmdCopyBuffer(cb, src, dst, 1, &r);
+    if (dir == CopyDir::to_device) {
+        barrier_transfer_to_compute(cb);
+    } else {
+        barrier_transfer_to_host(cb);
+    }
+    return shot.submit_and_wait(ctx);
 }
 
 // Image layout transition (one mip, one layer, color aspect), synchronization2.

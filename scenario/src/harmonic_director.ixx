@@ -1,11 +1,13 @@
 module;
 #include <numbers>
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <array>
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
@@ -44,12 +46,24 @@ inline constexpr StateSpec kTrapStates[kNumTrapStates] = {
     {5, 3, 0, "3f_0"}, {5, 3, 1, "3f_+1"}, {5, 3, 2, "3f_+2"},
     {5, 3, 3, "3f_+3"},
 };
+// Key-5 excite cycle targets (kTrapStates order).
+constexpr int kTrap1PZ = 3;
+constexpr int kTrap2S = 4;
+constexpr int kTrap2DZ2 = 7;
+constexpr int kTrap3PZ = 12;
 
-// Display decay + post-collapse flush budgets (contract: eigenstate_flush_test).
-constexpr double kTrapGammaDisplay = 0.125;
-constexpr int kTrapFlushSteps = 6;
-constexpr int kTrapFlushStepsGround = 24;  // 0s is the ITP fixed point
-constexpr int kTrapFlashTicks = 25;
+constexpr int kTrapRadialSamples = 3999;
+// Projection-index l cap, derived from the ladder spec (N <= 3 -> f).
+inline constexpr int trap_l_max() {
+    int m = 0;
+    for (const RadialLevelSpec& lev : kTrapLevels) {
+        m = lev.l > m ? lev.l : m;
+    }
+    return m;
+}
+constexpr int kTrapLMax = trap_l_max();
+
+// Decay/flush/flash contract: base kBaseGammaDisplay/kBaseFlush*/kBaseFlashTicks.
 
 class HarmonicDirector final : public BaseDirector {
 public:
@@ -74,17 +88,7 @@ public:
         }
     }
 
-    float next_flash_intensity() override {
-        if (flash_ticks_ <= 0) {
-            return 0.0f;
-        }
-        const float w = static_cast<float>(
-            ses::flash_intensity(flash_ticks_, kTrapFlashTicks));
-        --flash_ticks_;
-        return w;
-    }
-
-    long long photon_count() const override { return photon_count_; }
+    // next_flash_intensity / photon_count: BaseDirector's.
 
 protected:
     ses::WavepacketSimulation remake_simulation() const override { return make(); }
@@ -94,7 +98,7 @@ protected:
     std::string title_suffix() override {
         std::string s = strf("  w = {:.2f} au (T = {:.1f} au, E0 = {:.2f} eV)",
                              kTrapOmega, (2.0 * std::numbers::pi) / kTrapOmega,
-                             1.5 * kTrapOmega * kBaseHaToEv);
+                             1.5 * kTrapOmega * kHaToEv);
         if (decay_on_) {
             s += strf("  decay ON: photons {}", photon_count_);
             if (!last_jump_.empty()) {
@@ -119,7 +123,7 @@ protected:
             flush_collapse_error(n);
             write_display_texture();
             last_measure_ = strf("{} (E = {:.2f} eV)", kTrapStates[n].name,
-                                 atom_.state_energy(n) * kBaseHaToEv);
+                                 atom_.state_energy(n) * kHaToEv);
         } else {
             // Deficit = untracked bound ladder (N > 3), not continuum.
             last_measure_ = "outside tracked ladder (N > 3)";
@@ -128,10 +132,11 @@ protected:
     }
 
     // Decay trials at title cadence through the SAME frequency-group core as
-    // hydrogen (ses::collective_decay_interval): every trap gap is hbar*omega,
-    // so group_by_gap collapses to ONE group -- the damped-HO collective limit
-    // (rung coherences survive; in-interval chains are exact; one streak per
-    // arrival).
+    // hydrogen (base run_collective_decay_trial): every trap gap is
+    // hbar*omega, so group_by_gap collapses to ONE group -- the damped-HO
+    // collective limit (rung coherences survive; in-interval chains are
+    // exact; one streak per arrival). Projects ALL states (0s decays into
+    // nothing but superposes).
     void after_step_batch() override {
         if (!decay_on_ || atom_.channels().empty()) {
             return;
@@ -141,50 +146,19 @@ protected:
             return;
         }
         engine_.wait_async();  // the deposit needs the batch's memory visible
+        assert(proj_ready_);   // trials read the project_psi deposit
         engine_.project_psi();
-        std::vector<std::complex<double>> amps(
-            static_cast<std::size_t>(kNumTrapStates));
-        for (int s = 0; s < kNumTrapStates; ++s) {
-            amps[static_cast<std::size_t>(s)] =
-                atom_.project_state_amplitude(engine_, s);
-        }
-        const std::vector<ses::FreqGroup> groups =
-            ses::group_by_gap(atom_.grouped_channels(), ses::kFreqGroupTol);
-        std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        const double trial_dt = decay_accum_dt_;
-        decay_accum_dt_ = 0.0;
-        const ses::IntervalResult res = ses::collective_decay_interval(
-            groups, std::move(amps), trial_dt, [&] { return uniform(rng_); });
-        if (res.jumps.empty()) {
-            return;
-        }
-        std::vector<int> states;
-        std::vector<std::complex<double>> cs;
-        for (int s = 0; s < kNumTrapStates; ++s) {
-            if (std::norm(res.c[static_cast<std::size_t>(s)]) > 1e-18) {
-                states.push_back(s);
-                cs.push_back(res.c[static_cast<std::size_t>(s)]);
-            }
-        }
-        const int dom = res.jumps.back().dominant_to;
-        if (!superpose_into_psi(atom_, states, cs) && dom >= 0) {
-            atom_.collapse_onto(engine_, dom);  // guard fallback
-        }
-        flush_collapse_error(dom >= 0 ? dom : 0);
-        flash_ticks_ = kTrapFlashTicks;
-        for (const ses::IntervalJump& j : res.jumps) {
-            ++photon_count_;
-            photon_streaks_.spawn(j.rec, j.gap_e);
-            last_jump_ = strf(
-                "hw -> {}",
-                kTrapStates[static_cast<std::size_t>(j.dominant_to)].name);
-            std::fprintf(
-                stderr,
-                "trap decay: collective jump -> %s (photon #%lld, t=%.1f au)\n",
-                kTrapStates[static_cast<std::size_t>(j.dominant_to)].name,
-                photon_count_, sim_.time() + gpu_time_);
-        }
-        title_dirty_ = true;
+        run_collective_decay_trial(atom_, 0);
+    }
+
+    void on_decay_jump(const ses::IntervalJump& j) override {
+        const char* name =
+            kTrapStates[static_cast<std::size_t>(j.dominant_to)].name;
+        last_jump_ = strf("hw -> {}", name);
+        std::fprintf(
+            stderr,
+            "trap decay: collective jump -> %s (photon #%lld, t=%.1f au)\n",
+            name, photon_count_, sim_.time() + gpu_time_);
     }
 
 private:
@@ -209,7 +183,7 @@ private:
             return false;
         }
         if (!atom_.radial_ready()) {
-            const ses::RadialGrid rg{kTrapBox, 3999};
+            const ses::RadialGrid rg{kTrapBox, kTrapRadialSamples};
             std::vector<double> vr(static_cast<std::size_t>(rg.n));
             for (int i = 0; i < rg.n; ++i) {
                 const double r = rg.r(i);
@@ -224,14 +198,14 @@ private:
                 ses::build_radial_bin_index(sim_.grid(), atom_.radial_grid());
             proj_ready_ = engine_.set_projection_index(
                 bin_idx.sorted_cell, bin_idx.bin_off, atom_.radial_grid().n,
-                atom_.radial_grid().h(), 3);  // l_max = 3 (N <= 3 ladder)
+                atom_.radial_grid().h(), kTrapLMax);
             if (!proj_ready_) {
                 std::fprintf(stderr, "trap: projection index setup failed -- "
                                      "measurement/decay disabled\n");
                 return false;
             }
         }
-        return atom_.prepare_manifold_cache(engine_, kTrapGammaDisplay);
+        return atom_.prepare_manifold_cache(engine_, kBaseGammaDisplay);
     }
 
     void toggle_decay() {
@@ -260,8 +234,11 @@ private:
         if (!ensure_manifold()) {
             return;
         }
-        static constexpr int kCycle[] = {3, 7, 4, 12};  // 1p_z 2d_z2 2s 3p_z
-        const int idx = kCycle[excite_cycle_++ % 4];
+        static constexpr int kCycle[] = {kTrap1PZ, kTrap2DZ2, kTrap2S,
+                                         kTrap3PZ};
+        const int idx = kCycle[static_cast<std::size_t>(excite_cycle_) %
+                               std::size(kCycle)];
+        ++excite_cycle_;
         atom_.collapse_onto(engine_, idx);
         flush_collapse_error(idx);
         cpu_is_truth_ = false;
@@ -270,29 +247,11 @@ private:
         title_dirty_ = true;
     }
 
-    // Post-collapse eigenstate-error flush (fixed budget; mirrors atom policy).
-    void flush_collapse_error(int target) {
-        if (!ensure_relax_tables()) {
-            return;
-        }
-        engine_.relax_step(target == 0 ? kTrapFlushStepsGround
-                                       : kTrapFlushSteps);
-        if (!decay_on_) {
-            engine_.release_relax_tables();
-        }
-    }
+    // flush_collapse_error / decay state: BaseDirector's.
 
-    // Collapse onto untracked-ladder complement (N > 3).
     ses_shell::AtomModel atom_;
     bool proj_ready_ = false;
-    bool decay_on_ = false;
     bool pending_measure_ = false;
-    double decay_accum_dt_ = 0.0;
-    long long photon_count_ = 0;
-    int excite_cycle_ = 0;
-    int flash_ticks_ = 0;
-    std::string last_jump_;
-    std::string last_measure_;
 };
 
 }  // namespace ses_shell

@@ -11,7 +11,7 @@ module;
 #include <vector>
 export module ses.scenario.qpc2d_director;
 export import ses.scenario.lattice2d_director;
-import ses.heightfield;
+import ses.potential;
 import ses.propagator;
 import ses.field;
 import ses.parallel;
@@ -79,7 +79,8 @@ class Qpc2DDirector final : public Lattice2DDirectorBase, public QpcApi {
 public:
     Qpc2DDirector()
         : Lattice2DDirectorBase(kQp2dBox, kQp2dN, kQp2dNz, kQp2dZHalf) {
-        build_cap();
+        cap_ = ses::quadratic_cap_mask(phys_grid_, kQp2dCapW, kQp2dCapW0,
+                                       kQp2dDt);
         rebuild_prop();
         fire();
     }
@@ -120,8 +121,7 @@ public:
                 psi_(i, j, 0) =
                     std::exp(-dx * dx / (4.0 * kQp2dSigX * kQp2dSigX) -
                              y * y / (4.0 * kQp2dSigY * kQp2dSigY)) *
-                    std::complex<double>{std::cos(kQp2dK0 * x),
-                                        std::sin(kQp2dK0 * x)};
+                    std::polar(1.0, kQp2dK0 * x);
             }
         });
         ses::normalize(psi_);
@@ -151,13 +151,6 @@ public:
 
     // ---- STM-style surface display ----
     bool cloud() const override { return false; }
-    const ses::Mesh& mesh() const override { return hf_.mesh; }
-    const std::vector<ses::Rgb>& colors() const override {
-        return hf_.colors;
-    }
-    bool take_mesh_dirty() override {
-        return std::exchange(mesh_dirty_, false);
-    }
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.95; }
     double default_camera_distance() const override { return 110.0; }
@@ -180,19 +173,7 @@ public:
 
 protected:
     void rebuild_display() override {
-        double cur = 0.0;
-        for (int j = 0; j < kQp2dN; ++j) {
-            for (int i = 0; i < kQp2dN; ++i) {
-                cur = std::max(cur, std::norm(psi_(i, j, 0)));
-            }
-        }
-        disp_peak_ = disp_peak_ <= 0.0 ? cur
-                                       : std::max(cur, 0.98 * disp_peak_);
-        if (disp_peak_ > 0.0) {
-            hf_ = ses::heightfield_surface(psi_, kQp2dSurfH, disp_peak_,
-                                           kQp2dMeshStride);
-            mesh_dirty_ = true;
-        }
+        rebuild_surface(psi_, kQp2dSurfH, kQp2dMeshStride);
     }
 
     // right-of-wall CAP absorption tallied as transmitted fraction. The GPU
@@ -207,7 +188,7 @@ protected:
             for (int s = 0; s < n; ++s) {
                 eng_.step(1);
                 eng_.readback(rb_);
-                store_readback();
+                unpack_interleaved(rb_.data(), psi_.data());
                 apply_cap_and_tally();
                 eng_.upload_state(psi_.data());  // psi_ damped: re-sync
             }
@@ -222,14 +203,6 @@ protected:
     }
 
 private:
-    void store_readback() {
-        std::vector<std::complex<double>>& d = psi_.data();
-        for (std::size_t i = 0; i < d.size(); ++i) {
-            d[i] = std::complex<double>{static_cast<double>(rb_[2 * i]),
-                                        static_cast<double>(rb_[2 * i + 1])};
-        }
-    }
-
     void apply_cap_and_tally() {
         const double cell = phys_grid_.x.spacing() * phys_grid_.y.spacing() *
                             phys_grid_.z.spacing();
@@ -247,30 +220,6 @@ private:
         }
         transmitted_ += gained;
     }
-    void build_cap() {
-        cap_.assign(static_cast<std::size_t>(phys_grid_.size()), 1.0);
-        for (int j = 0; j < kQp2dN; ++j) {
-            const double y = phys_grid_.y.coord(j);
-            const double dy = std::min(y - phys_grid_.y.xmin,
-                                       phys_grid_.y.xmax - y);
-            for (int i = 0; i < kQp2dN; ++i) {
-                const double x = phys_grid_.x.coord(i);
-                const double dx = std::min(x - phys_grid_.x.xmin,
-                                           phys_grid_.x.xmax - x);
-                double w = 0.0;
-                if (dx < kQp2dCapW) {
-                    const double t = 1.0 - dx / kQp2dCapW;
-                    w += kQp2dCapW0 * t * t;
-                }
-                if (dy < kQp2dCapW) {
-                    const double t = 1.0 - dy / kQp2dCapW;
-                    w += kQp2dCapW0 * t * t;
-                }
-                cap_[static_cast<std::size_t>(
-                    phys_grid_.flat(i, j, 0))] = std::exp(-w * kQp2dDt);
-            }
-        }
-    }
 
     void rebuild_prop() {
         v_ = qpc_potential(phys_grid_, gap_, kQp2dWallLo, kQp2dWallHi,
@@ -281,26 +230,10 @@ private:
             eng_.set_potential(v_);  // gap changed: refresh the GPU potential
         }
         wall_curve_.clear();
-        auto slab = [&](double y0, double y1) {
-            const float x0 = static_cast<float>(kQp2dWallLo);
-            const float x1 = static_cast<float>(kQp2dWallHi);
-            const float a = static_cast<float>(y0);
-            const float b = static_cast<float>(y1);
-            if (!wall_curve_.empty()) {
-                const std::size_t nn = wall_curve_.size();
-                wall_curve_.push_back(wall_curve_[nn - 3]);
-                wall_curve_.push_back(wall_curve_[nn - 2]);
-                wall_curve_.push_back(wall_curve_[nn - 1]);
-                wall_curve_.push_back(x0);
-                wall_curve_.push_back(a);
-                wall_curve_.push_back(0.0f);
-            }
-            const float quad[12] = {x0, a, 0.0f, x1, a, 0.0f,
-                                    x0, b, 0.0f, x1, b, 0.0f};
-            wall_curve_.insert(wall_curve_.end(), quad, quad + 12);
-        };
-        slab(-kQp2dBox, -0.5 * gap_);
-        slab(0.5 * gap_, kQp2dBox);
+        strip_wall_quad(wall_curve_, kQp2dWallLo, kQp2dWallHi, -kQp2dBox,
+                        -0.5 * gap_);
+        strip_wall_quad(wall_curve_, kQp2dWallLo, kQp2dWallHi, 0.5 * gap_,
+                        kQp2dBox);
     }
 
     std::vector<double> v_;
@@ -310,10 +243,7 @@ private:
     bool eng_ok_ = false;
     bool eng_dirty_ = true;
     std::vector<float> rb_;                        // readback scratch
-    ses::Heightfield hf_;
     std::vector<float> wall_curve_;
-    bool mesh_dirty_ = false;
-    double disp_peak_ = 0.0;
     double gap_ = kQp2dGap;
     double transmitted_ = 0.0;
 };

@@ -26,15 +26,14 @@ constexpr double kDw1dBarrierMax = 0.30;
 constexpr double kDw1dDt = 0.04;
 constexpr double kDw1dRScale = 25.0;
 constexpr double kDw1dEScale = 65.0;   // barrier 0.12 -> ~8 Bohr tall
-constexpr double kDw1dYClamp = 1e30;   // walls leave the frame honestly
+constexpr double kDw1dYClamp = kNoYClamp;  // walls leave the frame honestly
 
 class DoubleWell1DDirector final : public Line1DDirector, public DoubleWellApi {
 public:
     DoubleWell1DDirector()
-        : Line1DDirector(ses::Grid1D{-kDw1dBox, kDw1dBox, kDw1dPoints},
-                         ses::double_well_potential(
-                             ses::Grid1D{-kDw1dBox, kDw1dBox, kDw1dPoints},
-                             kDw1dBarrier, kDw1dA),
+        : Line1DDirector(scene_grid(),
+                         ses::double_well_potential(scene_grid(), kDw1dBarrier,
+                                                    kDw1dA),
                          kDw1dDt, kDw1dRScale, kDw1dEScale, kDw1dYClamp) {
         prepare_left();
     }
@@ -76,16 +75,18 @@ protected:
     void after_reset() override { after_batch(); }
 
 private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{-kDw1dBox, kDw1dBox, kDw1dPoints};
+    }
+
     // Both eigenstates positive near xmin (solver sign convention) -> sum
     // concentrates LEFT.
     void prepare_left() {
         const std::vector<ses::Bound1D> s =
             ses::bound_states_1d(grid1d_, potential_, 2);
         de_ = s[1].energy - s[0].energy;
-        ses::Field1D psi{grid1d_};
-        for (int i = 0; i < grid1d_.n; ++i) {
-            psi[i] = s[0].psi[i] + s[1].psi[i];
-        }
+        ses::Field1D psi = s[0].psi;
+        axpy(psi, 1.0, s[1].psi);
         ses::normalize(psi);
         set_state(std::move(psi));
         after_batch();

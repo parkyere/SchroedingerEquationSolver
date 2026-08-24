@@ -48,21 +48,16 @@ private:
         std::vector<double> veff = v;
         const double c = bfield * bfield / 8.0;
         if (c != 0.0) {
-            for (int k = 0; k < g.z.n; ++k) {
-                for (int j = 0; j < g.y.n; ++j) {
-                    for (int i = 0; i < g.x.n; ++i) {
-                        const double coord[3] = {g.x.coord(i), g.y.coord(j),
-                                                 g.z.coord(k)};
-                        double perp2 = 0.0;
-                        for (int a = 0; a < 3; ++a) {
-                            if (a != axis) {
-                                perp2 += coord[a] * coord[a];
-                            }
-                        }
-                        veff[static_cast<std::size_t>(g.flat(i, j, k))] += c * perp2;
+            for_each_cell(g, [&](int i, int j, int k, int flat) {
+                const double coord[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
+                double perp2 = 0.0;
+                for (int a = 0; a < 3; ++a) {
+                    if (a != axis) {
+                        perp2 += coord[a] * coord[a];
                     }
                 }
-            }
+                veff[static_cast<std::size_t>(flat)] += c * perp2;
+            });
         }
         return veff;
     }

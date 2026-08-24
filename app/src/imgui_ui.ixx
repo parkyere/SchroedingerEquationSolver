@@ -5,6 +5,7 @@ module;
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
+#include <numbers>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,6 +16,11 @@ export import ses.scenario;
 export namespace app {
 
 constexpr double kHaToEv = ses_shell::kHaToEv;
+// CODATA atomic unit of electric field, E_h / (e a0).
+constexpr double kAuEfieldToVm = 5.14220674e11;
+
+constexpr const char* kAxisNames[3] = {"x", "y", "z"};
+constexpr const char* kBAxisNames[3] = {"Bx", "By", "Bz"};
 
 struct UiState {
     float efield = 0.0f;    // au; 0 = off
@@ -51,7 +57,7 @@ struct UiState {
 };
 
 inline void draw_axis_cycle(const char* id, int& axis) {
-    const char* name = axis == 0 ? "x" : (axis == 1 ? "y" : "z");
+    const char* name = kAxisNames[axis];
     ImGui::PushID(id);
     if (ImGui::Button(name)) {
         axis = (axis + 1) % 3;
@@ -61,8 +67,7 @@ inline void draw_axis_cycle(const char* id, int& axis) {
 
 template <typename ShellT>
 void draw_cross_section(ShellT& shell, UiState& ui) {
-    (void)shell;
-    const double box = 80.0;  // Bohr half-extent (+-80 grid)
+    const double box = shell.box_half_extent();  // Bohr, live grid
     ImGui::Checkbox("Clip plane", &ui.clip_on);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Cut the cloud open along a plane through the "
@@ -147,6 +152,27 @@ void draw_time_scale(ShellT& shell, UiState& ui) {
                           "dt -- accuracy is unchanged).\nWhen the GPU "
                           "saturates, the frame rate drops instead.");
     }
+}
+
+// Shared panel chrome: picker + perf on top, time scale + wrapped status at
+// the bottom (hydrogen keeps a custom tail and only uses begin_panel).
+template <typename ShellT>
+void begin_panel(ShellT& shell) {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
+    draw_scene_picker(shell);
+    draw_perf_readout(shell);
+}
+
+template <typename ShellT>
+void end_panel(ShellT& shell, UiState& ui) {
+    draw_time_scale(shell, ui);
+    ImGui::Separator();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(shell.status_text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::End();
 }
 
 // Shell-wide view controls that mirror the global hotkeys F and [ ]: every
@@ -248,10 +274,8 @@ inline void draw_spectrometer(ses_shell::HydrogenApi& hy) {
             int distinct = 0;
             for (int i = 0; i < n; ++i) {
                 const int c = static_cast<int>(hy.spectro_ev(i) * 100.0 + 0.5);
-                int k = 0;
-                while (k < distinct && cents[k] != c) {
-                    ++k;
-                }
+                const int k = static_cast<int>(
+                    std::find(cents, cents + distinct, c) - cents);
                 if (k == distinct && distinct < 64) {
                     cents[distinct] = c;
                     counts[distinct] = 0;
@@ -279,11 +303,7 @@ inline void draw_spectrometer(ses_shell::HydrogenApi& hy) {
 
 template <typename ShellT>
 void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
 
     // Rows kept to <=4 buttons so they fit the 430 px window without the
     // user having to widen it (5 clipped "Face z" off the edge).
@@ -345,11 +365,8 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
     // Both static fields: SIGNED slider (either direction is a real field)
     // + an axis button. Sliders read director truth first so R / Laser
     // zeroing a field never leaves a stale knob (cf. time scale).
-    const auto axis_label = [](int a) {
-        return a == 0 ? "x" : (a == 1 ? "y" : "z");
-    };
     ImGui::PushID("efield");
-    if (ImGui::Button(axis_label(hy.efield_axis()))) {
+    if (ImGui::Button(kAxisNames[hy.efield_axis()])) {
         hy.toggle_efield_axis();
     }
     if (ImGui::IsItemHovered()) {
@@ -369,11 +386,11 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
     ImGui::PopID();
     if (ui.efield != 0.0f) {
         ImGui::SameLine();
-        ImGui::Text("%+.1e V/m", ui.efield * 5.14220674e11);
+        ImGui::Text("%+.1e V/m", ui.efield * kAuEfieldToVm);
     }
 
     ImGui::PushID("bfield");
-    if (ImGui::Button(axis_label(hy.bfield_axis()))) {
+    if (ImGui::Button(kAxisNames[hy.bfield_axis()])) {
         hy.toggle_bfield_axis();
     }
     if (ImGui::IsItemHovered()) {
@@ -423,11 +440,7 @@ template <typename ShellT>
 void draw_generic_panel(ShellT& shell, UiState& ui,
                         std::initializer_list<std::pair<const char*, char>>
                             scene_keys) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Real time (1)")) shell.set_real_time();
     ImGui::SameLine();
     for (const auto& k : scene_keys) {
@@ -443,12 +456,7 @@ void draw_generic_panel(ShellT& shell, UiState& ui,
     ImGui::SameLine();
     if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
     draw_view_controls(shell);
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 // State-decomposition spectrum |c_n|^2 over the eigenbasis, drawn like the
@@ -491,11 +499,7 @@ void draw_state_spectrometer(ApiT& api) {
 
 template <typename ShellT>
 void draw_ladder1d_panel(ShellT& shell, UiState& ui, ses_shell::Ladder1dApi& ld) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Ladder up (U)")) shell.press('U');
     ImGui::SameLine();
     if (ImGui::Button("Ladder down (D)")) shell.press('D');
@@ -553,23 +557,14 @@ void draw_ladder1d_panel(ShellT& shell, UiState& ui, ses_shell::Ladder1dApi& ld)
                           "n <= %d.",
                           ld.max_level());
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
     draw_state_spectrometer(ld);  // right-side vertical strip (own window)
 }
 
 template <typename ShellT>
 void draw_doublewell_panel(ShellT& shell, UiState& ui,
                            ses_shell::DoubleWellApi& dw) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Reset (R)")) shell.reset_simulation();
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
@@ -589,21 +584,12 @@ void draw_doublewell_panel(ShellT& shell, UiState& ui,
                           "(currently dE = %.2e eV).",
                           dw.splitting() * kHaToEv);
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     const int nmo = ml.state_count();
     ImGui::TextUnformatted("Known orbitals (exact prolate-spheroidal atlas):");
     if (ImGui::BeginListBox("##h2p_orbitals", ImVec2(-1.0f, 160.0f))) {
@@ -639,21 +625,12 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
         ImGui::Text("R fixed at equilibrium; E_total(1sigma_g) = %.2f eV",
                     (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_benzene_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Ground (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Excited 1 (3)")) shell.press('3');
@@ -675,22 +652,13 @@ void draw_benzene_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) 
             ImGui::Text("E2 = %.2f eV", ml.energy(2) * kHaToEv);
         }
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_doubleslit_panel(ShellT& shell, UiState& ui,
                            ses_shell::SlitApi& sl) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Fire electron (2)")) shell.press('2');
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("One electron per shot; the screen keeps\n"
@@ -718,7 +686,7 @@ void draw_doubleslit_panel(ShellT& shell, UiState& ui,
     }
     if (ImGui::SliderFloat("Solenoid flux (pi)", &ui.ds_flux_pi, -2.0f, 2.0f,
                            "%.2f")) {
-        sl.set_flux(static_cast<double>(ui.ds_flux_pi) * 3.14159265f);
+        sl.set_flux(static_cast<double>(ui.ds_flux_pi) * std::numbers::pi);
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Aharonov-Bohm: a solenoid behind the wall "
@@ -727,21 +695,12 @@ void draw_doubleslit_panel(ShellT& shell, UiState& ui,
                           "everywhere the electron goes.");
     }
     ImGui::Text("Transmitted: %.1f%%", 100.0 * sl.transmitted_fraction());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_landau_panel(ShellT& shell, UiState& ui, ses_shell::LandauApi& la) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Refire (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Ladder +B (3)")) shell.press('3');
@@ -775,21 +734,12 @@ void draw_landau_panel(ShellT& shell, UiState& ui, ses_shell::LandauApi& la) {
     }
     ImGui::Text("omega_c = %.2f, r = %.2f, <n> = %.1f", la.omega_c(),
                 la.radius_pred(), la.mean_n());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_bloch_panel(ShellT& shell, UiState& ui, ses_shell::BlochApi& bl) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Refire (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
@@ -822,21 +772,12 @@ void draw_bloch_panel(ShellT& shell, UiState& ui, ses_shell::BlochApi& bl) {
     } else {
         ImGui::Text("No tilt: band-limited dispersion only");
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_corral_panel(ShellT& shell, UiState& ui, ses_shell::CorralApi& cr) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Ground (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Next state (3)")) shell.press('3');
@@ -864,21 +805,12 @@ void draw_corral_panel(ShellT& shell, UiState& ui, ses_shell::CorralApi& cr) {
     }
     ImGui::Text("States %d%s, P(inside) = %.2f", cr.captured(),
                 cr.relaxing() ? " (relaxing...)" : "", cr.confinement());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_spin_panel(ShellT& shell, UiState& ui, ses_shell::SpinApi& sp) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Reset (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("pi/2 (3)")) shell.press('3');
@@ -906,10 +838,9 @@ void draw_spin_panel(ShellT& shell, UiState& ui, ses_shell::SpinApi& sp) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
-    const char* axes[3] = {"Bx", "By", "Bz"};
     for (int a = 0; a < 3; ++a) {
         float v = static_cast<float>(sp.b(a));
-        if (ImGui::SliderFloat(axes[a], &v, -1.0f, 1.0f, "%.2f")) {
+        if (ImGui::SliderFloat(kBAxisNames[a], &v, -1.0f, 1.0f, "%.2f")) {
             sp.set_b(a, static_cast<double>(v));
         }
     }
@@ -926,21 +857,12 @@ void draw_spin_panel(ShellT& shell, UiState& ui, ses_shell::SpinApi& sp) {
     }
     ImGui::Text("<s> = (%+.2f, %+.2f, %+.2f)   echo peak %.2f",
                 sp.bloch_x(), sp.bloch_y(), sp.bloch_z(), sp.echo_peak());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_spins_panel(ShellT& shell, UiState& ui, ses_shell::SpinsApi& sn) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Random (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Ferro seed (3)")) shell.press('3');
@@ -983,10 +905,9 @@ void draw_spins_panel(ShellT& shell, UiState& ui, ses_shell::SpinsApi& sn) {
                           "forever;\n> 0 = the lattice anneals into its "
                           "ordered ground.");
     }
-    const char* axes[3] = {"Bx", "By", "Bz"};
     for (int a = 0; a < 3; ++a) {
         float v = static_cast<float>(sn.b(a));
-        if (ImGui::SliderFloat(axes[a], &v, -1.0f, 1.0f, "%.2f")) {
+        if (ImGui::SliderFloat(kBAxisNames[a], &v, -1.0f, 1.0f, "%.2f")) {
             sn.set_b(a, static_cast<double>(v));
         }
     }
@@ -996,22 +917,13 @@ void draw_spins_panel(ShellT& shell, UiState& ui, ses_shell::SpinsApi& sn) {
         ImGui::SetTooltip("mean |<s>| < 1 = the sites are ENTANGLED "
                           "(exact only).");
     }
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_anderson_panel(ShellT& shell, UiState& ui,
                          ses_shell::AndersonApi& an) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Refire (2)")) an.refire();
     ImGui::SameLine();
     if (ImGui::Button("New landscape (5)")) an.reroll();
@@ -1029,21 +941,12 @@ void draw_anderson_panel(ShellT& shell, UiState& ui,
     }
     ImGui::Text("transmitted %.1f%%   on stage %.1f%%",
                 100.0 * an.transmitted(), 100.0 * an.survived());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_qpc_panel(ShellT& shell, UiState& ui, ses_shell::QpcApi& qp) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Fire (2)")) qp.fire();
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
@@ -1059,22 +962,13 @@ void draw_qpc_panel(ShellT& shell, UiState& ui, ses_shell::QpcApi& qp) {
     }
     ImGui::Text("channels open: %d   transmitted: %.1f%%",
                 qp.open_channels(), 100.0 * qp.transmitted());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_rutherford_panel(ShellT& shell, UiState& ui,
                            ses_shell::RutherfordApi& rf) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Fire alpha (2)")) rf.refire();
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
@@ -1102,22 +996,13 @@ void draw_rutherford_panel(ShellT& shell, UiState& ui,
     }
     ImGui::Text("r_min = 2Z/E = %.1f bohr   backscattered: %.0f%%",
                 rf.turning_point(), 100.0 * rf.backscattered_fraction());
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_billiard_panel(ShellT& shell, UiState& ui,
                          ses_shell::BilliardApi& bl) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Fire packet (2)")) bl.fire();
     ImGui::SameLine();
     if (ImGui::Button(bl.stadium() ? "Circle (5)" : "Stadium (5)")) {
@@ -1140,21 +1025,12 @@ void draw_billiard_panel(ShellT& shell, UiState& ui,
     ImGui::Text("center/interior avg: %.2f", bl.avg_center_fraction());
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
 }
 
 template <typename ShellT>
 void draw_qdot_panel(ShellT& shell, UiState& ui, ses_shell::QdotApi& qd) {
-    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_NoCollapse);
-    draw_scene_picker(shell);
-    draw_perf_readout(shell);
+    begin_panel(shell);
     if (ImGui::Button("Relax ground (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Displace (F)")) shell.press('F');
@@ -1192,12 +1068,7 @@ void draw_qdot_panel(ShellT& shell, UiState& ui, ses_shell::QdotApi& qd) {
     ImGui::Text("E = %.3f eV vs hbar*Omega = %.3f eV%s",
                 qd.energy_meas() * kHaToEv, qd.energy_pred() * kHaToEv,
                 qd.relaxing() ? " (relaxing...)" : "");
-    draw_time_scale(shell, ui);
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(shell.status_text().c_str());
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    end_panel(shell, ui);
     draw_state_spectrometer(qd);  // right-side vertical strip (own window)
 }
 

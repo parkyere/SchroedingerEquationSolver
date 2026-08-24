@@ -1,6 +1,4 @@
 module;
-#include <numbers>
-#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -22,26 +20,14 @@ struct SpinLattice {
     std::vector<Spinor> s;
 };
 
-inline Spinor spinor_from_bloch(double x, double y, double z) {
-    Spinor s;
-    const double th = std::acos(std::clamp(z, -1.0, 1.0));
-    const double axn = std::hypot(-y, x);
-    if (axn > 1e-12) {
-        spin_rotate(s, -y / axn, x / axn, 0.0, th);
-    } else if (z < 0.0) {
-        spin_rotate(s, 1.0, 0.0, 0.0, std::numbers::pi);
-    }
-    return s;
-}
-
 // Snapshot all Bloch vectors first: neighbor fields carry no sweep-order bias.
 inline void spinlattice_step(SpinLattice& l, double bx, double by,
                              double bz, double j, double alpha,
                              double dt) {
     const std::size_t count = l.s.size();
-    std::vector<double> n(3 * count);
+    std::vector<Vec3d> n(count);
     for (std::size_t i = 0; i < count; ++i) {
-        bloch_vector(l.s[i], &n[3 * i], &n[3 * i + 1], &n[3 * i + 2]);
+        n[i] = bloch_vector(l.s[i]);
     }
     // Strang-symmetrized checkerboard (bipartite): 2nd order, cancels leapfrog skew.
     auto sweep = [&](int parity, double h) {
@@ -65,38 +51,31 @@ inline void spinlattice_step(SpinLattice& l, double bx, double by,
                     }
                     const std::size_t q =
                         static_cast<std::size_t>(qy * l.nx + qx);
-                    ex -= 2.0 * j * n[3 * q];
-                    ey -= 2.0 * j * n[3 * q + 1];
-                    ez -= 2.0 * j * n[3 * q + 2];
+                    ex -= 2.0 * j * n[q].x;
+                    ey -= 2.0 * j * n[q].y;
+                    ez -= 2.0 * j * n[q].z;
                 }
                 // Project out the n-parallel field: no torque but would tilt the axis.
-                const double nb = n[3 * i] * ex + n[3 * i + 1] * ey +
-                                  n[3 * i + 2] * ez;
-                double px = 0.0;
-                double py = 0.0;
-                double pz = 0.0;
-                spin_step(l.s[i], ex - nb * n[3 * i],
-                          ey - nb * n[3 * i + 1],
-                          ez - nb * n[3 * i + 2], h);
-                bloch_vector(l.s[i], &px, &py, &pz);
+                const double nb = n[i].x * ex + n[i].y * ey + n[i].z * ez;
+                spin_step(l.s[i], ex - nb * n[i].x, ey - nb * n[i].y,
+                          ez - nb * n[i].z, h);
+                Vec3d p = bloch_vector(l.s[i]);
                 if (alpha > 0.0) {
                     // Gilbert drift off the post-rotation vector: n(n.B) - B = -B_perp.
-                    const double pb = px * ex + py * ey + pz * ez;
-                    px += alpha * h * (px * pb - ex);
-                    py += alpha * h * (py * pb - ey);
-                    pz += alpha * h * (pz * pb - ez);
+                    const double pb = p.x * ex + p.y * ey + p.z * ez;
+                    p.x += alpha * h * (p.x * pb - ex);
+                    p.y += alpha * h * (p.y * pb - ey);
+                    p.z += alpha * h * (p.z * pb - ez);
                     const double nn =
-                        std::sqrt(px * px + py * py + pz * pz);
+                        std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
                     if (nn > 1e-12) {
-                        px /= nn;
-                        py /= nn;
-                        pz /= nn;
-                        l.s[i] = spinor_from_bloch(px, py, pz);
+                        p.x /= nn;
+                        p.y /= nn;
+                        p.z /= nn;
+                        l.s[i] = spinor_from_bloch(p.x, p.y, p.z);
                     }
                 }
-                n[3 * i] = px;
-                n[3 * i + 1] = py;
-                n[3 * i + 2] = pz;
+                n[i] = p;
             }
         }
     };
@@ -105,24 +84,18 @@ inline void spinlattice_step(SpinLattice& l, double bx, double by,
     sweep(0, 0.5 * dt);
 }
 
-inline void lattice_magnetization(const SpinLattice& l, double* x,
-                                  double* y, double* z) {
+inline Vec3d lattice_magnetization(const SpinLattice& l) {
     double sx = 0.0;
     double sy = 0.0;
     double sz = 0.0;
     for (const Spinor& s : l.s) {
-        double px = 0.0;
-        double py = 0.0;
-        double pz = 0.0;
-        bloch_vector(s, &px, &py, &pz);
-        sx += px;
-        sy += py;
-        sz += pz;
+        const Vec3d p = bloch_vector(s);
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
     }
     const double inv = l.s.empty() ? 0.0 : 1.0 / l.s.size();
-    *x = sx * inv;
-    *y = sy * inv;
-    *z = sz * inv;
+    return Vec3d{sx * inv, sy * inv, sz * inv};
 }
 
 inline double lattice_staggered(const SpinLattice& l) {
@@ -134,13 +107,10 @@ inline double lattice_staggered(const SpinLattice& l) {
             const std::size_t i =
                 static_cast<std::size_t>(yy * l.nx + xx);
             const double sgn = ((xx + yy) & 1) != 0 ? -1.0 : 1.0;
-            double px = 0.0;
-            double py = 0.0;
-            double pz = 0.0;
-            bloch_vector(l.s[i], &px, &py, &pz);
-            sx += sgn * px;
-            sy += sgn * py;
-            sz += sgn * pz;
+            const Vec3d p = bloch_vector(l.s[i]);
+            sx += sgn * p.x;
+            sy += sgn * p.y;
+            sz += sgn * p.z;
         }
     }
     const double inv = l.s.empty() ? 0.0 : 1.0 / l.s.size();
@@ -150,29 +120,26 @@ inline double lattice_staggered(const SpinLattice& l) {
 // Mean-field energy E = -J sum_bonds n_i.n_j + 1/2 B . sum_i n_i.
 inline double lattice_energy(const SpinLattice& l, double bx, double by,
                              double bz, double j) {
-    std::vector<double> n(3 * l.s.size());
+    std::vector<Vec3d> n(l.s.size());
     for (std::size_t i = 0; i < l.s.size(); ++i) {
-        bloch_vector(l.s[i], &n[3 * i], &n[3 * i + 1], &n[3 * i + 2]);
+        n[i] = bloch_vector(l.s[i]);
     }
     double e = 0.0;
     for (int yy = 0; yy < l.ny; ++yy) {
         for (int xx = 0; xx < l.nx; ++xx) {
             const std::size_t i =
                 static_cast<std::size_t>(yy * l.nx + xx);
-            e += 0.5 * (bx * n[3 * i] + by * n[3 * i + 1] +
-                        bz * n[3 * i + 2]);
+            e += 0.5 * (bx * n[i].x + by * n[i].y + bz * n[i].z);
             if (xx + 1 < l.nx) {
                 const std::size_t q = i + 1;
-                e -= j * (n[3 * i] * n[3 * q] +
-                          n[3 * i + 1] * n[3 * q + 1] +
-                          n[3 * i + 2] * n[3 * q + 2]);
+                e -= j * (n[i].x * n[q].x + n[i].y * n[q].y +
+                          n[i].z * n[q].z);
             }
             if (yy + 1 < l.ny) {
                 const std::size_t q =
                     i + static_cast<std::size_t>(l.nx);
-                e -= j * (n[3 * i] * n[3 * q] +
-                          n[3 * i + 1] * n[3 * q + 1] +
-                          n[3 * i + 2] * n[3 * q + 2]);
+                e -= j * (n[i].x * n[q].x + n[i].y * n[q].y +
+                          n[i].z * n[q].z);
             }
         }
     }

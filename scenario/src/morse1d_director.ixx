@@ -25,15 +25,14 @@ constexpr double kMo1dX0 = -30.0;   // well minimum
 constexpr double kMo1dDt = 0.04;
 constexpr double kMo1dRScale = 40.0;
 constexpr double kMo1dEScale = 30.0;  // d = 0.3 -> plateau ~9 Bohr high
-constexpr double kMo1dYClamp = 1e30;
+constexpr double kMo1dYClamp = kNoYClamp;
 
 class Morse1DDirector final : public Line1DDirector, public MorseApi {
 public:
     Morse1DDirector()
-        : Line1DDirector(ses::Grid1D{-kMo1dBox, kMo1dBox, kMo1dPoints},
-                         ses::morse_potential(
-                             ses::Grid1D{-kMo1dBox, kMo1dBox, kMo1dPoints},
-                             kMo1dD, kMo1dAlpha, kMo1dX0),
+        : Line1DDirector(scene_grid(),
+                         ses::morse_potential(scene_grid(), kMo1dD, kMo1dAlpha,
+                                              kMo1dX0),
                          kMo1dDt, kMo1dRScale, kMo1dEScale, kMo1dYClamp) {
         // drop box-discretized continuum above D
         std::vector<ses::Bound1D> s =
@@ -53,13 +52,13 @@ public:
         return ses::mean_energy(psi_, potential_);
     }
     int bound_count() const override { return static_cast<int>(bound_.size()); }
-    bool jump(bool up) override {
+    bool jump(Rung r) override {
         // pair state (level_ < 0) jumps from base_
         const int from = level_ >= 0 ? level_ : base_;
-        const int target = from + (up ? 1 : -1);
+        const int target = from + (r == Rung::Up ? 1 : -1);
         if (target < 0 || target >= bound_count()) {
-            note_ = up ? "top bound level (dissociation above)"
-                       : "already the ground state";
+            note_ = r == Rung::Up ? "top bound level (dissociation above)"
+                                  : "already the ground state";
             title_dirty_ = true;
             return false;
         }
@@ -73,26 +72,13 @@ public:
     }
 
     bool handle_key(char key) override {
-        if (key == 'U') {
-            jump(true);
-            return true;
+        switch (key) {
+            case 'U': jump(Rung::Up); return true;
+            case 'D': jump(Rung::Down); return true;
+            case 'S': pair_superposition(); return true;
+            case '2': reset_simulation(); return true;
+            default: return false;
         }
-        if (key == 'D') {
-            jump(false);
-            return true;
-        }
-        if (key == 'S') {
-            pair_superposition();
-            return true;
-        }
-        if (key == '2') {
-            level_ = 0;
-            base_ = 0;
-            note_.clear();
-            replace_state(clone(0));
-            return true;
-        }
-        return false;
     }
 
     double default_camera_azimuth() const override { return 0.3; }
@@ -137,6 +123,10 @@ protected:
     }
 
 private:
+    static ses::Grid1D scene_grid() {
+        return ses::Grid1D{-kMo1dBox, kMo1dBox, kMo1dPoints};
+    }
+
     ses::Field1D clone(int k) const {
         return bound_[static_cast<std::size_t>(k)].psi;
     }
@@ -147,12 +137,8 @@ private:
             title_dirty_ = true;
             return;
         }
-        ses::Field1D psi{grid1d_};
-        const ses::Field1D& a = bound_[static_cast<std::size_t>(base_)].psi;
-        const ses::Field1D& b = bound_[static_cast<std::size_t>(base_ + 1)].psi;
-        for (int i = 0; i < grid1d_.n; ++i) {
-            psi[i] = a[i] + b[i];
-        }
+        ses::Field1D psi = bound_[static_cast<std::size_t>(base_)].psi;
+        axpy(psi, 1.0, bound_[static_cast<std::size_t>(base_ + 1)].psi);
         ses::normalize(psi);
         level_ = -1;
         note_.clear();

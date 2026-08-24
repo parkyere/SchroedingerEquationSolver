@@ -71,6 +71,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <vector>
 import ses.vk.engine;
 import ses.magnetic;
@@ -105,7 +106,10 @@ constexpr VkDescriptorType kUniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 struct ErrStats {
     double max_err = 0.0;
     double max_mag = 0.0;
-    double tol() const { return 1e-4 + 1e-5 * max_mag; }
+    // tol = abs_c + rel_c * max_mag; defaults = the engine-step envelope.
+    double tol(double abs_c = 1e-4, double rel_c = 1e-5) const {
+        return abs_c + rel_c * max_mag;
+    }
 };
 
 template <class GpuVec, class CpuVec>
@@ -190,16 +194,25 @@ void invalidate(ses_vk::DeviceContext& ctx, const ses_vk::Buffer& b) {
     vmaInvalidateAllocation(ctx.allocator, b.alloc, 0, VK_WHOLE_SIZE);
 }
 
+// 1D dispatch sized by the ses.vk.compute contract (kWorkgroupSize /
+// kFusedWorkgroup) -- no inline shader-mirror literals.
+void dispatch_1d(VkCommandBuffer cb, std::uint64_t n,
+                 std::uint32_t group = ses_vk::kWorkgroupSize) {
+    vkCmdDispatch(cb, ses_vk::group_count(n, group), 1, 1);
+}
+
 // psi <- psi * phase vs a CPU double reference; 1e-5 abs = fp32 on O(1) values.
 bool check_phase_multiply(ses_vk::DeviceContext& ctx) {
     const std::size_t n = 4096;
     std::vector<std::complex<double>> psi_d(n);
     std::vector<std::complex<double>> phase_d(n);
+    std::vector<std::complex<double>> cpu(n);
     for (std::size_t i = 0; i < n; ++i) {
         const double x = static_cast<double>(i);
         psi_d[i] = std::complex<double>{std::sin(0.37 * x) + 0.2,
                                         std::cos(1.13 * x) - 0.1};
         phase_d[i] = std::complex<double>{std::cos(2.9 * x), std::sin(2.9 * x)};
+        cpu[i] = psi_d[i] * phase_d[i];
     }
     const std::vector<float> psi_f = to_rg32f(psi_d);
     const std::vector<float> phase_f = to_rg32f(phase_d);
@@ -247,19 +260,13 @@ bool check_phase_multiply(ses_vk::DeviceContext& ctx) {
     record_uploads(s.shot.cb(), staging,
                    {{&psi, 0, bytes}, {&phase, bytes, bytes}});
     k.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), static_cast<std::uint32_t>((n + 255) / 256), 1,
-                  1);
+    dispatch_1d(s.shot.cb(), n);
     record_readback(s.shot.cb(), psi, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) return false;
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t i = 0; i < n; ++i) {
-        const std::complex<double> expected = psi_d[i] * phase_d[i];
-        max_err = std::max(max_err, std::abs(out[2 * i] - expected.real()));
-        max_err = std::max(max_err, std::abs(out[2 * i + 1] - expected.imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu).max_err;
     const bool pass = max_err < 1e-5;
     std::printf(
         "phase-multiply kernel (raw Vulkan): max |gpu - cpu| = %.3e  [%s]\n",
@@ -272,10 +279,12 @@ bool check_scale(ses_vk::DeviceContext& ctx) {
     const std::size_t n = 4096;
     const float sc = 0.5f;
     std::vector<std::complex<double>> d0(n);
+    std::vector<std::complex<double>> cpu(n);
     for (std::size_t i = 0; i < n; ++i) {
         const double x = static_cast<double>(i);
         d0[i] = std::complex<double>{std::sin(0.7 * x) - 0.3,
                                      std::cos(0.21 * x) + 0.4};
+        cpu[i] = static_cast<double>(sc) * d0[i];
     }
     const std::vector<float> in = to_rg32f(d0);
     const VkDeviceSize bytes = in.size() * sizeof(float);
@@ -319,21 +328,13 @@ bool check_scale(ses_vk::DeviceContext& ctx) {
     if (!s.shot.begin(ctx)) return false;
     record_uploads(s.shot.cb(), staging, {{&data, 0, bytes}});
     k.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), static_cast<std::uint32_t>((n + 255) / 256), 1,
-                  1);
+    dispatch_1d(s.shot.cb(), n);
     record_readback(s.shot.cb(), data, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) return false;
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t i = 0; i < n; ++i) {
-        max_err = std::max(
-            max_err, std::abs(out[2 * i] - static_cast<double>(sc) * d0[i].real()));
-        max_err = std::max(max_err, std::abs(out[2 * i + 1] -
-                                             static_cast<double>(sc) *
-                                                 d0[i].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu).max_err;
     const bool pass = max_err < 1e-5;
     std::printf("scale kernel (raw Vulkan): max |gpu - cpu| = %.3e  [%s]\n",
                 max_err, pass ? "PASS" : "FAIL");
@@ -604,19 +605,13 @@ bool check_dipole_kick(ses_vk::DeviceContext& ctx) {
     if (!s.shot.begin(ctx)) return false;
     record_uploads(s.shot.cb(), staging, {{&psi, 0, bytes}});
     k.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), static_cast<std::uint32_t>((n + 255) / 256), 1,
-                  1);
+    dispatch_1d(s.shot.cb(), n);
     record_readback(s.shot.cb(), psi, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) return false;
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t idx = 0; idx < n; ++idx) {
-        max_err = std::max(max_err, std::abs(out[2 * idx] - cpu[idx].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * idx + 1] - cpu[idx].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu).max_err;
     const bool pass = max_err < 1e-4;
     std::printf(
         "dipole-kick kernel (raw Vulkan): max |gpu - cpu| = %.3e  [%s]\n",
@@ -929,24 +924,19 @@ bool check_fp16_roundtrip(ses_vk::DeviceContext& ctx) {
     s.arena.write_buffer(ctx, unpack_set, 1, kUniform, ubo.buf, sizeof(Params));
     s.arena.write_buffer(ctx, unpack_set, 6, kStorage, half.buf);
 
-    const std::uint32_t groups = static_cast<std::uint32_t>((n + 255) / 256);
     if (!s.shot.begin(ctx)) return false;
     record_uploads(s.shot.cb(), staging, {{&src, 0, fp32_bytes}});
     pack.bind(s.shot.cb(), pack_set);
-    vkCmdDispatch(s.shot.cb(), groups, 1, 1);
+    dispatch_1d(s.shot.cb(), n);
     ses_vk::barrier_compute_to_compute(s.shot.cb());
     unpack.bind(s.shot.cb(), unpack_set);
-    vkCmdDispatch(s.shot.cb(), groups, 1, 1);
+    dispatch_1d(s.shot.cb(), n);
     record_readback(s.shot.cb(), dst, staging, fp32_bytes);
     if (!s.shot.submit_and_wait(ctx)) return false;
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t i = 0; i < n; ++i) {
-        max_err = std::max(max_err, std::abs(out[2 * i] - src_d[i].real()));
-        max_err = std::max(max_err, std::abs(out[2 * i + 1] - src_d[i].imag()));
-    }
+    const double max_err = compare_interleaved(out, src_d).max_err;
     const bool pass = max_err < 5e-3;
     std::printf(
         "fp16 pack/unpack roundtrip (raw Vulkan): max |gpu - cpu| = %.3e  "
@@ -1020,20 +1010,49 @@ bool check_line_fft(ses_vk::DeviceContext& ctx, int N, const unsigned char* spv,
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (int i = 0; i < N; ++i) {
-        max_err = std::max(
-            max_err,
-            std::abs(out[2 * i] - cpu[static_cast<std::size_t>(i)].real()));
-        max_err = std::max(
-            max_err,
-            std::abs(out[2 * i + 1] - cpu[static_cast<std::size_t>(i)].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu).max_err;
     const double tol = 1e-3 * std::max(1.0, N / 256.0);
     const bool pass = max_err < tol;
     std::printf("line FFT N=%d (raw Vulkan): max |gpu - cpu| = %.3e  [%s]\n", N,
                 max_err, pass ? "PASS" : "FAIL");
     return pass;
+}
+
+// The shared full-population boot: every 2^16 amplitude nonzero (stronger
+// than a product boot). normalize=false keeps the raw recipe.
+std::vector<std::complex<double>> test_state(std::size_t dim,
+                                             bool normalize = true) {
+    std::vector<std::complex<double>> c(dim);
+    double nrm = 0.0;
+    for (std::size_t m = 0; m < dim; ++m) {
+        c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
+                                    std::cos(0.17 * m) - 0.2};
+        nrm += std::norm(c[m]);
+    }
+    if (normalize) {
+        const double inv = 1.0 / std::sqrt(nrm);
+        for (auto& z : c) {
+            z *= inv;
+        }
+    }
+    return c;
+}
+
+// Neel product boot (entangles under J -- the interesting regime). Unit
+// Bloch vectors -> the product state is already normalized.
+ses::SpinLattice neel_lattice() {
+    ses::SpinLattice lat;
+    lat.nx = ses::kExactSide;
+    lat.ny = ses::kExactSide;
+    lat.s.resize(ses::kExactSites);
+    for (int y = 0; y < ses::kExactSide; ++y) {
+        for (int x = 0; x < ses::kExactSide; ++x) {
+            const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
+            lat.s[static_cast<std::size_t>(y * ses::kExactSide + x)] =
+                ses::spinor_from_bloch(0.6, 0.0, sgn * 0.8);
+        }
+    }
+    return lat;
 }
 
 // Exact 2^16 spin gates on GPU (fp32) vs ses.spinexact (fp64): a mixed site-
@@ -1052,21 +1071,11 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
         float gate[4];  // phase.re,phase.im, diag.re,diag.im
         float off4[4];  // off.re,off.im, 0, 0
     };
-    // A fully populated state (every 2^16 amplitude nonzero) -- stronger than
-    // a product boot.
     const std::size_t dim = ses::kExactDim;
     ses::SpinState16 cpu;
-    cpu.c.resize(dim);
-    double nrm = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        cpu.c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
-                                        std::cos(0.17 * m) - 0.2};
-        nrm += std::norm(cpu.c[m]);
-    }
-    const double inv = 1.0 / std::sqrt(nrm);
-    for (auto& z : cpu.c) {
-        z *= inv;
-    }
+    cpu.c = test_state(dim);
+    // GPU input: fp32 snapshot of the SAME pre-gate state (no re-derivation).
+    const std::vector<float> in = to_rg32f(cpu.c);
 
     struct Gate {
         bool bond;
@@ -1091,22 +1100,6 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
     }
 
     const VkDeviceSize bytes = dim * 2 * sizeof(float);
-    std::vector<float> in(dim * 2);
-    // (re-derive the fp32 input from the pre-gate state)
-    {
-        double n2 = 0.0;
-        std::vector<std::complex<double>> boot(dim);
-        for (std::size_t m = 0; m < dim; ++m) {
-            boot[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
-                                           std::cos(0.17 * m) - 0.2};
-            n2 += std::norm(boot[m]);
-        }
-        const double iv = 1.0 / std::sqrt(n2);
-        for (std::size_t m = 0; m < dim; ++m) {
-            in[2 * m] = static_cast<float>(boot[m].real() * iv);
-            in[2 * m + 1] = static_cast<float>(boot[m].imag() * iv);
-        }
-    }
 
     ses_vk::Kernel site_k, bond_k;
     ses_vk::Buffer data{}, staging{};
@@ -1204,7 +1197,7 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
         ses_vk::Kernel& k = g.bond ? bond_k : site_k;
         k.bind(s.shot.cb(), sets[static_cast<std::size_t>(gi)]);
         const std::uint32_t items = g.bond ? quarter_n : half_n;
-        vkCmdDispatch(s.shot.cb(), (items + 255u) / 256u, 1, 1);
+        dispatch_1d(s.shot.cb(), items);
     }
     record_readback(s.shot.cb(), data, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) {
@@ -1213,13 +1206,7 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        max_err = std::max(max_err,
-                           std::abs(out[2 * m] - cpu.c[m].real()));
-        max_err = std::max(max_err,
-                           std::abs(out[2 * m + 1] - cpu.c[m].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu.c).max_err;
     // fp32 unitary gates: per-amplitude error is round-off x gate count.
     const double tol = 1e-5 * static_cast<double>(seq.size()) + 1e-6;
     const bool pass = max_err < tol;
@@ -1235,19 +1222,7 @@ bool check_spin_step(ses_vk::DeviceContext& ctx) {
 bool check_spin_engine_step(ses_vk::DeviceContext& ctx) {
     const double bx = 0.1, by = -0.05, bz = 0.2, jj = 0.5, dt = 0.05;
     const int steps = 40;
-    // A Neel product boot (entangles under J -- the interesting regime).
-    ses::SpinLattice lat;
-    lat.nx = ses::kExactSide;
-    lat.ny = ses::kExactSide;
-    lat.s.resize(ses::kExactSites);
-    for (int y = 0; y < ses::kExactSide; ++y) {
-        for (int x = 0; x < ses::kExactSide; ++x) {
-            const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
-            // Unit Bloch vector -> product state already normalized.
-            lat.s[static_cast<std::size_t>(y * ses::kExactSide + x)] =
-                ses::spinor_from_bloch(0.6, 0.0, sgn * 0.8);
-        }
-    }
+    const ses::SpinLattice lat = neel_lattice();
     ses::SpinState16 cpu = ses::exact_from_product(lat);
     for (int k = 0; k < steps; ++k) {
         ses::exact_step(cpu, bx, by, bz, jj, dt);
@@ -1264,13 +1239,9 @@ bool check_spin_engine_step(ses_vk::DeviceContext& ctx) {
     eng.step(steps);
     eng.download_state();  // step() reads back only Bloch now; pull the full state
     const float* out = eng.state();
-    double max_err = 0.0;
+    const double max_err = compare_interleaved(out, cpu.c).max_err;
     double norm = 0.0;
     for (std::size_t m = 0; m < eng.dim(); ++m) {
-        max_err = std::max(max_err,
-                           std::abs(out[2 * m] - cpu.c[m].real()));
-        max_err = std::max(max_err,
-                           std::abs(out[2 * m + 1] - cpu.c[m].imag()));
         norm += static_cast<double>(out[2 * m]) * out[2 * m] +
                 static_cast<double>(out[2 * m + 1]) * out[2 * m + 1];
     }
@@ -1287,18 +1258,7 @@ bool check_spin_engine_step(ses_vk::DeviceContext& ctx) {
 // state: isolates the reduce kernel (partial trace) from evolution drift.
 // The state is entangled first (|<sigma>| < 1) so the partial trace is exercised.
 bool check_spin_bloch(ses_vk::DeviceContext& ctx) {
-    ses::SpinLattice lat;
-    lat.nx = ses::kExactSide;
-    lat.ny = ses::kExactSide;
-    lat.s.resize(ses::kExactSites);
-    for (int y = 0; y < ses::kExactSide; ++y) {
-        for (int x = 0; x < ses::kExactSide; ++x) {
-            const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
-            lat.s[static_cast<std::size_t>(y * ses::kExactSide + x)] =
-                ses::spinor_from_bloch(0.6, 0.0, sgn * 0.8);
-        }
-    }
-    ses::SpinState16 st = ses::exact_from_product(lat);
+    ses::SpinState16 st = ses::exact_from_product(neel_lattice());
     for (int k = 0; k < 12; ++k) {
         ses::exact_step(st, 0.1, -0.05, 0.2, 0.5, 0.05);  // entangle
     }
@@ -1312,12 +1272,11 @@ bool check_spin_bloch(ses_vk::DeviceContext& ctx) {
     const float* gb = eng.bloch();
     double max_err = 0.0;
     for (int i = 0; i < ses::kExactSites; ++i) {
-        double x = 0.0, y = 0.0, z = 0.0;
-        ses::exact_site_bloch(st, i, &x, &y, &z);
+        const ses::Vec3d p = ses::exact_site_bloch(st, i);
         const std::size_t o = static_cast<std::size_t>(3 * i);
-        max_err = std::max(max_err, std::abs(gb[o + 0] - x));
-        max_err = std::max(max_err, std::abs(gb[o + 1] - y));
-        max_err = std::max(max_err, std::abs(gb[o + 2] - z));
+        max_err = std::max(max_err, std::abs(gb[o + 0] - p.x));
+        max_err = std::max(max_err, std::abs(gb[o + 1] - p.y));
+        max_err = std::max(max_err, std::abs(gb[o + 2] - p.z));
     }
     eng.destroy();
     // fp32 tree-sum of 2^16 terms vs fp64: absolute error stays ~1e-5.
@@ -1351,22 +1310,8 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
     const std::size_t dk = std::size_t{1} << k;
 
     ses::SpinState16 cpu;
-    cpu.c.resize(dim);
-    double nrm = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        cpu.c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
-                                        std::cos(0.17 * m) - 0.2};
-        nrm += std::norm(cpu.c[m]);
-    }
-    const double iv = 1.0 / std::sqrt(nrm);
-    for (auto& z : cpu.c) {
-        z *= iv;
-    }
-    std::vector<float> in(dim * 2);
-    for (std::size_t m = 0; m < dim; ++m) {
-        in[2 * m] = static_cast<float>(cpu.c[m].real());
-        in[2 * m + 1] = static_cast<float>(cpu.c[m].imag());
-    }
+    cpu.c = test_state(dim);
+    const std::vector<float> in = to_rg32f(cpu.c);
     ses::apply_fused(cpu, fg);  // reference (input snapshot already taken)
 
     std::vector<float> gm(dk * dk * 2);
@@ -1427,7 +1372,7 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
     }
     record_uploads(s.shot.cb(), staging, {{&data, 0, sbytes}});
     fk.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), (fp.n_orbits + 63u) / 64u, 1, 1);
+    dispatch_1d(s.shot.cb(), fp.n_orbits, ses_vk::kFusedWorkgroup);
     record_readback(s.shot.cb(), data, staging, sbytes);
     if (!s.shot.submit_and_wait(ctx)) {
         return false;
@@ -1435,12 +1380,7 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        max_err = std::max(max_err, std::abs(out[2 * m] - cpu.c[m].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * m + 1] - cpu.c[m].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu.c).max_err;
     const bool pass = max_err < 1e-5;
     std::printf("spin fused gate k=%zu (raw Vulkan, 2^16): max |gpu - cpu| = "
                 "%.3e  [%s]\n",
@@ -1452,26 +1392,19 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
 // lattice transpose -- the local/global reorder pass of Stage 3.
 bool check_spin_permute(ses_vk::DeviceContext& ctx) {
     struct alignas(16) PermParams {
-        std::uint32_t n, plo, phi, pad;
+        std::uint32_t n, plo, phi, n_sites;
     };
     const std::size_t dim = ses::kExactDim;
     const std::vector<int> perm = ses::lattice_transpose_perm();
 
     ses::SpinState16 st;
-    st.c.resize(dim);
-    for (std::size_t m = 0; m < dim; ++m) {
-        st.c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
-                                       std::cos(0.17 * m) - 0.2};
-    }
+    st.c = test_state(dim, /*normalize=*/false);
     const ses::SpinState16 cpu = ses::permute_qubits(st, perm);
 
-    std::vector<float> in(dim * 2);
-    for (std::size_t m = 0; m < dim; ++m) {
-        in[2 * m] = static_cast<float>(st.c[m].real());
-        in[2 * m + 1] = static_cast<float>(st.c[m].imag());
-    }
+    const std::vector<float> in = to_rg32f(st.c);
     PermParams pp{};
     pp.n = static_cast<std::uint32_t>(dim);
+    pp.n_sites = static_cast<std::uint32_t>(ses::kExactSites);
     for (int b = 0; b < 8; ++b) {
         pp.plo |= (static_cast<std::uint32_t>(perm[static_cast<std::size_t>(b)])
                    & 0xFu)
@@ -1523,7 +1456,7 @@ bool check_spin_permute(ses_vk::DeviceContext& ctx) {
     }
     record_uploads(s.shot.cb(), staging, {{&src, 0, bytes}});
     pk.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), (pp.n + 255u) / 256u, 1, 1);
+    dispatch_1d(s.shot.cb(), pp.n);
     record_readback(s.shot.cb(), dst, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) {
         return false;
@@ -1531,12 +1464,7 @@ bool check_spin_permute(ses_vk::DeviceContext& ctx) {
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        max_err = std::max(max_err, std::abs(out[2 * m] - cpu.c[m].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * m + 1] - cpu.c[m].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu.c).max_err;
     const bool pass = max_err < 1e-6;  // exact data move, only fp32 input round-off
     std::printf("spin permute (raw Vulkan, 2^16 transpose): max |gpu - cpu| = "
                 "%.3e  [%s]\n",
@@ -1549,12 +1477,13 @@ bool check_spin_permute(ses_vk::DeviceContext& ctx) {
 // spinor<->Bloch round-trips exercised.
 bool check_spin_mf(ses_vk::DeviceContext& ctx) {
     const int nx = 4, ny = 4, nsteps = 20;
+    const int ns = nx * ny;
     const double bx = 0.15, by = -0.1, bz = 0.2, jj = 0.4, alpha = 0.05,
                  dt = 0.05;
     ses::SpinLattice lat;
     lat.nx = nx;
     lat.ny = ny;
-    lat.s.resize(static_cast<std::size_t>(nx * ny));
+    lat.s.resize(static_cast<std::size_t>(ns));
     for (int y = 0; y < ny; ++y) {
         for (int x = 0; x < nx; ++x) {
             const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
@@ -1569,10 +1498,13 @@ bool check_spin_mf(ses_vk::DeviceContext& ctx) {
     for (int k = 0; k < nsteps; ++k) {
         ses::spinlattice_step(cpu, bx, by, bz, jj, alpha, dt);
     }
-    double cb[3 * 16];
-    for (int i = 0; i < 16; ++i) {
-        ses::bloch_vector(cpu.s[static_cast<std::size_t>(i)], &cb[3 * i],
-                          &cb[3 * i + 1], &cb[3 * i + 2]);
+    double cb[3 * ns];
+    for (int i = 0; i < ns; ++i) {
+        const ses::Vec3d p =
+            ses::bloch_vector(cpu.s[static_cast<std::size_t>(i)]);
+        cb[3 * i] = p.x;
+        cb[3 * i + 1] = p.y;
+        cb[3 * i + 2] = p.z;
     }
 
     ses_vk::SpinMeanFieldEngine eng;
@@ -1581,8 +1513,9 @@ bool check_spin_mf(ses_vk::DeviceContext& ctx) {
         return false;
     }
     eng.set_params(bx, by, bz, jj, alpha, dt);
-    std::vector<std::complex<double>> up(16), dn(16);
-    for (int i = 0; i < 16; ++i) {
+    std::vector<std::complex<double>> up(static_cast<std::size_t>(ns)),
+        dn(static_cast<std::size_t>(ns));
+    for (int i = 0; i < ns; ++i) {
         up[static_cast<std::size_t>(i)] = lat.s[static_cast<std::size_t>(i)].up;
         dn[static_cast<std::size_t>(i)] = lat.s[static_cast<std::size_t>(i)].dn;
     }
@@ -1590,15 +1523,15 @@ bool check_spin_mf(ses_vk::DeviceContext& ctx) {
     eng.step(nsteps);
     const float* gb = eng.bloch();
     double max_err = 0.0;
-    for (int i = 0; i < 3 * 16; ++i) {
+    for (int i = 0; i < 3 * ns; ++i) {
         max_err = std::max(max_err, std::abs(gb[i] - cb[i]));
     }
     eng.destroy();
     // fp32 mean-field (trig + normalize per step): per-component error ~1e-4.
     const bool pass = max_err < 3e-3;
-    std::printf("spin mean-field %d steps (raw Vulkan, 16 sites): max |gpu - "
+    std::printf("spin mean-field %d steps (raw Vulkan, %d sites): max |gpu - "
                 "cpu| = %.3e  [%s]\n",
-                nsteps, max_err, pass ? "PASS" : "FAIL");
+                nsteps, ns, max_err, pass ? "PASS" : "FAIL");
     return pass;
 }
 
@@ -1606,13 +1539,14 @@ bool check_spin_mf(ses_vk::DeviceContext& ctx) {
 // and per-site uniform draws -- the collapse must land on the same eigenstates.
 bool check_spin_mf_measure(ses_vk::DeviceContext& ctx) {
     const int nx = 4, ny = 4;
+    const int ns = nx * ny;
     const double n0 = 0.36, n1 = -0.48, n2 = 0.8;  // unit axis
     ses::SpinLattice lat;
     lat.nx = nx;
     lat.ny = ny;
-    lat.s.resize(16);
-    float u[16];
-    for (int i = 0; i < 16; ++i) {
+    lat.s.resize(static_cast<std::size_t>(ns));
+    float u[ns];
+    for (int i = 0; i < ns; ++i) {
         const double a = 0.3 + 0.17 * i;
         lat.s[static_cast<std::size_t>(i)] = ses::spinor_from_bloch(
             0.7 * std::cos(a), 0.7 * std::sin(a), (i & 1) ? -0.71 : 0.71);
@@ -1620,14 +1554,17 @@ bool check_spin_mf_measure(ses_vk::DeviceContext& ctx) {
     }
 
     ses::SpinLattice cpu = lat;
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < ns; ++i) {
         ses::spin_measure(cpu.s[static_cast<std::size_t>(i)], n0, n1, n2,
                           static_cast<double>(u[i]));
     }
-    double cb[3 * 16];
-    for (int i = 0; i < 16; ++i) {
-        ses::bloch_vector(cpu.s[static_cast<std::size_t>(i)], &cb[3 * i],
-                          &cb[3 * i + 1], &cb[3 * i + 2]);
+    double cb[3 * ns];
+    for (int i = 0; i < ns; ++i) {
+        const ses::Vec3d p =
+            ses::bloch_vector(cpu.s[static_cast<std::size_t>(i)]);
+        cb[3 * i] = p.x;
+        cb[3 * i + 1] = p.y;
+        cb[3 * i + 2] = p.z;
     }
 
     ses_vk::SpinMeanFieldEngine eng;
@@ -1636,8 +1573,9 @@ bool check_spin_mf_measure(ses_vk::DeviceContext& ctx) {
         return false;
     }
     eng.set_params(0.0, 0.0, 0.0, 0.0, 0.0, 0.05);
-    std::vector<std::complex<double>> up(16), dn(16);
-    for (int i = 0; i < 16; ++i) {
+    std::vector<std::complex<double>> up(static_cast<std::size_t>(ns)),
+        dn(static_cast<std::size_t>(ns));
+    for (int i = 0; i < ns; ++i) {
         up[static_cast<std::size_t>(i)] = lat.s[static_cast<std::size_t>(i)].up;
         dn[static_cast<std::size_t>(i)] = lat.s[static_cast<std::size_t>(i)].dn;
     }
@@ -1645,14 +1583,14 @@ bool check_spin_mf_measure(ses_vk::DeviceContext& ctx) {
     eng.measure(n0, n1, n2, u);
     const float* gb = eng.bloch();
     double max_err = 0.0;
-    for (int i = 0; i < 3 * 16; ++i) {
+    for (int i = 0; i < 3 * ns; ++i) {
         max_err = std::max(max_err, std::abs(gb[i] - cb[i]));
     }
     eng.destroy();
     const bool pass = max_err < 1e-5;
-    std::printf("spin mf measure (raw Vulkan, 16 sites): max |gpu - cpu| = "
+    std::printf("spin mf measure (raw Vulkan, %d sites): max |gpu - cpu| = "
                 "%.3e  [%s]\n",
-                max_err, pass ? "PASS" : "FAIL");
+                ns, max_err, pass ? "PASS" : "FAIL");
     return pass;
 }
 
@@ -1681,7 +1619,7 @@ bool check_spin_measure_exact(ses_vk::DeviceContext& ctx) {
     }
     eng.set_params(0.0, 0.0, 0.0, 0.0, 0.05);
     eng.upload(st.c);
-    const std::uint32_t m = eng.measure_exact(n0, n1, n2, 0.5);
+    const std::optional<std::uint32_t> m = eng.measure_exact(n0, n1, n2, 0.5);
     eng.download_state();
     const float* out = eng.state();
     // Collapse fixes only the amplitudes up to a global phase, so compare
@@ -1692,10 +1630,11 @@ bool check_spin_measure_exact(ses_vk::DeviceContext& ctx) {
         max_err = std::max(max_err, std::abs(mag - std::abs(st.c[k])));
     }
     eng.destroy();
-    const bool pass = (m == m_expect) && max_err < 1e-4;
+    const bool pass = m.has_value() && *m == m_expect && max_err < 1e-4;
     std::printf("spin measure exact (raw Vulkan, 2^16): m=%u (want %u), "
                 "idempotent |amp| err = %.3e  [%s]\n",
-                m, m_expect, max_err, pass ? "PASS" : "FAIL");
+                m.value_or(0xffffffffu), m_expect, max_err,
+                pass ? "PASS" : "FAIL");
     return pass;
 }
 
@@ -1704,39 +1643,25 @@ bool check_spin_measure_exact(ses_vk::DeviceContext& ctx) {
 bool check_spin_hamiltonian(ses_vk::DeviceContext& ctx) {
     struct alignas(16) HParams {
         float bx, by, bz, j;
-        std::uint32_t nb, n, pad0, pad1;
+        std::uint32_t nb, n, n_sites, pad1;
     };
     const std::size_t dim = ses::kExactDim;
     const double bx = 0.2, by = -0.1, bz = 0.3, jj = 0.4;
     ses::SpinState16 in;
-    in.c.resize(dim);
-    double nrm = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        in.c[m] = std::complex<double>{std::sin(0.3 * m + 1.0),
-                                       std::cos(0.17 * m) - 0.2};
-        nrm += std::norm(in.c[m]);
-    }
-    const double iv = 1.0 / std::sqrt(nrm);
-    for (auto& z : in.c) {
-        z *= iv;
-    }
+    in.c = test_state(dim);
     ses::SpinState16 cpu;
     ses::hamiltonian_apply(cpu, in, bx, by, bz, jj);
 
-    int bonds[2 * ses::kExactSites][2];
-    const int nb = ses::exact_bonds(bonds);
+    const int nb = static_cast<int>(ses::exact_bonds.size());
     std::vector<std::uint32_t> bflat(static_cast<std::size_t>(2 * nb));
     for (int k = 0; k < nb; ++k) {
+        const std::size_t sk = static_cast<std::size_t>(k);
         bflat[static_cast<std::size_t>(2 * k)] =
-            static_cast<std::uint32_t>(bonds[k][0]);
+            static_cast<std::uint32_t>(ses::exact_bonds[sk][0]);
         bflat[static_cast<std::size_t>(2 * k + 1)] =
-            static_cast<std::uint32_t>(bonds[k][1]);
+            static_cast<std::uint32_t>(ses::exact_bonds[sk][1]);
     }
-    std::vector<float> fin(dim * 2);
-    for (std::size_t m = 0; m < dim; ++m) {
-        fin[2 * m] = static_cast<float>(in.c[m].real());
-        fin[2 * m + 1] = static_cast<float>(in.c[m].imag());
-    }
+    const std::vector<float> fin = to_rg32f(in.c);
     HParams hp{};
     hp.bx = static_cast<float>(bx);
     hp.by = static_cast<float>(by);
@@ -1744,6 +1669,7 @@ bool check_spin_hamiltonian(ses_vk::DeviceContext& ctx) {
     hp.j = static_cast<float>(jj);
     hp.nb = static_cast<std::uint32_t>(nb);
     hp.n = static_cast<std::uint32_t>(dim);
+    hp.n_sites = static_cast<std::uint32_t>(ses::kExactSites);
 
     const VkDeviceSize bytes = dim * 2 * sizeof(float);
     ses_vk::Kernel hk;
@@ -1792,8 +1718,7 @@ bool check_spin_hamiltonian(ses_vk::DeviceContext& ctx) {
     }
     record_uploads(s.shot.cb(), staging, {{&inbuf, 0, bytes}});
     hk.bind(s.shot.cb(), set);
-    vkCmdDispatch(s.shot.cb(), static_cast<std::uint32_t>((dim + 255) / 256), 1,
-                  1);
+    dispatch_1d(s.shot.cb(), dim);
     record_readback(s.shot.cb(), outbuf, staging, bytes);
     if (!s.shot.submit_and_wait(ctx)) {
         return false;
@@ -1801,12 +1726,7 @@ bool check_spin_hamiltonian(ses_vk::DeviceContext& ctx) {
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    for (std::size_t m = 0; m < dim; ++m) {
-        max_err = std::max(max_err, std::abs(out[2 * m] - cpu.c[m].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * m + 1] - cpu.c[m].imag()));
-    }
+    const double max_err = compare_interleaved(out, cpu.c).max_err;
     const bool pass = max_err < 1e-5;
     std::printf("spin hamiltonian H*psi (raw Vulkan, 2^16): max |gpu - cpu| = "
                 "%.3e  [%s]\n",
@@ -1818,18 +1738,7 @@ bool check_spin_hamiltonian(ses_vk::DeviceContext& ctx) {
 // on an entangled state -- the full recurrence + coefficient orchestration.
 bool check_spin_chebyshev(ses_vk::DeviceContext& ctx) {
     const double bx = 0.1, by = -0.05, bz = 0.2, jj = 0.5, dt = 0.2;
-    ses::SpinLattice lat;
-    lat.nx = ses::kExactSide;
-    lat.ny = ses::kExactSide;
-    lat.s.resize(ses::kExactSites);
-    for (int y = 0; y < ses::kExactSide; ++y) {
-        for (int x = 0; x < ses::kExactSide; ++x) {
-            const double sgn = ((x + y) & 1) != 0 ? -1.0 : 1.0;
-            lat.s[static_cast<std::size_t>(y * ses::kExactSide + x)] =
-                ses::spinor_from_bloch(0.6, 0.0, sgn * 0.8);
-        }
-    }
-    ses::SpinState16 st = ses::exact_from_product(lat);
+    ses::SpinState16 st = ses::exact_from_product(neel_lattice());
     for (int k = 0; k < 6; ++k) {
         ses::exact_step(st, bx, by, bz, jj, 0.05);  // entangle
     }
@@ -1846,12 +1755,9 @@ bool check_spin_chebyshev(ses_vk::DeviceContext& ctx) {
     eng.chebyshev_step(dt);
     eng.download_state();
     const float* out = eng.state();
-    double max_err = 0.0;
+    const double max_err = compare_interleaved(out, ref.c).max_err;
     double norm = 0.0;
     for (std::size_t m = 0; m < eng.dim(); ++m) {
-        max_err = std::max(max_err, std::abs(out[2 * m] - ref.c[m].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * m + 1] - ref.c[m].imag()));
         norm += static_cast<double>(out[2 * m]) * out[2 * m] +
                 static_cast<double>(out[2 * m + 1]) * out[2 * m + 1];
     }
@@ -1953,16 +1859,9 @@ bool check_fft3(ses_vk::DeviceContext& ctx) {
     invalidate(ctx, staging);
 
     const float* out = static_cast<const float*>(staging.mapped);
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-3 + 1e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol(1e-3, 1e-5);
     const bool pass = max_err < tol;
     std::printf(
         "fft3 8x8x8 (raw Vulkan): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
@@ -2035,9 +1934,64 @@ ses_vk::EngineKernels engine_blobs_8() {
     return b;
 }
 
-// The production Strang step through ses_vk::Engine, 20 steps on an 8x8x8
-// soft-Coulomb grid vs SplitOperator3D::step (CPU double oracle), covering
-// both the native-VkFFT and hand-rolled line-FFT paths.
+// One production Strang-step check through ses_vk::Engine, 20 steps vs
+// SplitOperator3D::step (CPU double oracle), covering BOTH FFT paths:
+// native VkFFT (when planned) then the hand-rolled line FFT. Shared by the
+// cubic, planar, and effective-mass engine checks.
+bool check_engine_step_modes(ses_vk::DeviceContext& ctx, const ses::Grid3D& g,
+                             const std::vector<double>& v,
+                             const ses::Field3D& psi0, double dt, double mass,
+                             const ses_vk::EngineKernels& blobs,
+                             const char* label) {
+    const ses::SplitOperator3D cpu_prop{g, v, dt, mass};
+    ses_vk::Engine engine;
+    if (!engine.initialize(ctx, g, blobs, v, dt, psi0.data(), mass)) {
+        std::printf("%s: engine init FAIL\n", label);
+        return false;
+    }
+    ses::Field3D cpu = psi0;
+    cpu_prop.step(cpu, 20);
+    bool all_pass = true;
+    for (int mode = 0; mode < 2; ++mode) {
+        const bool want_vkfft = (mode == 0);
+        engine.set_use_vkfft(want_vkfft);
+        if (want_vkfft && !engine.vkfft_active()) {
+            continue;  // plan unavailable: the hand-rolled pass covers it
+        }
+        engine.upload_state(psi0.data());
+        engine.step(20);
+        std::vector<float> gpu_out;
+        if (!engine.readback(gpu_out)) {
+            std::printf("%s: readback FAIL\n", label);
+            return false;
+        }
+        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
+        const double tol = cmp.tol();
+        const bool pass = cmp.max_err < tol;
+        std::printf("%s (%s): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n", label,
+                    engine.vkfft_active() ? "raw Vulkan, native VkFFT"
+                                          : "raw Vulkan, line FFT",
+                    cmp.max_err, tol, pass ? "PASS" : "FAIL");
+        all_pass = all_pass && pass;
+    }
+    engine.set_use_vkfft(true);
+    return all_pass;
+}
+
+// The 2D scenes' parabolic bowl on a planar grid.
+std::vector<double> planar_bowl_potential(const ses::Grid3D& g) {
+    std::vector<double> v(static_cast<std::size_t>(g.size()));
+    for (int j = 0; j < g.y.n; ++j) {
+        for (int i = 0; i < g.x.n; ++i) {
+            const double x = g.x.coord(i);
+            const double y = g.y.coord(j);
+            v[static_cast<std::size_t>(g.flat(i, j, 0))] =
+                0.125 * (x * x + y * y);
+        }
+    }
+    return v;
+}
+
 // GPU ses_vk::Lattice2DEngine vs CPU ses::PeierlsLattice2D (the oracle): the
 // Strang-split exact-2x2 Peierls bond sweep must match on a parabolic dot,
 // both B = 0 and B != 0 (Peierls link phases exercised). fp32.
@@ -2078,17 +2032,9 @@ bool check_lattice2d_step(ses_vk::DeviceContext& ctx) {
         eng.download();
         const float* out = eng.state();
 
-        double max_err = 0.0;
-        double max_mag = 0.0;
-        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-            max_err = std::max(max_err,
-                               std::abs(out[2 * i] - cpu.data()[i].real()));
-            max_err = std::max(max_err,
-                               std::abs(out[2 * i + 1] - cpu.data()[i].imag()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-            max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-        }
-        const double tol = 3e-4 + 5e-5 * max_mag;
+        const ErrStats cmp = compare_interleaved(out, cpu.data());
+        const double max_err = cmp.max_err;
+        const double tol = cmp.tol(3e-4, 5e-5);
         const bool pass = max_err < tol;
         std::printf(
             "lattice2d 20 steps (B=%.1f): max |gpu - cpu| = %.3e (tol %.3e)  "
@@ -2138,16 +2084,9 @@ bool check_lattice2d_relax(ses_vk::DeviceContext& ctx) {
     eng.download();
     const float* out = eng.state();
 
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 1e-3 + 2e-4 * max_mag;
+    const ErrStats cmp = compare_interleaved(out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol(1e-3, 2e-4);
     const bool pass = max_err < tol;
     std::printf(
         "lattice2d relax 30 (B=%.1f): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
@@ -2194,16 +2133,9 @@ bool check_lattice2d_absorb_solenoid(ses_vk::DeviceContext& ctx) {
     eng.download();
     const float* out = eng.state();
 
-    double max_err = 0.0;
-    double max_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        max_err = std::max(max_err, std::abs(out[2 * i] - cpu.data()[i].real()));
-        max_err =
-            std::max(max_err, std::abs(out[2 * i + 1] - cpu.data()[i].imag()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].real()));
-        max_mag = std::max(max_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double tol = 3e-4 + 5e-5 * max_mag;
+    const ErrStats cmp = compare_interleaved(out, cpu.data());
+    const double max_err = cmp.max_err;
+    const double tol = cmp.tol(3e-4, 5e-5);
     const bool pass = max_err < tol;
     std::printf(
         "lattice2d 20 steps (solenoid pi/2 + absorber): max |gpu - cpu| = %.3e "
@@ -2212,54 +2144,17 @@ bool check_lattice2d_absorb_solenoid(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// The cubic 8x8x8 soft-Coulomb grid.
 bool check_engine_step(ses_vk::DeviceContext& ctx) {
     const ses::Grid1D axis{-4.0, 4.0, 8};
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const double dt = 0.02;
-    const ses::SplitOperator3D cpu_prop{g, v, dt};
-    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.0, 0.0},
-                                                 ses::Vec3d{1.2, 1.2, 1.2},
-                                                 ses::Vec3d{0.0, 0.5, 0.0});
-
-    ses_vk::Engine engine;
-    if (!engine.initialize(ctx, g, engine_blobs_8(), v, dt, psi0.data())) {
-        std::printf("engine 20 steps (raw Vulkan): engine init FAIL\n");
-        return false;
-    }
-
-    ses::Field3D cpu = psi0;
-    cpu_prop.step(cpu, 20);
-
-    // Cover both FFT paths: native VkFFT (when planned) then hand-rolled line.
-    bool all_pass = true;
-    for (int mode = 0; mode < 2; ++mode) {
-        const bool want_vkfft = (mode == 0);
-        engine.set_use_vkfft(want_vkfft);
-        if (want_vkfft && !engine.vkfft_active()) {
-            continue;  // plan unavailable: the hand-rolled pass covers it
-        }
-        engine.upload_state(psi0.data());
-        engine.step(20);
-        std::vector<float> gpu_out;
-        if (!engine.readback(gpu_out)) {
-            std::printf("engine 20 steps (raw Vulkan): readback FAIL\n");
-            return false;
-        }
-        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
-        const double max_err = cmp.max_err;
-        const double tol = cmp.tol();
-        const bool pass = max_err < tol;
-        std::printf(
-            "engine 20 steps (%s): max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
-            engine.vkfft_active() ? "raw Vulkan, native VkFFT"
-                                  : "raw Vulkan, line FFT",
-            max_err, tol, pass ? "PASS" : "FAIL");
-        all_pass = all_pass && pass;
-    }
-    engine.set_use_vkfft(true);
-    return all_pass;
+    const ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{1.0, 0.0, 0.0}, ses::Vec3d{1.2, 1.2, 1.2},
+        ses::Vec3d{0.0, 0.5, 0.0});
+    return check_engine_step_modes(ctx, g, v, psi0, 0.02, 1.0,
+                                   engine_blobs_8(), "engine 20 steps");
 }
 
 // The Strang step on a PLANAR 512x512x1 grid (the 2D scenes' shape) vs
@@ -2269,120 +2164,32 @@ bool check_engine_step(ses_vk::DeviceContext& ctx) {
 bool check_engine_planar(ses_vk::DeviceContext& ctx) {
     const ses::Grid1D axis{-16.0, 16.0, 512};
     const ses::Grid3D g{axis, axis, ses::Grid1D{0.0, 2.0, 1}};
-    std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int j = 0; j < g.y.n; ++j) {
-        for (int i = 0; i < g.x.n; ++i) {
-            const double x = g.x.coord(i);
-            const double y = g.y.coord(j);
-            v[static_cast<std::size_t>(g.flat(i, j, 0))] =
-                0.125 * (x * x + y * y);
-        }
-    }
-    const double dt = 0.02;
-    const ses::SplitOperator3D cpu_prop{g, v, dt};
-    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 1.0},
-                                                 ses::Vec3d{1.5, 1.5, 1.0},
-                                                 ses::Vec3d{0.5, 0.0, 0.0});
-
+    const ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{2.0, 0.0, 1.0}, ses::Vec3d{1.5, 1.5, 1.0},
+        ses::Vec3d{0.5, 0.0, 0.0});
     ses_vk::EngineKernels blobs = engine_blobs_8();
     blobs.fft = k_fft_line512_spv;
     blobs.fft_size = k_fft_line512_spv_size;
-    ses_vk::Engine engine;
-    if (!engine.initialize(ctx, g, blobs, v, dt, psi0.data())) {
-        std::printf("engine 20 steps 512x512x1 planar: engine init FAIL\n");
-        return false;
-    }
-
-    ses::Field3D cpu = psi0;
-    cpu_prop.step(cpu, 20);
-
-    bool all_pass = true;
-    for (int mode = 0; mode < 2; ++mode) {
-        const bool want_vkfft = (mode == 0);
-        engine.set_use_vkfft(want_vkfft);
-        if (want_vkfft && !engine.vkfft_active()) {
-            continue;  // plan unavailable: the hand-rolled pass covers it
-        }
-        engine.upload_state(psi0.data());
-        engine.step(20);
-        std::vector<float> gpu_out;
-        if (!engine.readback(gpu_out)) {
-            std::printf("engine 20 steps 512x512x1 planar: readback FAIL\n");
-            return false;
-        }
-        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
-        const double max_err = cmp.max_err;
-        const double tol = cmp.tol();
-        const bool pass = max_err < tol;
-        std::printf(
-            "engine 20 steps 512x512x1 planar (%s): max |gpu - cpu| = %.3e "
-            "(tol %.3e)  [%s]\n",
-            engine.vkfft_active() ? "raw Vulkan, native VkFFT"
-                                  : "raw Vulkan, line FFT",
-            max_err, tol, pass ? "PASS" : "FAIL");
-        all_pass = all_pass && pass;
-    }
-    engine.set_use_vkfft(true);
-    return all_pass;
+    return check_engine_step_modes(ctx, g, planar_bowl_potential(g), psi0,
+                                   0.02, 1.0, blobs,
+                                   "engine 20 steps 512x512x1 planar");
 }
 
 // Effective-mass real-time step: corral's Cu(111) surface state runs at
 // m* = 0.38, so the GPU kinetic scales k^2 by 1/m. Same 512x512x1 planar
 // harness as check_engine_planar, mass != 1 in both the CPU oracle and engine.
 bool check_engine_planar_mass(ses_vk::DeviceContext& ctx) {
-    const double mass = 0.38;
     const ses::Grid1D axis{-16.0, 16.0, 512};
     const ses::Grid3D g{axis, axis, ses::Grid1D{0.0, 2.0, 1}};
-    std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int j = 0; j < g.y.n; ++j) {
-        for (int i = 0; i < g.x.n; ++i) {
-            const double x = g.x.coord(i);
-            const double y = g.y.coord(j);
-            v[static_cast<std::size_t>(g.flat(i, j, 0))] =
-                0.125 * (x * x + y * y);
-        }
-    }
-    const double dt = 0.02;
-    const ses::SplitOperator3D cpu_prop{g, v, dt, mass};
-    ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 1.0},
-                                                 ses::Vec3d{1.5, 1.5, 1.0},
-                                                 ses::Vec3d{0.5, 0.0, 0.0});
+    const ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{2.0, 0.0, 1.0}, ses::Vec3d{1.5, 1.5, 1.0},
+        ses::Vec3d{0.5, 0.0, 0.0});
     ses_vk::EngineKernels blobs = engine_blobs_8();
     blobs.fft = k_fft_line512_spv;
     blobs.fft_size = k_fft_line512_spv_size;
-    ses_vk::Engine engine;
-    if (!engine.initialize(ctx, g, blobs, v, dt, psi0.data(), mass)) {
-        std::printf("engine 20 steps 512x512x1 planar m*=0.38: init FAIL\n");
-        return false;
-    }
-    ses::Field3D cpu = psi0;
-    cpu_prop.step(cpu, 20);
-    bool all_pass = true;
-    for (int mode = 0; mode < 2; ++mode) {
-        const bool want_vkfft = (mode == 0);
-        engine.set_use_vkfft(want_vkfft);
-        if (want_vkfft && !engine.vkfft_active()) {
-            continue;
-        }
-        engine.upload_state(psi0.data());
-        engine.step(20);
-        std::vector<float> gpu_out;
-        if (!engine.readback(gpu_out)) {
-            std::printf("engine planar m*=0.38: readback FAIL\n");
-            return false;
-        }
-        const ErrStats cmp = compare_interleaved(gpu_out, cpu.data());
-        const double max_err = cmp.max_err;
-        const double tol = cmp.tol();
-        const bool pass = max_err < tol;
-        std::printf("engine 20 steps 512x512x1 planar m*=0.38 (%s): "
-                    "max |gpu - cpu| = %.3e (tol %.3e)  [%s]\n",
-                    engine.vkfft_active() ? "native VkFFT" : "line FFT",
-                    max_err, tol, pass ? "PASS" : "FAIL");
-        all_pass = all_pass && pass;
-    }
-    engine.set_use_vkfft(true);
-    return all_pass;
+    return check_engine_step_modes(ctx, g, planar_bowl_potential(g), psi0,
+                                   0.02, 0.38, blobs,
+                                   "engine 20 steps 512x512x1 planar m*=0.38");
 }
 
 // step_async: identical recorded content submitted WITHOUT waiting on the
@@ -2411,8 +2218,8 @@ bool check_engine_step_async(ses_vk::DeviceContext& ctx) {
     }
     ses::Field3D cpu = psi0;
     cpu_prop.step(cpu, 20);
-    engine.step_async(10, false, true);
-    engine.step_async(10, false, true);  // waits + flips internally
+    engine.step_async(10, {.bridge = true});
+    engine.step_async(10, {.bridge = true});  // waits + flips internally
     engine.wait_async();
     std::vector<float> gpu_out;
     if (!engine.readback(gpu_out)) {
@@ -2451,7 +2258,7 @@ bool check_engine_absorber(ses_vk::DeviceContext& ctx) {
         std::printf("engine absorber per-step: init FAIL\n");
         return false;
     }
-    engine.step(5, /*absorb=*/true);
+    engine.step(5, {.absorb = true});
     std::vector<float> gpu_out;
     if (!engine.readback(gpu_out)) {
         std::printf("engine absorber per-step: readback FAIL\n");
@@ -2654,7 +2461,6 @@ bool check_native_vkfft_perf(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 0.0},
                                                  ses::Vec3d{1.5, 1.5, 1.5},
                                                  ses::Vec3d{0.0, 0.3, 0.0});
@@ -2698,7 +2504,6 @@ bool check_engine_relax(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v = ses::harmonic_potential(g, 1.0, ses::Vec3d{});
     const double dtau = 0.05;
-    const ses::SplitOperator3D real_prop{g, v, 0.02};  // phase tables for init
     const ses::ImaginaryTimePropagator3D cpu_relaxer{g, v, dtau};
     ses::Field3D psi0 = ses::gaussian_wavepacket(
         g, ses::Vec3d{1.0, 0.0, 0.0}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
@@ -2786,7 +2591,7 @@ bool check_engine_collapse_flush(ses_vk::DeviceContext& ctx) {
     }
     engine.relax_step(6);
     engine.release_relax_tables();
-    engine.step_async(3, false, true);
+    engine.step_async(3, {.bridge = true});
     engine.wait_async();
     std::vector<float> gpu_out;
     if (!engine.readback(gpu_out)) {
@@ -2818,7 +2623,6 @@ bool check_engine_deflation(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v = ses::harmonic_potential(g, 1.0, ses::Vec3d{});
     const double dtau = 0.05;
-    const ses::SplitOperator3D real_prop{g, v, 0.02};  // phase tables for init
     const ses::ImaginaryTimePropagator3D cpu_relaxer{g, v, dtau};
 
     // CPU ground state (the deflation target) + a mixed-parity guess.
@@ -2858,6 +2662,7 @@ bool check_engine_deflation(ses_vk::DeviceContext& ctx) {
     engine.relax_deflated_step({ground_h}, 50);
     std::vector<float> gpu_out;
     if (!engine.readback(gpu_out)) {
+        std::printf("deflation (raw Vulkan): relax readback FAIL\n");
         return false;
     }
     ses::Field3D cpu = guess;
@@ -2883,6 +2688,7 @@ bool check_engine_deflation(ses_vk::DeviceContext& ctx) {
     engine.copy_into_psi(ground_h);
     std::vector<float> copied;
     if (!engine.readback(copied)) {
+        std::printf("deflation (raw Vulkan): copy readback FAIL\n");
         return false;
     }
     const std::vector<float> ground_staged = to_rg32f(ground.data());
@@ -2957,7 +2763,6 @@ bool check_engine_magnetic(ses_vk::DeviceContext& ctx) {
         g, ses::Vec3d{1.0, 0.0, 0.5}, ses::Vec3d{1.4, 1.4, 1.4},
         ses::Vec3d{0.0, 0.4, 0.0});
 
-    const ses::SplitOperator3D base{g, v, dt};
     ses_vk::Engine engine;
     if (!engine.initialize(ctx, g, engine_blobs_8(), v, dt, psi0.data())) {
         std::printf("magnetic (raw Vulkan): engine init FAIL\n");
@@ -2967,20 +2772,14 @@ bool check_engine_magnetic(ses_vk::DeviceContext& ctx) {
     engine.rotate_z_shear(0.6);
     std::vector<float> gpu_out;
     if (!engine.readback(gpu_out)) {
+        std::printf("magnetic (raw Vulkan): rotate readback FAIL\n");
         return false;
     }
     ses::Field3D cpu = psi0;
     ses::rotate_z(cpu, 0.6);
-    double rot_err = 0.0;
-    double rot_mag = 0.0;
-    for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-        rot_err = std::max(rot_err, std::abs(gpu_out[2 * i] - cpu.data()[i].real()));
-        rot_err =
-            std::max(rot_err, std::abs(gpu_out[2 * i + 1] - cpu.data()[i].imag()));
-        rot_mag = std::max(rot_mag, std::abs(cpu.data()[i].real()));
-        rot_mag = std::max(rot_mag, std::abs(cpu.data()[i].imag()));
-    }
-    const double rot_tol = 1e-3 + 1e-4 * rot_mag;
+    const ErrStats rot = compare_interleaved(gpu_out, cpu.data());
+    const double rot_err = rot.max_err;
+    const double rot_tol = rot.tol(1e-3, 1e-4);
     const bool rot_ok = rot_err < rot_tol;
     std::printf(
         "  rotate_z (three-shear, raw Vulkan): max |gpu - cpu| = %.3e "
@@ -2988,28 +2787,20 @@ bool check_engine_magnetic(ses_vk::DeviceContext& ctx) {
         rot_err, rot_tol, rot_ok ? "PASS" : "FAIL");
 
     bool step_ok = true;
-    for (int fa = 2; fa >= 0; fa -= 2) {  // axis z then x
+    for (int fa : {2, 0}) {  // axis z then x
         const ses::MagneticPropagator3D mprop{g, v, dt, b, fa};
-        const ses::SplitOperator3D core_diamag{g, mprop.effective_potential(),
-                                               dt};
         engine.set_potential(mprop.effective_potential());
         engine.upload_state(psi0.data());
         engine.magnetic_step(fa, 0.5 * b * (0.5 * dt), 20);
         if (!engine.readback(gpu_out)) {
+            std::printf("magnetic (raw Vulkan): step readback FAIL\n");
             return false;
         }
         ses::Field3D cpu2 = psi0;
         mprop.step(cpu2, 20);
-        double err = 0.0;
-        double mag = 0.0;
-        for (std::size_t i = 0; i < cpu2.data().size(); ++i) {
-            err = std::max(err, std::abs(gpu_out[2 * i] - cpu2.data()[i].real()));
-            err = std::max(err,
-                           std::abs(gpu_out[2 * i + 1] - cpu2.data()[i].imag()));
-            mag = std::max(mag, std::abs(cpu2.data()[i].real()));
-            mag = std::max(mag, std::abs(cpu2.data()[i].imag()));
-        }
-        const double tol = 2e-3 + 1e-4 * mag;
+        const ErrStats cmp = compare_interleaved(gpu_out, cpu2.data());
+        const double err = cmp.max_err;
+        const double tol = cmp.tol(2e-3, 1e-4);
         const bool ok = err < tol;
         std::printf(
             "  magnetic step %c (raw Vulkan): max |gpu - cpu| = %.3e "
@@ -3030,7 +2821,6 @@ bool check_engine_synth(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D seed = ses::gaussian_wavepacket(
         g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
     ses_vk::Engine engine;
@@ -3060,14 +2850,10 @@ bool check_engine_synth(ses_vk::DeviceContext& ctx) {
         }
         std::vector<float> gpu;
         if (!engine.readback(gpu)) {
+            std::printf("orbital synthesis (raw Vulkan): readback FAIL\n");
             return false;
         }
-        for (std::size_t i = 0; i < cpu.data().size(); ++i) {
-            worst = std::max(worst, std::abs(static_cast<double>(gpu[2 * i]) -
-                                             cpu.data()[i].real()));
-            worst = std::max(worst, std::abs(static_cast<double>(gpu[2 * i + 1]) -
-                                             cpu.data()[i].imag()));
-        }
+        worst = std::max(worst, compare_interleaved(gpu, cpu.data()).max_err);
     }
     const bool ok = worst < 1e-4;
     std::printf(
@@ -3085,7 +2871,6 @@ bool check_engine_force(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{1.0, 0.3, 0.0},
                                                  ses::Vec3d{1.2, 1.2, 1.2},
                                                  ses::Vec3d{});
@@ -3153,7 +2938,6 @@ bool check_engine_project(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D seed = ses::gaussian_wavepacket(
         g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
     ses_vk::Engine engine;
@@ -3224,7 +3008,6 @@ bool check_engine_dipole_between(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D seed = ses::gaussian_wavepacket(
         g, ses::Vec3d{}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
     ses_vk::Engine engine;
@@ -3243,8 +3026,10 @@ bool check_engine_dipole_between(ses_vk::DeviceContext& ctx) {
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
     const ses::RadialState p0 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 1), 0);
-    const int to_h = engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n);
-    const int from_h = engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n);
+    const int to_h =
+        engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n).handle;
+    const int from_h =
+        engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n).handle;
     if (to_h < 0 || from_h < 0) {
         std::printf("dipole_between (raw Vulkan): synthesize_state FAIL\n");
         return false;
@@ -3308,7 +3093,6 @@ bool check_engine_fp16_consumers(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{0.5, 0.3, 0.0},
                                                  ses::Vec3d{1.4, 1.4, 1.4},
                                                  ses::Vec3d{});
@@ -3326,10 +3110,12 @@ bool check_engine_fp16_consumers(ses_vk::DeviceContext& ctx) {
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
     const ses::RadialState p0 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 1), 0);
-    const int s_f32 = engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n);
+    const int s_f32 =
+        engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n).handle;
     const int s_f16 =
-        engine.synthesize_state_half(s0.u, 0, 0, rg.h(), rg.rmax, rg.n);
-    const int p_f32 = engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n);
+        engine.synthesize_state_half(s0.u, 0, 0, rg.h(), rg.rmax, rg.n).handle;
+    const int p_f32 =
+        engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n).handle;
     if (s_f32 < 0 || s_f16 < 0 || p_f32 < 0) {
         std::printf("fp16 consumers (raw Vulkan): synthesize FAIL\n");
         return false;
@@ -3473,8 +3259,10 @@ bool check_engine_reinit(ses_vk::DeviceContext& ctx) {
         if (!e.set_absorber(mask)) {
             return false;
         }
-        e.write_psi_to_volume();
-        e.step(nsteps, /*absorb=*/true, /*bridge=*/true);
+        if (!e.write_psi_to_volume()) {
+            return false;
+        }
+        e.step(nsteps, {.absorb = true, .bridge = true});
         return true;
     };
 
@@ -3562,18 +3350,18 @@ bool check_engine_mcwf_axpy(ses_vk::DeviceContext& ctx) {
     // mcwf_axpy.comp is otherwise only exercised at l = 0..1.
     const ses::RadialState h0 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 5), 0);
-    double n2s = 0.0;
-    double n2p = 0.0;
-    double n2h = 0.0;
-    const int hs =
-        engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n, nullptr,
-                                &n2s);
-    const int hp =
-        engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n, nullptr,
-                                &n2p);
-    const int hh =
-        engine.synthesize_state(h0.u, 5, -3, rg.h(), rg.rmax, rg.n, nullptr,
-                                &n2h);
+    const ses_vk::Engine::SynthResult rs =
+        engine.synthesize_state(s0.u, 0, 0, rg.h(), rg.rmax, rg.n);
+    const ses_vk::Engine::SynthResult rp =
+        engine.synthesize_state(p0.u, 1, 0, rg.h(), rg.rmax, rg.n);
+    const ses_vk::Engine::SynthResult rh =
+        engine.synthesize_state(h0.u, 5, -3, rg.h(), rg.rmax, rg.n);
+    const int hs = rs.handle;
+    const int hp = rp.handle;
+    const int hh = rh.handle;
+    const double n2s = rs.norm2;
+    const double n2p = rp.norm2;
+    const double n2h = rh.norm2;
     if (hs < 0 || hp < 0 || hh < 0 || n2s <= 0.0 || n2p <= 0.0 ||
         n2h <= 0.0) {
         std::printf("mcwf_axpy (raw Vulkan): synthesize FAIL\n");
@@ -3629,7 +3417,6 @@ bool check_engine_bridge(ses_vk::DeviceContext& ctx) {
     const ses::Grid3D g{axis, axis, axis};
     const std::vector<double> v =
         ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const ses::SplitOperator3D prop{g, v, 0.02};
     ses::Field3D psi0 = ses::gaussian_wavepacket(g, ses::Vec3d{2.0, 0.0, 0.0},
                                                  ses::Vec3d{1.2, 1.2, 1.2},
                                                  ses::Vec3d{0.0, 0.5, 0.0});
@@ -3786,64 +3573,84 @@ int main() {
     std::printf("vkcheck: device '%s'%s\n", ctx.device_name,
                 ctx.validation_active ? " [validation ON]" : "");
 
-    int failures = 0;
-    failures += check_device_features(ctx) ? 0 : 1;
-    failures += check_phase_multiply(ctx) ? 0 : 1;
-    failures += check_scale(ctx) ? 0 : 1;
-    failures += check_norm_peak(ctx) ? 0 : 1;
-    failures += check_inner_product(ctx) ? 0 : 1;
-    failures += check_dipole_kick(ctx) ? 0 : 1;
-    failures += check_mean_force(ctx) ? 0 : 1;
-    failures += check_dipole(ctx) ? 0 : 1;
-    failures += check_fp16_roundtrip(ctx) ? 0 : 1;
-    failures += check_line_fft(ctx, 64, k_fft_line64_spv, k_fft_line64_spv_size)
-                    ? 0
-                    : 1;
-    failures +=
-        check_line_fft(ctx, 256, k_fft_line256_spv, k_fft_line256_spv_size)
-            ? 0
-            : 1;
-    failures +=
-        check_line_fft(ctx, 512, k_fft_line512_spv, k_fft_line512_spv_size)
-            ? 0
-            : 1;
-    failures += check_fft3(ctx) ? 0 : 1;
-    failures += check_spin_step(ctx) ? 0 : 1;
-    failures += check_spin_engine_step(ctx) ? 0 : 1;
-    failures += check_spin_bloch(ctx) ? 0 : 1;
-    failures += check_spin_fused_gate(ctx) ? 0 : 1;
-    failures += check_spin_permute(ctx) ? 0 : 1;
-    failures += check_spin_mf(ctx) ? 0 : 1;
-    failures += check_spin_mf_measure(ctx) ? 0 : 1;
-    failures += check_spin_measure_exact(ctx) ? 0 : 1;
-    failures += check_spin_hamiltonian(ctx) ? 0 : 1;
-    failures += check_spin_chebyshev(ctx) ? 0 : 1;
-    failures += check_lattice2d_step(ctx) ? 0 : 1;
-    failures += check_lattice2d_relax(ctx) ? 0 : 1;
-    failures += check_lattice2d_absorb_solenoid(ctx) ? 0 : 1;
-    failures += check_engine_step(ctx) ? 0 : 1;
-    failures += check_engine_planar(ctx) ? 0 : 1;
-    failures += check_engine_planar_mass(ctx) ? 0 : 1;
-    failures += check_engine_absorber(ctx) ? 0 : 1;
-    failures += check_engine_relax(ctx) ? 0 : 1;
-    failures += check_engine_driven(ctx) ? 0 : 1;
-    failures += check_engine_magnetic(ctx) ? 0 : 1;
-    failures += check_engine_deflation(ctx) ? 0 : 1;
-    failures += check_engine_synth(ctx) ? 0 : 1;
-    failures += check_engine_force(ctx) ? 0 : 1;
-    failures += check_engine_project(ctx) ? 0 : 1;
-    failures += check_engine_dipole_between(ctx) ? 0 : 1;
-    failures += check_engine_fp16_consumers(ctx) ? 0 : 1;
-    failures += check_engine_mcwf_axpy(ctx) ? 0 : 1;
-    failures += check_engine_reinit(ctx) ? 0 : 1;
-    failures += check_engine_marching_cubes(ctx) ? 0 : 1;
-    failures += check_engine_bridge(ctx) ? 0 : 1;
-    failures += check_engine_step_async(ctx) ? 0 : 1;
-    failures += check_engine_collapse_flush(ctx) ? 0 : 1;
+    struct Check {
+        const char* name;
+        bool (*fn)(ses_vk::DeviceContext&);
+    };
+    // Historical run order; a FAIL echoes the check's name so a truncated log
+    // still identifies the casualty.
+    static const Check kChecks[] = {
+        {"device_features",
+         [](ses_vk::DeviceContext& c) { return check_device_features(c); }},
+        {"phase_multiply", check_phase_multiply},
+        {"scale", check_scale},
+        {"norm_peak", check_norm_peak},
+        {"inner_product", check_inner_product},
+        {"dipole_kick", check_dipole_kick},
+        {"mean_force", check_mean_force},
+        {"dipole", check_dipole},
+        {"fp16_roundtrip", check_fp16_roundtrip},
+        {"line_fft_64",
+         [](ses_vk::DeviceContext& c) {
+             return check_line_fft(c, 64, k_fft_line64_spv,
+                                   k_fft_line64_spv_size);
+         }},
+        {"line_fft_256",
+         [](ses_vk::DeviceContext& c) {
+             return check_line_fft(c, 256, k_fft_line256_spv,
+                                   k_fft_line256_spv_size);
+         }},
+        {"line_fft_512",
+         [](ses_vk::DeviceContext& c) {
+             return check_line_fft(c, 512, k_fft_line512_spv,
+                                   k_fft_line512_spv_size);
+         }},
+        {"fft3", check_fft3},
+        {"spin_step", check_spin_step},
+        {"spin_engine_step", check_spin_engine_step},
+        {"spin_bloch", check_spin_bloch},
+        {"spin_fused_gate", check_spin_fused_gate},
+        {"spin_permute", check_spin_permute},
+        {"spin_mf", check_spin_mf},
+        {"spin_mf_measure", check_spin_mf_measure},
+        {"spin_measure_exact", check_spin_measure_exact},
+        {"spin_hamiltonian", check_spin_hamiltonian},
+        {"spin_chebyshev", check_spin_chebyshev},
+        {"lattice2d_step", check_lattice2d_step},
+        {"lattice2d_relax", check_lattice2d_relax},
+        {"lattice2d_absorb_solenoid", check_lattice2d_absorb_solenoid},
+        {"engine_step", check_engine_step},
+        {"engine_planar", check_engine_planar},
+        {"engine_planar_mass", check_engine_planar_mass},
+        {"engine_absorber", check_engine_absorber},
+        {"engine_relax", check_engine_relax},
+        {"engine_driven", check_engine_driven},
+        {"engine_magnetic", check_engine_magnetic},
+        {"engine_deflation", check_engine_deflation},
+        {"engine_synth", check_engine_synth},
+        {"engine_force", check_engine_force},
+        {"engine_project", check_engine_project},
+        {"engine_dipole_between", check_engine_dipole_between},
+        {"engine_fp16_consumers", check_engine_fp16_consumers},
+        {"engine_mcwf_axpy", check_engine_mcwf_axpy},
+        {"engine_reinit", check_engine_reinit},
+        {"engine_marching_cubes", check_engine_marching_cubes},
+        {"engine_bridge", check_engine_bridge},
+        {"engine_step_async", check_engine_step_async},
+        {"engine_collapse_flush", check_engine_collapse_flush},
 #ifdef SES_HAVE_VKFFT
-    failures += check_native_vkfft_perf(ctx) ? 0 : 1;
-    failures += check_timestamp_profile(ctx) ? 0 : 1;
+        {"native_vkfft_perf", check_native_vkfft_perf},
 #endif
+        {"timestamp_profile", check_timestamp_profile},
+    };
+
+    int failures = 0;
+    for (const Check& c : kChecks) {
+        if (!c.fn(ctx)) {
+            std::fprintf(stderr, "vkcheck: %s FAILED\n", c.name);
+            ++failures;
+        }
+    }
 
     const int verrs = ses_vk::g_validation_errors.load();
     if (ctx.validation_active && verrs != 0) {

@@ -71,21 +71,14 @@ inline int radial_bin_key(const Grid3D& g, const RadialGrid& rgrid, int i, int j
 }
 
 inline RadialBinIndex build_radial_bin_index(const Grid3D& g, const RadialGrid& rgrid) {
-    const int nx = g.x.n;
-    const int ny = g.y.n;
-    const int nz = g.z.n;
     const int nr = rgrid.n;
     std::vector<std::uint32_t> counts(static_cast<std::size_t>(nr), 0);
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int key = radial_bin_key(g, rgrid, i, j, k);
-                if (key >= 0) {
-                    ++counts[static_cast<std::size_t>(key)];
-                }
-            }
+    for_each_cell(g, [&](int i, int j, int k) {
+        const int key = radial_bin_key(g, rgrid, i, j, k);
+        if (key >= 0) {
+            ++counts[static_cast<std::size_t>(key)];
         }
-    }
+    });
     RadialBinIndex out;
     out.bin_off.assign(static_cast<std::size_t>(nr + 1), 0);
     for (int b = 0; b < nr; ++b) {
@@ -94,18 +87,13 @@ inline RadialBinIndex build_radial_bin_index(const Grid3D& g, const RadialGrid& 
     }
     out.sorted_cell.resize(out.bin_off[static_cast<std::size_t>(nr)]);
     std::vector<std::uint32_t> pos(out.bin_off.begin(), out.bin_off.end() - 1);
-    for (int k = 0; k < nz; ++k) {
-        for (int j = 0; j < ny; ++j) {
-            for (int i = 0; i < nx; ++i) {
-                const int key = radial_bin_key(g, rgrid, i, j, k);
-                if (key >= 0) {
-                    const std::uint32_t idx =
-                        static_cast<std::uint32_t>(i + nx * (j + ny * k));
-                    out.sorted_cell[pos[static_cast<std::size_t>(key)]++] = idx;
-                }
-            }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        const int key = radial_bin_key(g, rgrid, i, j, k);
+        if (key >= 0) {
+            out.sorted_cell[pos[static_cast<std::size_t>(key)]++] =
+                static_cast<std::uint32_t>(flat);
         }
-    }
+    });
     return out;
 }
 
@@ -114,9 +102,6 @@ inline RadialAngularProjection project_radial_angular(
     const std::vector<std::vector<double>>& u_by_level,
     const std::vector<ProjectorState>& states, int l_max = 5) {
     const Grid3D& g = psi.grid();
-    const int nx = g.x.n;
-    const int ny = g.y.n;
-    const int nz = g.z.n;
     const double h = rgrid.h();
     const double rmax = rgrid.rmax;
     const int nr = rgrid.n;
@@ -128,49 +113,45 @@ inline RadialAngularProjection project_radial_angular(
                     std::vector<std::complex<double>>(static_cast<std::size_t>(nr),
                                                  std::complex<double>{}));
 
-    for (int k = 0; k < nz; ++k) {
+    for_each_cell(g, [&](int i, int j, int k) {
+        const double x = g.x.coord(i);
+        const double y = g.y.coord(j);
         const double z = g.z.coord(k);
-        for (int j = 0; j < ny; ++j) {
-            const double y = g.y.coord(j);
-            for (int i = 0; i < nx; ++i) {
-                const double x = g.x.coord(i);
-                const double r = std::sqrt(x * x + y * y + z * z);
-                if (r >= rmax) {
-                    continue;  // outside radial box: no deposit (norm deficit)
-                }
-                int b0 = 0;
-                int b1 = -1;
-                double w0 = 0.0;
-                double w1 = 0.0;
-                if (r < h) {
-                    b0 = 0;
-                    w0 = 1.0 / h;
-                } else {
-                    const double t = r / h - 1.0;  // r_i = (i+1) h
-                    const int i0 = static_cast<int>(t);
-                    const double frac = t - static_cast<double>(i0);
-                    b0 = i0;
-                    w0 = (1.0 - frac) / r;
-                    if (i0 + 1 < nr) {
-                        b1 = i0 + 1;
-                        w1 = frac / r;  // outermost node = pinned u(rmax)=0: dropped
-                    }
-                }
-                const std::complex<double> pdV = psi(i, j, k) * dV;
-                for (int l = 0; l <= l_max; ++l) {
-                    for (int m = -l; m <= l; ++m) {
-                        const double Y = real_spherical_harmonic(l, m, x, y, z);
-                        const std::complex<double> contrib = pdV * Y;
-                        const std::size_t c = static_cast<std::size_t>(lm_index(l, m));
-                        out.g_lm[c][static_cast<std::size_t>(b0)] += contrib * w0;
-                        if (b1 >= 0) {
-                            out.g_lm[c][static_cast<std::size_t>(b1)] += contrib * w1;
-                        }
-                    }
+        const double r = std::sqrt(x * x + y * y + z * z);
+        if (r >= rmax) {
+            return;  // outside radial box: no deposit (norm deficit)
+        }
+        int b0 = 0;
+        int b1 = -1;
+        double w0 = 0.0;
+        double w1 = 0.0;
+        if (r < h) {
+            b0 = 0;
+            w0 = 1.0 / h;
+        } else {
+            const double t = r / h - 1.0;  // r_i = (i+1) h
+            const int i0 = static_cast<int>(t);
+            const double frac = t - static_cast<double>(i0);
+            b0 = i0;
+            w0 = (1.0 - frac) / r;
+            if (i0 + 1 < nr) {
+                b1 = i0 + 1;
+                w1 = frac / r;  // outermost node = pinned u(rmax)=0: dropped
+            }
+        }
+        const std::complex<double> pdV = psi(i, j, k) * dV;
+        for (int l = 0; l <= l_max; ++l) {
+            for (int m = -l; m <= l; ++m) {
+                const double Y = real_spherical_harmonic(l, m, x, y, z);
+                const std::complex<double> contrib = pdV * Y;
+                const std::size_t c = static_cast<std::size_t>(lm_index(l, m));
+                out.g_lm[c][static_cast<std::size_t>(b0)] += contrib * w0;
+                if (b1 >= 0) {
+                    out.g_lm[c][static_cast<std::size_t>(b1)] += contrib * w1;
                 }
             }
         }
-    }
+    });
 
     out.amp.assign(states.size(), std::complex<double>{});
     out.norm2.assign(states.size(), 0.0);

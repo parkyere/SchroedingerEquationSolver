@@ -10,7 +10,7 @@ import complex;
 
 struct Params {
     float bx, by, bz, j;
-    uint nb, n, pad0, pad1;
+    uint nb, n, n_sites, pad1;
 };
 [[vk::binding(3, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
@@ -23,7 +23,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
     Complex cm = inbuf[m];
     Complex field = Complex(0.0, 0.0);
-    for (uint i = 0u; i < 16u; ++i) {
+    for (uint i = 0u; i < params.n_sites; ++i) {
         uint bi = 1u << i;
         bool up = (m & bi) == 0u;
         Complex flip = inbuf[m ^ bi];

@@ -1,10 +1,12 @@
+module;
+#include <iterator>
 export module ses.scenario.manifold_spec;
 
 
 // n = 6 box-critical on the +-80 Bohr grid; first five indices frozen (selftests).
 
 
-export {
+export namespace ses_shell {
 
 enum StateIndex : int {
     kS1 = 0, kP2X = 1, kP2Y = 2, kP2Z = 3, kS2 = 4,
@@ -35,7 +37,7 @@ struct StateSpec {
     int m;
     const char* name;
 };
-inline constexpr StateSpec kStateSpec[kNumStates] = {
+inline constexpr StateSpec kStateSpec[] = {
     {0, 0, 0, "1s"},
     {2, 1, 1, "2p_x"}, {2, 1, -1, "2p_y"}, {2, 1, 0, "2p_z"},
     {1, 0, 0, "2s"},
@@ -81,6 +83,18 @@ inline constexpr int state_n(int idx) {
            kLevelSpec[kStateSpec[idx].level].k + 1;
 }
 
+// Size derived, then pinned: a short table would silently zero-fill (name
+// nullptr). Sparse enum anchors: a reorder/insert must fail HERE, not at runtime.
+static_assert(std::size(kStateSpec) == kNumStates);
+static_assert(state_n(k4S) == 4 && kStateSpec[k4S].l == 0 &&
+              kStateSpec[k4S].m == 0);
+static_assert(state_n(k4F0) == 4 && kStateSpec[k4F0].l == 3 &&
+              kStateSpec[k4F0].m == 0);
+static_assert(state_n(k5S) == 5 && kStateSpec[k5S].l == 0 &&
+              kStateSpec[k5S].m == 0);
+static_assert(state_n(k6S) == 6 && kStateSpec[k6S].l == 0 &&
+              kStateSpec[k6S].m == 0);
+
 struct ShellChannel {
     int from;
     int to;
@@ -90,4 +104,4 @@ struct ShellChannel {
 };
 
 
-}  // export
+}  // namespace ses_shell

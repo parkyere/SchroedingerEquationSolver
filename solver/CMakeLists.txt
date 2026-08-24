@@ -18,10 +18,15 @@ foreach(_k IN ITEMS phase_multiply scale norm_peak norm_finalize scale_buf
         spin_permute spin_mf_snapshot spin_mf_sweep spin_mf_measure
         spin_born_sample spin_collapse_basis spin_hamiltonian
         spin_cheb_first spin_cheb_next
-        lat2d_sweep_x lat2d_sweep_y
-        fft_line8 fft_line64 fft_line256 fft_line512)
+        lat2d_sweep_x lat2d_sweep_y)
     ses_bake_shader(_ses_solver_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
                     "${_ses_solver_spv_dir}" "${_k}.comp" compute "${_k}")
+endforeach()
+# fft_line: ONE source, four baked sizes (headers/symbols keep the old names).
+foreach(_n IN ITEMS 8 64 256 512)
+    ses_bake_shader(_ses_solver_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                    "${_ses_solver_spv_dir}" "fft_line.comp" compute "fft_line${_n}"
+                    "-DFFT_N=${_n}")
 endforeach()
 add_custom_target(ses_solver_spv DEPENDS ${_ses_solver_hdrs})
 

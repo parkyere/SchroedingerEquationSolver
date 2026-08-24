@@ -44,13 +44,18 @@ inline RadialHamiltonian radial_hamiltonian(const RadialGrid& g,
     return ham;
 }
 
-// Sturm/Sylvester inertia: #eigenvalues below e = #negative LDL^T pivots.
-inline int sturm_count_below(const RadialHamiltonian& ham, double e) noexcept {
-    const double off2 = ham.off * ham.off;
+namespace radial_detail {
+
+// Ratio-form LDL^T pivot recurrence (LAPACK dlaebz style; the product form
+// sticks at exact leading-minor hits). CONVENTION (test-pinned): zero pivot
+// nudged to -1e-300 AFTER the update -> an exact-hit pivot counts below.
+template <class Off2At>
+inline int sturm_count_impl(const std::vector<double>& diag, double lambda,
+                            Off2At&& off2_at) noexcept {
     int count = 0;
     double q = 1.0;
-    for (std::size_t i = 0; i < ham.diag.size(); ++i) {
-        q = (ham.diag[i] - e) - (i == 0 ? 0.0 : off2 / q);
+    for (std::size_t i = 0; i < diag.size(); ++i) {
+        q = (diag[i] - lambda) - (i == 0 ? 0.0 : off2_at(i) / q);
         if (q == 0.0) {
             q = -1e-300;  // graze: nudge off the singularity, counted below
         }
@@ -59,6 +64,45 @@ inline int sturm_count_below(const RadialHamiltonian& ham, double e) noexcept {
         }
     }
     return count;
+}
+
+}  // namespace radial_detail
+
+// Sturm/Sylvester inertia: #eigenvalues below lambda = #negative LDL^T pivots.
+// Symmetric tridiagonal, constant off-diagonal.
+inline int sturm_count_below(const std::vector<double>& diag, double off,
+                             double lambda) noexcept {
+    const double off2 = off * off;
+    return radial_detail::sturm_count_impl(diag, lambda,
+                                           [off2](std::size_t) { return off2; });
+}
+
+// General off-diagonal vector (off.size() == diag.size() - 1).
+inline int sturm_count_below(const std::vector<double>& diag,
+                             const std::vector<double>& off,
+                             double lambda) noexcept {
+    return radial_detail::sturm_count_impl(
+        diag, lambda, [&off](std::size_t i) { return off[i - 1] * off[i - 1]; });
+}
+
+inline int sturm_count_below(const RadialHamiltonian& ham, double e) noexcept {
+    return sturm_count_below(ham.diag, ham.off, e);
+}
+
+// Bisect to the k-th eigenvalue: count_below(mid) <= k keeps lo. rel_tol 0
+// runs the full 200 halvings (band solver); radial passes 1e-13.
+template <class CountBelow>
+inline double bisect_kth_eigenvalue(double lo, double hi, int k, double rel_tol,
+                                    CountBelow&& count_below) {
+    for (int it = 0; it < 200 && (hi - lo) > rel_tol * (1.0 + std::abs(lo)); ++it) {
+        const double mid = 0.5 * (lo + hi);
+        if (count_below(mid) <= k) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return 0.5 * (lo + hi);
 }
 
 struct RadialState {
@@ -117,16 +161,9 @@ inline RadialState radial_eigenstate(const RadialGrid& g, const RadialHamiltonia
     }
     lo -= 2.0 * std::abs(ham.off);
     hi += 2.0 * std::abs(ham.off);
-    for (int it = 0; it < 200 && (hi - lo) > 1e-13 * (1.0 + std::abs(lo)); ++it) {
-        const double mid = 0.5 * (lo + hi);
-        if (sturm_count_below(ham, mid) <= k) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
     RadialState s;
-    s.energy = 0.5 * (lo + hi);
+    s.energy = bisect_kth_eigenvalue(
+        lo, hi, k, 1e-13, [&](double mid) { return sturm_count_below(ham, mid); });
 
     const double sigma = s.energy + 1e-9 * (1.0 + std::abs(s.energy));
     s.u.assign(ham.diag.size(), 1.0);

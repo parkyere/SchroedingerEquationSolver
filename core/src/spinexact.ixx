@@ -1,5 +1,6 @@
 module;
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -27,25 +28,27 @@ struct SpinState16 {
     std::vector<std::complex<double>> c;
 };
 
-inline int exact_bonds(int (*out)[2]) {
-    int n = 0;
-    for (int y = 0; y < kExactSide; ++y) {
-        for (int x = 0; x < kExactSide; ++x) {
-            const int i = y * kExactSide + x;
-            if (x + 1 < kExactSide) {
-                out[n][0] = i;
-                out[n][1] = i + 1;
-                ++n;
-            }
-            if (y + 1 < kExactSide) {
-                out[n][0] = i;
-                out[n][1] = i + kExactSide;
-                ++n;
+// Open-boundary nn bonds, row-major site sweep (horizontal then vertical per
+// site) -- the gate order every consumer shares.
+inline constexpr std::array<std::array<int, 2>,
+                            2 * kExactSide * (kExactSide - 1)>
+    exact_bonds = [] {
+        std::array<std::array<int, 2>, 2 * kExactSide * (kExactSide - 1)>
+            out{};
+        std::size_t n = 0;
+        for (int y = 0; y < kExactSide; ++y) {
+            for (int x = 0; x < kExactSide; ++x) {
+                const int i = y * kExactSide + x;
+                if (x + 1 < kExactSide) {
+                    out[n++] = {i, i + 1};
+                }
+                if (y + 1 < kExactSide) {
+                    out[n++] = {i, i + kExactSide};
+                }
             }
         }
-    }
-    return n;
-}
+        return out;
+    }();
 
 inline SpinState16 exact_from_product(const SpinLattice& l) {
     SpinState16 s;
@@ -63,8 +66,7 @@ inline SpinState16 exact_from_product(const SpinLattice& l) {
 }
 
 // Reduced per-site Bloch vector <sigma_i>.
-inline void exact_site_bloch(const SpinState16& s, int site, double* x,
-                             double* y, double* z) {
+inline Vec3d exact_site_bloch(const SpinState16& s, int site) {
     const std::size_t b = std::size_t{1} << site;
     std::complex<double> cr{};
     double zz = 0.0;
@@ -75,9 +77,7 @@ inline void exact_site_bloch(const SpinState16& s, int site, double* x,
         cr += std::conj(s.c[m]) * s.c[m | b];
         zz += std::norm(s.c[m]) - std::norm(s.c[m | b]);
     }
-    *x = 2.0 * cr.real();
-    *y = 2.0 * cr.imag();
-    *z = zz;
+    return Vec3d{2.0 * cr.real(), 2.0 * cr.imag(), zz};
 }
 
 // 2x2 site rotation U = exp(-i angle/2 n.sigma). Shared source: CPU, GPU
@@ -160,31 +160,45 @@ inline void exact_bond_gate(SpinState16& s, int si, int sj,
     });
 }
 
-// Strang step; bond sweep reversed on the return (shared sites -> palindrome
-// keeps 2nd order).
-inline void exact_step(SpinState16& s, double bx, double by, double bz,
-                       double j, double dt) {
-    const double bmag = std::sqrt(bx * bx + by * by + bz * bz);
-    int bonds[2 * kExactSites][2];
-    const int nb = exact_bonds(bonds);
-    if (bmag > 0.0) {
+// THE Strang order (half site sweep, bond sweep, reversed bond sweep, half
+// site sweep -- shared sites need the palindrome for 2nd order). One source:
+// exact_step applies gates directly, step_gates records them.
+template <class SiteOp, class BondOp>
+inline void strang_step_ops(bool with_field, SiteOp&& site_op,
+                            BondOp&& bond_op) {
+    const int nb = static_cast<int>(exact_bonds.size());
+    if (with_field) {
         for (int i = 0; i < kExactSites; ++i) {
-            exact_site_rotate(s, i, bx / bmag, by / bmag, bz / bmag,
-                              bmag * 0.5 * dt);
+            site_op(i);
         }
     }
     for (int k = 0; k < nb; ++k) {
-        exact_bond_gate(s, bonds[k][0], bonds[k][1], 0.5 * j * dt);
+        bond_op(k);
     }
     for (int k = nb - 1; k >= 0; --k) {
-        exact_bond_gate(s, bonds[k][0], bonds[k][1], 0.5 * j * dt);
+        bond_op(k);
     }
-    if (bmag > 0.0) {
+    if (with_field) {
         for (int i = 0; i < kExactSites; ++i) {
-            exact_site_rotate(s, i, bx / bmag, by / bmag, bz / bmag,
-                              bmag * 0.5 * dt);
+            site_op(i);
         }
     }
+}
+
+inline void exact_step(SpinState16& s, double bx, double by, double bz,
+                       double j, double dt) {
+    const double bmag = std::sqrt(bx * bx + by * by + bz * bz);
+    strang_step_ops(
+        bmag > 0.0,
+        [&](int i) {
+            exact_site_rotate(s, i, bx / bmag, by / bmag, bz / bmag,
+                              bmag * 0.5 * dt);
+        },
+        [&](int k) {
+            exact_bond_gate(s, exact_bonds[static_cast<std::size_t>(k)][0],
+                            exact_bonds[static_cast<std::size_t>(k)][1],
+                            0.5 * j * dt);
+        });
 }
 
 // <H> = (1/2) sum_i B.<sigma_i> - J sum_bonds <sigma_i.sigma_j>;
@@ -193,17 +207,12 @@ inline double exact_energy(const SpinState16& s, double bx, double by,
                            double bz, double j) {
     double e = 0.0;
     for (int i = 0; i < kExactSites; ++i) {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        exact_site_bloch(s, i, &x, &y, &z);
-        e += 0.5 * (bx * x + by * y + bz * z);
+        const Vec3d p = exact_site_bloch(s, i);
+        e += 0.5 * (bx * p.x + by * p.y + bz * p.z);
     }
-    int bonds[2 * kExactSites][2];
-    const int nb = exact_bonds(bonds);
-    for (int k = 0; k < nb; ++k) {
-        const std::size_t bi = std::size_t{1} << bonds[k][0];
-        const std::size_t bj = std::size_t{1} << bonds[k][1];
+    for (const std::array<int, 2>& bd : exact_bonds) {
+        const std::size_t bi = std::size_t{1} << bd[0];
+        const std::size_t bj = std::size_t{1} << bd[1];
         double swp = 0.0;
         for (std::size_t m = 0; m < kExactDim; ++m) {
             const bool i_dn = (m & bi) != 0;
@@ -225,8 +234,6 @@ inline double exact_energy(const SpinState16& s, double bx, double by,
 inline void hamiltonian_apply(SpinState16& out, const SpinState16& in,
                               double bx, double by, double bz, double j) {
     out.c.resize(kExactDim);
-    int bonds[2 * kExactSites][2];
-    const int nb = exact_bonds(bonds);
     const std::complex<double> I{0.0, 1.0};
     parallel_for(static_cast<int>(kExactDim), [&](int mi) {
         const std::size_t m = static_cast<std::size_t>(mi);
@@ -238,9 +245,9 @@ inline void hamiltonian_apply(SpinState16& out, const SpinState16& in,
             acc += 0.5 * (bx * flip + by * (up ? -I : I) * flip +
                           bz * (up ? 1.0 : -1.0) * in.c[m]);
         }
-        for (int k = 0; k < nb; ++k) {
-            const std::size_t bi = std::size_t{1} << bonds[k][0];
-            const std::size_t bj = std::size_t{1} << bonds[k][1];
+        for (const std::array<int, 2>& bd : exact_bonds) {
+            const std::size_t bi = std::size_t{1} << bd[0];
+            const std::size_t bj = std::size_t{1} << bd[1];
             const bool si = (m & bi) != 0;
             const bool sj = (m & bj) != 0;
             acc += -j * ((si == sj ? 1.0 : -1.0) * in.c[m] +
@@ -253,11 +260,16 @@ inline void hamiltonian_apply(SpinState16& out, const SpinState16& in,
 
 // Spectral half-width bound |H| <= 8|B| + 72|J| (field 1/2*16*|B|, bonds
 // |sigma.sigma|=3 over 24 bonds), so H/R has spectrum in [-1,1].
+// +1e-12: keeps R > 0 at B = J = 0, guarding chebyshev_evolve's /R.
 inline double hamiltonian_spectral_bound(double bx, double by, double bz,
                                          double j) {
     return 8.0 * std::sqrt(bx * bx + by * by + bz * bz) +
            72.0 * std::abs(j) + 1e-12;
 }
+
+// J_k(alpha) decays super-exponentially once k > alpha: kChebTailPad extra
+// terms push the truncation error below double round-off.
+inline constexpr int kChebTailPad = 24;
 
 // Exact time-independent propagator exp(-i H dt) via Chebyshev expansion:
 // exp(-i alpha x) = sum_k (2-d_k0)(-i)^k J_k(alpha) T_k(x), x = H/R, alpha = R dt,
@@ -267,7 +279,7 @@ inline void chebyshev_evolve(SpinState16& psi, double bx, double by,
                              double bz, double j, double dt) {
     const double R = hamiltonian_spectral_bound(bx, by, bz, j);
     const double alpha = R * dt;
-    const int K = static_cast<int>(std::ceil(alpha)) + 24;
+    const int K = static_cast<int>(std::ceil(alpha)) + kChebTailPad;
     auto pow_minus_i = [](int k) -> std::complex<double> {
         switch (k & 3) {
             case 0: return {1.0, 0.0};
@@ -407,33 +419,25 @@ inline FusedGate bond_fused_gate(int si, int sj, double theta) {
     return FusedGate{{lo, hi}, std::move(m)};
 }
 
-// The exact_step gate list, unfused (site sweeps + palindromic bond sweeps).
+// The exact_step gate list, unfused -- same strang_step_ops source, so the
+// two can never drift apart.
 inline std::vector<FusedGate> step_gates(double bx, double by, double bz,
                                          double j, double dt) {
     const double bmag = std::sqrt(bx * bx + by * by + bz * bz);
     std::vector<FusedGate> gs;
-    int bonds[2 * kExactSites][2];
-    const int nb = exact_bonds(bonds);
     const double nx = bmag > 0.0 ? bx / bmag : 0.0;
     const double ny = bmag > 0.0 ? by / bmag : 0.0;
     const double nz = bmag > 0.0 ? bz / bmag : 0.0;
     const double a = bmag * 0.5 * dt;
-    if (bmag > 0.0) {
-        for (int i = 0; i < kExactSites; ++i) {
-            gs.push_back(site_fused_gate(i, nx, ny, nz, a));
-        }
-    }
-    for (int k = 0; k < nb; ++k) {
-        gs.push_back(bond_fused_gate(bonds[k][0], bonds[k][1], 0.5 * j * dt));
-    }
-    for (int k = nb - 1; k >= 0; --k) {
-        gs.push_back(bond_fused_gate(bonds[k][0], bonds[k][1], 0.5 * j * dt));
-    }
-    if (bmag > 0.0) {
-        for (int i = 0; i < kExactSites; ++i) {
-            gs.push_back(site_fused_gate(i, nx, ny, nz, a));
-        }
-    }
+    strang_step_ops(
+        bmag > 0.0,
+        [&](int i) { gs.push_back(site_fused_gate(i, nx, ny, nz, a)); },
+        [&](int k) {
+            gs.push_back(
+                bond_fused_gate(exact_bonds[static_cast<std::size_t>(k)][0],
+                                exact_bonds[static_cast<std::size_t>(k)][1],
+                                0.5 * j * dt));
+        });
     return gs;
 }
 

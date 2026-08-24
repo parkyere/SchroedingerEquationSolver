@@ -1,14 +1,6 @@
 module;
 #include <volk.h>
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include <vk_mem_alloc.h>
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ses_vma.h"
 #include <phase_multiply_spv.h>
 #include <lat2d_sweep_x_spv.h>
 #include <lat2d_sweep_y_spv.h>
@@ -105,6 +97,10 @@ public:
     // field). Safe to call repeatedly (dt / potential changes).
     void set_lattice(const ses::Grid3D& g, const std::vector<double>& potential,
                      double dt) {
+        // Same size contract as set_absorber: mismatch => OOB read below.
+        if (static_cast<int>(potential.size()) != g.x.n * g.y.n) {
+            return;
+        }
         g_ = &g;
         nx_ = g.x.n;
         ny_ = g.y.n;
@@ -139,12 +135,12 @@ public:
         upload_complex(hv_it_, hv_it);
 
         const NParams np{static_cast<std::uint32_t>(cells), 0, 0, 0};
-        write_ubo(phase_ubo_, &np, sizeof(np));
-        write_ubo(np_ubo_, &np, sizeof(np));
-        write_ubo(sc_ubo_, &np, sizeof(np));
+        write_ubo(*ctx_, phase_ubo_, &np, sizeof(np));
+        write_ubo(*ctx_, np_ubo_, &np, sizeof(np));
+        write_ubo(*ctx_, sc_ubo_, &np, sizeof(np));
         const NFParams nf{kGroups, static_cast<float>(g.cell_volume()), 0.0f,
                           0.0f};
-        write_ubo(nf_ubo_, &nf, sizeof(nf));
+        write_ubo(*ctx_, nf_ubo_, &nf, sizeof(nf));
         // Real-time bonds: c = cos(t dt/2), mix = i sin(t dt/2); y-odd = full dt.
         write_sweep(sx_ubo_[0], 0, std::cos(tx * 0.5 * dt),
                     {0.0, std::sin(tx * 0.5 * dt)});
@@ -235,18 +231,9 @@ public:
 
     // state_ -> host; caller reads state() as interleaved re/im fp32.
     void download() {
-        OneShot shot;
-        if (!shot.begin_compute(*ctx_)) {
-            return;
-        }
-        VkCommandBuffer cb = shot.cb();
-        barrier_compute_to_transfer(cb);
         const VkDeviceSize bytes =
             static_cast<VkDeviceSize>(n_cells_) * 2 * sizeof(float);
-        const VkBufferCopy r{0, 0, bytes};
-        vkCmdCopyBuffer(cb, state_.buf, staging_.buf, 1, &r);
-        barrier_transfer_to_host(cb);
-        shot.submit_and_wait(*ctx_);
+        copy_sync(*ctx_, state_.buf, staging_.buf, bytes, CopyDir::to_host);
         vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
                                 VK_WHOLE_SIZE);
     }
@@ -313,7 +300,7 @@ private:
     };
 
     std::uint32_t cell_groups() const {
-        return static_cast<std::uint32_t>((n_cells_ + 255) / 256);
+        return group_count(static_cast<std::uint64_t>(n_cells_));
     }
 
     // One Strang palindrome: (1/2)V . Bx . By(full) . Bx . (1/2)V, with a
@@ -337,11 +324,6 @@ private:
         go(phase_k_, phase_set);
     }
 
-    void write_ubo(Buffer& b, const void* src, std::size_t bytes) {
-        std::memcpy(b.mapped, src, bytes);
-        vmaFlushAllocation(ctx_->allocator, b.alloc, 0, VK_WHOLE_SIZE);
-    }
-
     void write_sweep(Buffer& b, std::uint32_t parity, double c,
                      std::complex<double> mix) {
         SweepParams sp{static_cast<std::uint32_t>(nx_),
@@ -352,53 +334,39 @@ private:
                        static_cast<float>(mix.imag()),
                        0.0f,
                        0.0f};
-        write_ubo(b, &sp, sizeof(sp));
+        write_ubo(*ctx_, b, &sp, sizeof(sp));
+    }
+
+    // Pack into staging via `pack`, flush, then staged copy to `dst`.
+    template <typename Pack>
+    void upload_packed(Buffer& dst, VkDeviceSize bytes, Pack&& pack) {
+        if (staging_.mapped == nullptr) {
+            return;  // alloc_lattice failed: nothing to write into
+        }
+        pack(static_cast<float*>(staging_.mapped));
+        vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
+        copy_sync(*ctx_, staging_.buf, dst.buf, bytes, CopyDir::to_device);
     }
 
     void upload_complex(Buffer& dst,
                         const std::vector<std::complex<double>>& src) {
-        if (staging_.mapped == nullptr) {
-            return;  // alloc_lattice failed: nothing to write into
-        }
-        float* p = static_cast<float*>(staging_.mapped);
-        for (std::size_t i = 0; i < src.size(); ++i) {
-            p[2 * i] = static_cast<float>(src[i].real());
-            p[2 * i + 1] = static_cast<float>(src[i].imag());
-        }
-        vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        OneShot shot;
-        if (!shot.begin_compute(*ctx_)) {
-            return;
-        }
-        VkCommandBuffer cb = shot.cb();
-        const VkDeviceSize bytes =
-            static_cast<VkDeviceSize>(src.size()) * 2 * sizeof(float);
-        const VkBufferCopy r{0, 0, bytes};
-        vkCmdCopyBuffer(cb, staging_.buf, dst.buf, 1, &r);
-        barrier_transfer_to_compute(cb);
-        shot.submit_and_wait(*ctx_);
+        upload_packed(dst,
+                      static_cast<VkDeviceSize>(src.size()) * 2 * sizeof(float),
+                      [&src](float* p) {
+                          for (std::size_t i = 0; i < src.size(); ++i) {
+                              p[2 * i] = static_cast<float>(src[i].real());
+                              p[2 * i + 1] = static_cast<float>(src[i].imag());
+                          }
+                      });
     }
 
     void upload_real(Buffer& dst, const std::vector<double>& src) {
-        if (staging_.mapped == nullptr) {
-            return;  // alloc_lattice failed: nothing to write into
-        }
-        float* p = static_cast<float*>(staging_.mapped);
-        for (std::size_t i = 0; i < src.size(); ++i) {
-            p[i] = static_cast<float>(src[i]);
-        }
-        vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        OneShot shot;
-        if (!shot.begin_compute(*ctx_)) {
-            return;
-        }
-        VkCommandBuffer cb = shot.cb();
-        const VkBufferCopy r{0, 0,
-                             static_cast<VkDeviceSize>(src.size()) *
-                                 sizeof(float)};
-        vkCmdCopyBuffer(cb, staging_.buf, dst.buf, 1, &r);
-        barrier_transfer_to_compute(cb);
-        shot.submit_and_wait(*ctx_);
+        upload_packed(dst, static_cast<VkDeviceSize>(src.size()) * sizeof(float),
+                      [&src](float* p) {
+                          for (std::size_t i = 0; i < src.size(); ++i) {
+                              p[i] = static_cast<float>(src[i]);
+                          }
+                      });
     }
 
     bool alloc_lattice(int cells) {

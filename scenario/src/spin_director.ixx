@@ -15,6 +15,7 @@ module;
 export module ses.scenario.spin_director;
 export import ses.scenario;
 export import ses.spin;
+import ses.vec;
 
 
 // One electron spin at origin: H = (1/2) B.sigma via exact SU(2) rotations
@@ -65,12 +66,12 @@ public:
         title_dirty_ = true;
     }
     bool rf_on() const override { return rf_on_; }
-    void pulse(bool half) override {
+    void pulse(Pulse p) override {
         for (ses::Spinor& s : ens_) {
             ses::spin_rotate(s, 1.0, 0.0, 0.0,
-                             half ? 0.5 * kPi : kPi);
+                             p == Pulse::Half ? 0.5 * kPi : kPi);
         }
-        note_ = half ? "pi/2 pulse" : "pi pulse";
+        note_ = p == Pulse::Half ? "pi/2 pulse" : "pi pulse";
         title_dirty_ = true;
     }
     void spin_echo() override {
@@ -80,13 +81,14 @@ public:
         for (int i = 0; i < kSpEcho; ++i) {
             det_[static_cast<std::size_t>(i)] = 1.0 + d(rng_);
         }
-        pulse(true);
+        pulse(Pulse::Half);
         echo_stage_ = 1;
         echo_left_ = static_cast<int>(kSpEchoTau / kSpDt + 0.5);
         echo_peak_ = 0.0;
         note_ = "echo: dephasing...";
         title_dirty_ = true;
     }
+    double echo_tau() const override { return kSpEchoTau; }
     double echo_peak() const override { return echo_peak_; }
     double bloch_x() override { return mean_[0]; }
     double bloch_y() override { return mean_[1]; }
@@ -123,19 +125,10 @@ public:
     void do_set_real_time() override {}
     void reset_simulation() override { reset_state(); }
     void measure_now() override {
-        double nx = b_[0];
-        double ny = b_[1];
-        double nz = b_[2];
-        const double bn = std::sqrt(nx * nx + ny * ny + nz * nz);
-        if (bn < 1e-9) {
-            nx = 0.0;
-            ny = 0.0;
-            nz = 1.0;
-        } else {
-            nx /= bn;
-            ny /= bn;
-            nz /= bn;
-        }
+        const ses::Vec3d nv = ses::unit_or_z({b_[0], b_[1], b_[2]});
+        const double nx = nv.x;
+        const double ny = nv.y;
+        const double nz = nv.z;
         std::uniform_real_distribution<double> uni(0.0, 1.0);
         int plus = 0;
         for (ses::Spinor& s : ens_) {
@@ -149,27 +142,14 @@ public:
     }
     void toggle_view_mode() override {}
     bool handle_key(char key) override {
-        if (key == '2') {
-            reset_state();
-            return true;
+        switch (key) {
+            case '2': reset_state(); return true;
+            case '3': pulse(Pulse::Half); return true;
+            case '4': pulse(Pulse::Pi); return true;
+            case '5': spin_echo(); return true;
+            case 'L': toggle_rf(); return true;
+            default: return false;
         }
-        if (key == '3') {
-            pulse(true);
-            return true;
-        }
-        if (key == '4') {
-            pulse(false);
-            return true;
-        }
-        if (key == '5') {
-            spin_echo();
-            return true;
-        }
-        if (key == 'L') {
-            toggle_rf();
-            return true;
-        }
-        return false;
     }
 
     bool solving() const override { return false; }
@@ -313,7 +293,7 @@ private:
             }
             if (echo_stage_ != 0 && --echo_left_ <= 0) {
                 if (echo_stage_ == 1) {
-                    pulse(false);  // the refocusing pi
+                    pulse(Pulse::Pi);  // the refocusing pi
                     echo_stage_ = 2;
                     echo_left_ =
                         static_cast<int>(kSpEchoTau / kSpDt + 0.5);
@@ -336,13 +316,10 @@ private:
         double sy = 0.0;
         double sz = 0.0;
         for (const ses::Spinor& s : ens_) {
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
-            ses::bloch_vector(s, &x, &y, &z);
-            sx += x;
-            sy += y;
-            sz += z;
+            const ses::Vec3d p = ses::bloch_vector(s);
+            sx += p.x;
+            sy += p.y;
+            sz += p.z;
         }
         const double inv = 1.0 / static_cast<double>(ens_.size());
         mean_[0] = sx * inv;
@@ -379,40 +356,30 @@ private:
     }
 
     void rebuild_arrows() {
+        auto put = [](std::vector<float>& v, double x, double y, double z) {
+            v.push_back(static_cast<float>(x));
+            v.push_back(static_cast<float>(y));
+            v.push_back(static_cast<float>(z));
+        };
         fan_.clear();
         if (ens_.size() > 1) {
             for (const ses::Spinor& s : ens_) {
-                double x = 0.0;
-                double y = 0.0;
-                double z = 0.0;
-                ses::bloch_vector(s, &x, &y, &z);
+                const ses::Vec3d p = ses::bloch_vector(s);
                 if (!fan_.empty()) {
                     const std::size_t nn = fan_.size();
-                    fan_.push_back(fan_[nn - 3]);
-                    fan_.push_back(fan_[nn - 2]);
-                    fan_.push_back(fan_[nn - 1]);
-                    fan_.push_back(0.0f);
-                    fan_.push_back(0.0f);
-                    fan_.push_back(0.0f);
+                    put(fan_, fan_[nn - 3], fan_[nn - 2], fan_[nn - 1]);
+                    put(fan_, 0.0, 0.0, 0.0);
                 }
-                fan_.push_back(0.0f);
-                fan_.push_back(0.0f);
-                fan_.push_back(0.0f);
-                fan_.push_back(static_cast<float>(kSpR * x));
-                fan_.push_back(static_cast<float>(kSpR * y));
-                fan_.push_back(static_cast<float>(kSpR * z));
+                put(fan_, 0.0, 0.0, 0.0);
+                put(fan_, kSpR * p.x, kSpR * p.y, kSpR * p.z);
             }
         }
         arrow_.clear();
         const double ax = kSpR * mean_[0];
         const double ay = kSpR * mean_[1];
         const double az = kSpR * mean_[2];
-        arrow_.push_back(0.0f);
-        arrow_.push_back(0.0f);
-        arrow_.push_back(0.0f);
-        arrow_.push_back(static_cast<float>(ax));
-        arrow_.push_back(static_cast<float>(ay));
-        arrow_.push_back(static_cast<float>(az));
+        put(arrow_, 0.0, 0.0, 0.0);
+        put(arrow_, ax, ay, az);
         const double len = std::sqrt(ax * ax + ay * ay + az * az);
         if (len > 1e-6) {
             const double hx = ax * (1.0 - 1.5 / len);
@@ -432,12 +399,8 @@ private:
             py *= 0.8 / pn;
             pz *= 0.8 / pn;
             for (int w = -1; w <= 1; w += 2) {
-                arrow_.push_back(static_cast<float>(ax));
-                arrow_.push_back(static_cast<float>(ay));
-                arrow_.push_back(static_cast<float>(az));
-                arrow_.push_back(static_cast<float>(hx + w * px));
-                arrow_.push_back(static_cast<float>(hy + w * py));
-                arrow_.push_back(static_cast<float>(hz + w * pz));
+                put(arrow_, ax, ay, az);
+                put(arrow_, hx + w * px, hy + w * py, hz + w * pz);
             }
         }
     }

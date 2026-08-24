@@ -7,11 +7,17 @@ import spin;
 [[vk::binding(0, 0)]] RWStructuredBuffer<float4, Std430DataLayout> spinors;
 [[vk::binding(1, 0)]] RWStructuredBuffer<float, Std430DataLayout> bloch;
 
+struct Params {
+    uint n_sites;
+    uint pad0, pad1, pad2;
+};
+[[vk::binding(2, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     uint i = tid.x;
-    if (i >= 16u) {
+    if (i >= params.n_sites) {
         return;
     }
     float3 b = bloch_of(load_spinor(spinors[i]));

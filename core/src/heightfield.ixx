@@ -68,6 +68,10 @@ inline Heightfield heightfield_surface(const Field3D& psi, double z_scale,
     const int wy = wj1 - wj0 + 1;
     const std::size_t samples =
         static_cast<std::size_t>(wx) * static_cast<std::size_t>(wy);
+    const auto idx = [wx](int a, int b) noexcept -> std::size_t {
+        return static_cast<std::size_t>(b) * static_cast<std::size_t>(wx) +
+               static_cast<std::size_t>(a);
+    };
 
     // Window-local (li,lj) -> sample (wi0+li, wj0+lj); disjoint rows.
     std::vector<double> hgt(samples);
@@ -76,9 +80,7 @@ inline Heightfield heightfield_surface(const Field3D& psi, double z_scale,
         const int j = (wj0 + lj) * st;
         for (int li = 0; li < wx; ++li) {
             const std::complex<double> z = psi((wi0 + li) * st, j, 0);
-            const std::size_t o = static_cast<std::size_t>(lj) *
-                                      static_cast<std::size_t>(wx) +
-                                  static_cast<std::size_t>(li);
+            const std::size_t o = idx(li, lj);
             hgt[o] = std::norm(z) * gain;
             phs[o] = std::arg(z);
         }
@@ -93,17 +95,13 @@ inline Heightfield heightfield_surface(const Field3D& psi, double z_scale,
             auto at = [&](int a, int b) {
                 a = std::clamp(a, 0, wx - 1);
                 b = std::clamp(b, 0, wy - 1);
-                return hgt[static_cast<std::size_t>(b) *
-                               static_cast<std::size_t>(wx) +
-                           static_cast<std::size_t>(a)];
+                return hgt[idx(a, b)];
             };
             const double sxw = li > 0 && li < wx - 1 ? 2.0 : 1.0;
             const double syw = lj > 0 && lj < wy - 1 ? 2.0 : 1.0;
             const double dhx = (at(li + 1, lj) - at(li - 1, lj)) / (sxw * hx);
             const double dhy = (at(li, lj + 1) - at(li, lj - 1)) / (syw * hy);
-            nrm[static_cast<std::size_t>(lj) * static_cast<std::size_t>(wx) +
-                static_cast<std::size_t>(li)] =
-                normalized(Vec3d{-dhx, -dhy, 1.0});
+            nrm[idx(li, lj)] = normalized(Vec3d{-dhx, -dhy, 1.0});
         }
     });
 
@@ -131,10 +129,7 @@ inline Heightfield heightfield_surface(const Field3D& psi, double z_scale,
             for (int v = 0; v < 6; ++v) {
                 const int ci = corner_i[pick[v]];
                 const int cj = corner_j[pick[v]];
-                const std::size_t s =
-                    static_cast<std::size_t>(cj) *
-                        static_cast<std::size_t>(wx) +
-                    static_cast<std::size_t>(ci);
+                const std::size_t s = idx(ci, cj);
                 hf.mesh.vertices[base + v] = Vec3d{g.x.coord((wi0 + ci) * st),
                                                    g.y.coord((wj0 + cj) * st),
                                                    hgt[s]};

@@ -29,4 +29,12 @@ inline Vec3d normalized(Vec3d v) noexcept {
     return {inv * v.x, inv * v.y, inv * v.z};
 }
 
+// Unit vector along v; |v| < 1e-9 falls back to +z (the B=0 measurement-axis
+// convention shared by the spin scenes).
+inline Vec3d unit_or_z(Vec3d v) noexcept {
+    const double n = length(v);
+    return n < 1e-9 ? Vec3d{0.0, 0.0, 1.0}
+                    : Vec3d{v.x / n, v.y / n, v.z / n};
+}
+
 }  // namespace ses
