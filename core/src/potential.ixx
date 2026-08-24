@@ -104,10 +104,17 @@ inline std::vector<double> morse_potential(const Grid1D& g, double d,
 inline std::vector<double> tilted_potential(std::vector<double> v,
                                             const Grid3D& g, double e0,
                                             int axis) {
-    (void)g;
-    (void)e0;
-    (void)axis;
-    return v;  // stub (red)
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double c = axis == 0   ? g.x.coord(i)
+                                 : axis == 1 ? g.y.coord(j)
+                                             : g.z.coord(k);
+                v[static_cast<std::size_t>(g.flat(i, j, k))] += e0 * c;
+            }
+        }
+    }
+    return v;
 }
 
 inline constexpr double kCoulombCellAverage = 2.3800774;

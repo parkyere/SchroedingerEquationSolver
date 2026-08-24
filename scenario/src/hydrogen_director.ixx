@@ -1244,20 +1244,10 @@ private:
         }
         std::vector<double> v = sim_.potential();
         if (fields_.e_active()) {
-            // Uniform E along the chosen axis: tilt E * (coordinate along that
-            // axis). Signed E tilts the other way; the axis picks x, y or z.
-            const ses::Grid3D& g = sim_.grid();
-            for (int k = 0; k < g.z.n; ++k) {
-                for (int j = 0; j < g.y.n; ++j) {
-                    for (int i = 0; i < g.x.n; ++i) {
-                        const double c = fields_.e_axis == 0   ? g.x.coord(i)
-                                         : fields_.e_axis == 1 ? g.y.coord(j)
-                                                               : g.z.coord(k);
-                        v[static_cast<std::size_t>(g.flat(i, j, k))] +=
-                            FieldControl::e_tilt(fields_.e0, c);
-                    }
-                }
-            }
+            // Uniform E along the chosen axis (ses::tilted_potential: odd in
+            // E, contract-tested).
+            v = ses::tilted_potential(std::move(v), sim_.grid(), fields_.e0,
+                                      fields_.e_axis);
         }
         if (fields_.b_active()) {
             // Reuse the core diamagnetic (perpendicular to the field axis).
@@ -1279,6 +1269,19 @@ private:
         uploaded_b_ = fields_.b;
         uploaded_e_axis_ = fields_.e_axis;
         uploaded_b_axis_ = fields_.b_axis;
+        // Relax/flush tables must ride the SAME effective potential; resident
+        // stale tables are dropped (never mid-relax: tables in use).
+        v_eff_ = std::move(v);
+        if (stepping_ == BaseStepping::RealTime) {
+            drop_relax_tables();
+        }
+    }
+
+    // Field-dressed relax target: imaginary time with E/B on must cool to the
+    // POLARIZED / diamagnetically-squeezed ground, not the bare one.
+    const std::vector<double>& relax_potential() const override {
+        return fields_.any_active() && !v_eff_.empty() ? v_eff_
+                                                       : sim_.potential();
     }
 
     // Free the OWNED transient deflation buffers (synthesized at relax-start).
@@ -1453,6 +1456,10 @@ private:
     // Partial-measurement bookkeeping (n-shell / l / m buttons).
     PartialBasis pending_partial_ = PartialBasis::None;
     int last_partial_outcome_ = -99;  // sampled n, l, or m; -1 = continuum
+
+    // Effective potential (base + E tilt + diamagnetic) as uploaded; the
+    // relax_potential() hook serves it while a field is active.
+    std::vector<double> v_eff_;
 
     // Quantum-jump bookkeeping.
     std::string last_jump_;

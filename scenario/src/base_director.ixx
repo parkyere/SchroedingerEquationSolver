@@ -565,13 +565,20 @@ protected:
         return rec;
     }
 
+    // Relax/ITP tables ride THIS potential; static-field scenes override to
+    // the field-dressed effective V (else imaginary time cools to the
+    // field-free ground).
+    virtual const std::vector<double>& relax_potential() const {
+        return sim_.potential();
+    }
+
     bool ensure_relax_tables() {
         if (engine_.relax_tables_ready()) {
             return true;
         }
         const double dtau = relax_dtau();
-        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(), sim_.potential(),
-                                                     dtau};
+        const ses::ImaginaryTimePropagator3D relaxer{sim_.grid(),
+                                                     relax_potential(), dtau};
         if (!engine_.set_relax_tables(relaxer.half_potential_weight(),
                                       relaxer.kinetic_weight(), dtau,
                                       sim_.grid().cell_volume())) {

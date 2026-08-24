@@ -376,11 +376,20 @@ void register_verification_arcs(ShellT* shell) {
                 shell->hy()->set_efield_e0(0.02);  // sub-ionization: clean polarization
                 shell->sched().after(15000, [shell, z0] {
                     const double z1 = shell->hy()->mean_z();
-                    const bool pass = std::abs(z1 - z0) > 0.03;
-                    std::fprintf(stderr,
-                                 "selftest-efield: <z> %.4f -> %.4f Bohr  [%s]\n",
-                                 z0, z1, pass ? "PASS" : "FAIL");
-                    shell->request_exit(pass ? 0 : 1);
+                    const bool pol = std::abs(z1 - z0) > 0.03;
+                    // Field-dressed relax: cooling WITH E on must land on a
+                    // POLARIZED ground (relax tables ride the effective V).
+                    shell->hy()->set_relaxing();
+                    shell->sched().after(15000, [shell, z0, z1, pol] {
+                        const double z2 = shell->hy()->mean_z();
+                        const bool relax_pol = std::abs(z2 - z0) > 0.03;
+                        const bool pass = pol && relax_pol;
+                        std::fprintf(stderr,
+                                     "selftest-efield: <z> %.4f -> %.4f -> "
+                                     "relaxed %.4f Bohr  [%s]\n",
+                                     z0, z1, z2, pass ? "PASS" : "FAIL");
+                        shell->request_exit(pass ? 0 : 1);
+                    });
                 });
             });
         });
