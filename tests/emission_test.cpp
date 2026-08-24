@@ -236,6 +236,139 @@ TEST(CollectiveJump, HOLadderRateIsNumberWeighted) {
     EXPECT_NEAR(wsum, n_mean / (2.0 * w0), 1e-12);
 }
 
+// Frequency grouping: equal gaps collapse (HO limit); distinct gaps split;
+// tolerance merges grid-split degenerate shells.
+
+TEST(GroupByGap, EqualGapsCollapseToOneGroup) {
+    const std::vector<ses::GroupedChannel> items{
+        {{1, 0, 0.0, 0.0, 1.0}, 0.25, 2.0},
+        {{2, 1, 0.0, 0.0, 1.4}, 0.25, 2.0},
+        {{3, 2, 1.0, 0.0, 0.0}, 0.25, 2.0}};
+    const auto g = ses::group_by_gap(items, 1e-3);
+    ASSERT_EQ(g.size(), 1u);
+    EXPECT_EQ(g[0].channels.size(), 3u);
+    EXPECT_DOUBLE_EQ(g[0].gap_e, 0.25);
+    EXPECT_DOUBLE_EQ(g[0].k_rate, 2.0);
+}
+
+TEST(GroupByGap, DistinctGapsSplitAscending) {
+    const std::vector<ses::GroupedChannel> items{
+        {{2, 0, 0.0, 0.0, 1.0}, 0.375, 1.0},
+        {{2, 1, 0.0, 0.0, 1.0}, 0.069, 3.0},
+        {{3, 0, 1.0, 0.0, 0.0}, 0.376, 1.0}};
+    const auto g = ses::group_by_gap(items, 0.02);
+    ASSERT_EQ(g.size(), 2u);
+    EXPECT_DOUBLE_EQ(g[0].gap_e, 0.069);  // ascending order
+    EXPECT_EQ(g[0].channels.size(), 1u);
+    EXPECT_EQ(g[1].channels.size(), 2u);  // 0.375 + 0.376 merged
+}
+
+TEST(GroupByGap, ToleranceControlsDegenerateShellMerging) {
+    const std::vector<ses::GroupedChannel> items{
+        {{2, 0, 0.0, 0.0, 1.0}, 0.370, 1.0},
+        {{3, 1, 0.0, 0.0, 1.0}, 0.375, 1.0}};
+    EXPECT_EQ(ses::group_by_gap(items, 0.02).size(), 1u);
+    EXPECT_EQ(ses::group_by_gap(items, 1e-3).size(), 2u);
+}
+
+// Interval unraveling: per arrival draws (u_arrival, u_group, then the
+// sampler's draws); the equatorial-candidate scripts below are accepted on
+// the first rejection try (f == bound there for a pure-axis dipole set).
+
+TEST(CollectiveDecayInterval, NoJumpLeavesAmplitudesUntouched) {
+    const std::vector<ses::FreqGroup> groups{
+        {{{1, 0, 0.0, 0.0, 1.0}}, 0.25, 1.0}};
+    std::vector<std::complex<double>> c{{0.0, 0.0}, {1.0, 0.0}};
+    // R = 1; u = e^{-5} -> t1 = 5 > dt = 1: survive.
+    std::vector<double> us{std::exp(-5.0)};
+    std::size_t k = 0;
+    auto u01 = [&] { return us[k++]; };
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    EXPECT_TRUE(r.jumps.empty());
+    ASSERT_EQ(r.c.size(), 2u);
+    EXPECT_NEAR(std::abs(r.c[1]), 1.0, 1e-12);
+}
+
+TEST(CollectiveDecayInterval, SingleGroupArrivalCollapsesAndRecords) {
+    const std::vector<ses::FreqGroup> groups{
+        {{{1, 0, 0.0, 0.0, 1.0}}, 0.25, 2.0}};
+    std::vector<std::complex<double>> c{{0.0, 0.0}, {1.0, 0.0}};
+    // R = k*|D|^2 = 2; arrival u = e^{-2*0.5} -> t1 = 0.5 < dt 1.
+    // Draws: u_arr, u_group, then sampler (ct=0.5 -> equator, phi, accept, hel).
+    std::vector<double> us{std::exp(-1.0), 0.5, 0.5, 0.25, 0.5, 0.3};
+    std::size_t k = 0;
+    auto u01 = [&] { return us[k++]; };
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    ASSERT_EQ(r.jumps.size(), 1u);
+    EXPECT_DOUBLE_EQ(r.jumps[0].gap_e, 0.25);
+    EXPECT_EQ(r.jumps[0].dominant_to, 0);
+    ASSERT_EQ(r.c.size(), 2u);
+    EXPECT_NEAR(std::abs(r.c[0]), 1.0, 1e-12);
+    EXPECT_NEAR(std::abs(r.c[1]), 0.0, 1e-12);
+}
+
+TEST(CollectiveDecayInterval, GroupPickProjectsTheEnergy) {
+    // State 2 decays through TWO frequency groups: A (2->1, weak) and
+    // B (2->0, strong). Picking B must localize c on state 0 ONLY.
+    const std::vector<ses::FreqGroup> groups{
+        {{{2, 1, 0.0, 0.0, 1.0}}, 0.3, 1.0},   // R_A = 1
+        {{{2, 0, 2.0, 0.0, 0.0}}, 0.7, 1.0}};  // R_B = 4
+    std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
+    // u_group = 0.9 > R_A/R = 0.2 -> group B. Candidate n = y (ct 0.5,
+    // phi 0.25): transverse to B's x-dipole -> accepted first try.
+    std::vector<double> us{std::exp(-5.0 * 0.5), 0.9, 0.5, 0.25, 0.5, 0.3};
+    std::size_t k = 0;
+    auto u01 = [&] { return us[k++]; };
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    ASSERT_EQ(r.jumps.size(), 1u);
+    EXPECT_DOUBLE_EQ(r.jumps[0].gap_e, 0.7);
+    EXPECT_NEAR(std::abs(r.c[0]), 1.0, 1e-12);  // energy projected onto B
+    EXPECT_NEAR(std::abs(r.c[1]), 0.0, 1e-12);
+    EXPECT_NEAR(std::abs(r.c[2]), 0.0, 1e-12);
+}
+
+TEST(CollectiveDecayInterval, DegenerateShellsTransferCoherently) {
+    // Same gap, two source states feeding two destinations on one axis
+    // (3p->2s + 3d->2p analogue): the destination ratio must equal the
+    // source ratio -- coherence survives the jump.
+    const std::vector<ses::FreqGroup> groups{
+        {{{2, 0, 0.0, 0.0, 1.0}, {3, 1, 0.0, 0.0, 1.0}}, 0.056, 1.0}};
+    std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.0, 0.0}, {0.6, 0.0}, {0.0, 0.8}};
+    std::vector<double> us{std::exp(-0.5), 0.5, 0.5, 0.25, 0.5, 0.3};
+    std::size_t k = 0;
+    auto u01 = [&] { return us[k++]; };
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    ASSERT_EQ(r.jumps.size(), 1u);
+    const std::complex<double> ratio = r.c[0] / r.c[1];
+    const std::complex<double> want =
+        std::complex<double>{0.6, 0.0} / std::complex<double>{0.0, 0.8};
+    EXPECT_NEAR(ratio.real(), want.real(), 1e-12);
+    EXPECT_NEAR(ratio.imag(), want.imag(), 1e-12);
+}
+
+TEST(CollectiveDecayInterval, ChainsWithinTheInterval) {
+    // Equal-gap ladder 2->1->0 (one group): two scripted arrivals in one
+    // interval -> two photons, ground at the end.
+    const std::vector<ses::FreqGroup> groups{
+        {{{1, 0, 0.0, 0.0, 1.0}, {2, 1, 0.0, 0.0, 1.0}}, 0.25, 1.0}};
+    std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
+    std::vector<double> us{std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3,
+                           std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3};
+    std::size_t k = 0;
+    auto u01 = [&] { return us[k++]; };
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    ASSERT_EQ(r.jumps.size(), 2u);
+    EXPECT_NEAR(std::abs(r.c[0]), 1.0, 1e-12);
+}
+
 TEST(ConditionedAmplitudes, AllZeroDipolesStayZero) {
     const std::vector<DipoleMatrixElement> dip{DipoleMatrixElement{},
                                                DipoleMatrixElement{}};
