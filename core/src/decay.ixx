@@ -181,7 +181,7 @@ inline std::vector<int> chain_decay_jumps(const std::vector<RateChannel>& channe
     std::vector<int> fired;
     std::vector<double> rates(channels.size());
     double remaining = dt;
-    for (;;) {
+    while (true) {
         double total = 0.0;
         for (std::size_t m = 0; m < channels.size(); ++m) {
             rates[m] = channels[m].gamma *

@@ -108,7 +108,7 @@ private:
     static constexpr int kSpin = 1 << 15;
 
     void work(Job& job, int worker) {
-        for (;;) {
+        while (true) {
             const int c = job.next.fetch_add(1, std::memory_order_relaxed);
             if (c >= job.chunks) {
                 break;
@@ -123,7 +123,7 @@ private:
 
     void worker_loop(std::stop_token st, int worker) {
         std::uint64_t seen = 0;
-        for (;;) {
+        while (true) {
             // Fast path: spin gen_, no lock, no thundering herd.
             bool woke = false;
             for (int s = 0; s < kSpin; ++s) {

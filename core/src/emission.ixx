@@ -242,7 +242,7 @@ inline IntervalResult collective_decay_interval(
     double dt, U01&& u01) {
     IntervalResult out;
     double remaining = dt;
-    for (;;) {
+    while (true) {
         // Per-group collective dipoles + rates off the CURRENT amplitudes.
         std::vector<CollectiveDipoles> cds(groups.size());
         std::vector<double> rates(groups.size());
@@ -310,7 +310,7 @@ inline PhotonRecord sample_photon_emission(
         return PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1};  // forbidden guard
     }
     constexpr double kPi = std::numbers::pi;
-    for (;;) {
+    while (true) {
         const double ct = 1.0 - 2.0 * u01();
         const double st = std::sqrt(std::max(0.0, 1.0 - ct * ct));
         const double phi = 2.0 * kPi * u01();
