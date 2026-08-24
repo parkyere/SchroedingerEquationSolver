@@ -26,6 +26,7 @@ export import ses.field;
 export import ses.potential;
 export import ses.colormap;
 export import ses.scenario.atom_model;
+import ses.measurement;
 import ses.photon_display;
 
 
@@ -438,6 +439,61 @@ protected:
                 engine_.release_relax_tables();
             }
         }
+    }
+
+    // Subtract every tracked amplitude out of psi (continuum / untracked
+    // verdict): a bound population must not survive it. No-op under the fp32
+    // noise floor.
+    void project_manifold_out(AtomModel& atom) {
+        std::vector<std::complex<double>> amp(
+            static_cast<std::size_t>(atom.n_states()));
+        double bound = 0.0;
+        for (int s = 0; s < atom.n_states(); ++s) {
+            amp[static_cast<std::size_t>(s)] =
+                atom.project_state_amplitude(engine_, s);
+            bound += std::norm(amp[static_cast<std::size_t>(s)]);
+        }
+        const double residual = engine_.norm_and_peak().sum - bound;
+        if (residual <= 1e-4) {
+            return;  // fp32 noise floor
+        }
+        for (int s = 0; s < atom.n_states(); ++s) {
+            const std::complex<double> c = amp[static_cast<std::size_t>(s)];
+            if (std::norm(c) < 1e-9) {
+                continue;
+            }
+            const int buf = atom.synth_transient(engine_, s);
+            if (buf >= 0) {
+                engine_.add_state_into_psi(buf, -c.real(), -c.imag());
+                engine_.release_state(buf);
+            }
+        }
+        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
+        if (np.sum > 1e-12) {
+            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
+        }
+        cpu_is_truth_ = false;
+        write_display_texture();
+    }
+
+    // Born-sample an energy eigenstate from the projected populations and
+    // collapse onto it; -1 = outside the tracked manifold (projected OUT).
+    // Caller flushes / labels / tallies.
+    int measure_energy_collapse(AtomModel& atom) {
+        engine_.project_psi();
+        std::vector<double> pop(static_cast<std::size_t>(atom.n_states()));
+        for (int s = 0; s < atom.n_states(); ++s) {
+            pop[static_cast<std::size_t>(s)] =
+                atom.project_population(engine_, s);
+        }
+        std::uniform_real_distribution<double> uniform(0.0, 1.0);
+        const int n = ses::sample_energy_eigenstate(pop, uniform(rng_));
+        if (n >= 0) {
+            atom.collapse_onto(engine_, n);
+        } else {
+            project_manifold_out(atom);
+        }
+        return n;
     }
 
     // THE synth-accumulate idiom (seeds, partial-measure rebuild, shell

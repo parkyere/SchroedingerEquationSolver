@@ -114,23 +114,14 @@ protected:
             return;
         }
         pending_measure_ = false;
-        engine_.project_psi();
-        std::vector<double> pop(static_cast<std::size_t>(kNumTrapStates));
-        for (int s = 0; s < kNumTrapStates; ++s) {
-            pop[static_cast<std::size_t>(s)] =
-                atom_.project_population(engine_, s);
-        }
-        std::uniform_real_distribution<double> uniform(0.0, 1.0);
-        const int n = ses::sample_energy_eigenstate(pop, uniform(rng_));
+        const int n = measure_energy_collapse(atom_);
         if (n >= 0) {
-            atom_.collapse_onto(engine_, n);
             flush_collapse_error(n);
             write_display_texture();
             last_measure_ = strf("%s (E = %.2f eV)", kTrapStates[n].name,
                                  atom_.state_energy(n) * kBaseHaToEv);
         } else {
             // Deficit = untracked bound ladder (N > 3), not continuum.
-            project_manifold_out();
             last_measure_ = "outside tracked ladder (N > 3)";
         }
         title_dirty_ = true;
@@ -326,37 +317,6 @@ private:
     }
 
     // Collapse onto untracked-ladder complement (N > 3).
-    void project_manifold_out() {
-        std::array<std::complex<double>, kNumTrapStates> amp{};
-        double bound = 0.0;
-        for (int s = 0; s < kNumTrapStates; ++s) {
-            amp[static_cast<std::size_t>(s)] =
-                atom_.project_state_amplitude(engine_, s);
-            bound += std::norm(amp[static_cast<std::size_t>(s)]);
-        }
-        const double residual = engine_.norm_and_peak().sum - bound;
-        if (residual <= 1e-4) {
-            return;  // fp32 noise floor
-        }
-        for (int s = 0; s < kNumTrapStates; ++s) {
-            const std::complex<double> c = amp[static_cast<std::size_t>(s)];
-            if (std::norm(c) < 1e-9) {
-                continue;
-            }
-            const int buf = atom_.synth_transient(engine_, s);
-            if (buf >= 0) {
-                engine_.add_state_into_psi(buf, -c.real(), -c.imag());
-                engine_.release_state(buf);
-            }
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 1e-12) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-        }
-        cpu_is_truth_ = false;
-        write_display_texture();
-    }
-
     ses_shell::AtomModel atom_;
     bool proj_ready_ = false;
     bool decay_on_ = false;

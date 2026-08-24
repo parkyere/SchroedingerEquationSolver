@@ -220,17 +220,10 @@ public:
             // continuum (n=-1).
             if (pending_energy_measure_) {
                 pending_energy_measure_ = false;
-                engine_.project_psi();
-                std::vector<double> pop(static_cast<std::size_t>(kNumStates));
-                for (int s = 0; s < kNumStates; ++s) {
-                    pop[static_cast<std::size_t>(s)] = atom_.project_population(engine_, s);
-                }
-                std::uniform_real_distribution<double> uniform(0.0, 1.0);
-                const int n = ses::sample_energy_eigenstate(pop, uniform(rng_));
+                const int n = measure_energy_collapse(atom_);
                 last_measured_index_ = n;  // >=0 eigenstate, -1 outside manifold
+                reset_ionized_tally();  // bound verdict or projected out: fresh
                 if (n >= 0) {
-                    atom_.collapse_onto(engine_, n);
-                    reset_ionized_tally();
                     flush_collapse_error(n);
                     write_display_texture();
                     last_measure_ = strf(
@@ -238,9 +231,6 @@ public:
                         kStateSpec[static_cast<std::size_t>(n)].name,
                         atom_.state_energy(n) * kHaToEv);
                 } else {
-                    // A continuum verdict must not leave bound populations
-                    // behind: project the manifold out.
-                    project_manifold_out();
                     last_measure_ = "outside tracked manifold";
                 }
                 title_dirty_ = true;
@@ -784,38 +774,6 @@ private:
     // Continuum verdict: subtract every tracked component (psi <- (1-P)psi,
     // renormalized) -- unless the residual is fp32 noise (renormalizing would
     // fabricate a cloud). Precondition: project_psi() ran on the CURRENT psi.
-    void project_manifold_out() {
-        std::array<std::complex<double>, kNumStates> amp{};
-        double bound = 0.0;
-        for (int s = 0; s < kNumStates; ++s) {
-            amp[static_cast<std::size_t>(s)] =
-                atom_.project_state_amplitude(engine_, s);
-            bound += std::norm(amp[static_cast<std::size_t>(s)]);
-        }
-        const double residual = engine_.norm_and_peak().sum - bound;
-        if (residual <= 1e-4) {
-            return;
-        }
-        for (int s = 0; s < kNumStates; ++s) {
-            if (std::norm(amp[static_cast<std::size_t>(s)]) < 1e-9) {
-                continue;
-            }
-            const std::complex<double> c = amp[static_cast<std::size_t>(s)];
-            const int buf = atom_.synth_transient(engine_, s);
-            if (buf >= 0) {
-                engine_.add_state_into_psi(buf, -c.real(), -c.imag());
-                engine_.release_state(buf);
-            }
-        }
-        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
-        if (np.sum > 1e-12) {
-            engine_.scale(static_cast<float>(1.0 / std::sqrt(np.sum)));
-        }
-        reset_ionized_tally();
-        cpu_is_truth_ = false;
-        write_display_texture();
-    }
-
     // Partial projective measurement: Born-sample ONE quantum number (n, l, or
     // signed m via the real-pair L_z recombination) and rebuild psi from the
     // kept amplitudes. The 1-sum deficit samples the continuum verdict
@@ -861,7 +819,8 @@ private:
         }
         if (key < 0) {
             // Fell into the 1 - sum deficit: continuum / untracked.
-            project_manifold_out();
+            project_manifold_out(atom_);
+            reset_ionized_tally();
             last_partial_outcome_ = -1;
             last_measure_ = "outside tracked manifold";
             return;
