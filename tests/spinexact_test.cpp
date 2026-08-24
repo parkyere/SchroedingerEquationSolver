@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 
 import ses.spinexact;
@@ -34,11 +35,7 @@ double norm2(const ses::SpinState16& s) {
 double total_sz(const ses::SpinState16& s) {
     double t = 0.0;
     for (int i = 0; i < ses::kExactSites; ++i) {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        ses::exact_site_bloch(s, i, &x, &y, &z);
-        t += z;
+        t += ses::exact_site_bloch(s, i).z;
     }
     return t;
 }
@@ -187,18 +184,12 @@ TEST(SpinExact, ProductBootRoundTripsTheArrows) {
     ASSERT_EQ(s.c.size(), ses::kExactDim);
     EXPECT_NEAR(norm2(s), 1.0, 1e-12);
     for (int i = 0; i < ses::kExactSites; ++i) {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        ses::exact_site_bloch(s, i, &x, &y, &z);
-        double lx = 0.0;
-        double ly = 0.0;
-        double lz = 0.0;
-        ses::bloch_vector(l.s[static_cast<std::size_t>(i)], &lx, &ly,
-                          &lz);
-        EXPECT_NEAR(x, lx, 1e-12);
-        EXPECT_NEAR(y, ly, 1e-12);
-        EXPECT_NEAR(z, lz, 1e-12);
+        const ses::Vec3d e = ses::exact_site_bloch(s, i);
+        const ses::Vec3d p =
+            ses::bloch_vector(l.s[static_cast<std::size_t>(i)]);
+        EXPECT_NEAR(e.x, p.x, 1e-12);
+        EXPECT_NEAR(e.y, p.y, 1e-12);
+        EXPECT_NEAR(e.z, p.z, 1e-12);
     }
 }
 
@@ -208,38 +199,24 @@ TEST(SpinExact, FerroIsStationaryAndMagnonHopsConservingSz) {
         ses::exact_step(up, 0.0, 0.0, 0.4, 0.5, 0.01);
     }
     for (int i = 0; i < ses::kExactSites; ++i) {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        ses::exact_site_bloch(up, i, &x, &y, &z);
-        EXPECT_NEAR(z, 1.0, 1e-9);
+        EXPECT_NEAR(ses::exact_site_bloch(up, i).z, 1.0, 1e-9);
     }
 
     ses::SpinState16 mg = ses::exact_from_product(product_updown(5));
     const double sz0 = total_sz(mg);
-    double z5_min = 1.0;
-    double z_other_min = 1.0;
     for (int k = 0; k < 400; ++k) {
         ses::exact_step(mg, 0.0, 0.0, 0.0, 0.5, 0.01);
     }
     EXPECT_NEAR(total_sz(mg), sz0, 1e-9);
-    double x = 0.0;
-    double y = 0.0;
-    double z5 = 0.0;
-    ses::exact_site_bloch(mg, 5, &x, &y, &z5);
-    EXPECT_GT(z5, -0.9);
+    EXPECT_GT(ses::exact_site_bloch(mg, 5).z, -0.9);
     double zmin = 1.0;
     for (int i = 0; i < ses::kExactSites; ++i) {
         if (i == 5) {
             continue;
         }
-        double zz = 0.0;
-        ses::exact_site_bloch(mg, i, &x, &y, &zz);
-        zmin = std::min(zmin, zz);
+        zmin = std::min(zmin, ses::exact_site_bloch(mg, i).z);
     }
     EXPECT_LT(zmin, 0.99);
-    (void)z5_min;
-    (void)z_other_min;
 }
 
 TEST(SpinExact, NeelEntanglesArrowsShrinkEnergyConserved) {
@@ -265,11 +242,8 @@ TEST(SpinExact, NeelEntanglesArrowsShrinkEnergyConserved) {
                 1e-3 * std::abs(e0) + 1e-3);
     double mean_len = 0.0;
     for (int i = 0; i < ses::kExactSites; ++i) {
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        ses::exact_site_bloch(s, i, &x, &y, &z);
-        mean_len += std::sqrt(x * x + y * y + z * z);
+        const ses::Vec3d p = ses::exact_site_bloch(s, i);
+        mean_len += std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
     }
     mean_len /= ses::kExactSites;
     EXPECT_LT(mean_len, 0.8);
@@ -281,16 +255,13 @@ TEST(SpinExact, MeasurementCollapsesASite) {
     ses::SpinState16 s = ses::exact_from_product(l);
     const int out = ses::exact_measure_z(s, 3, 0.4);
     EXPECT_NE(out, 0);
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    ses::exact_site_bloch(s, 3, &x, &y, &z);
-    EXPECT_NEAR(z, static_cast<double>(out), 1e-12);
+    EXPECT_NEAR(ses::exact_site_bloch(s, 3).z, static_cast<double>(out),
+                1e-12);
     EXPECT_NEAR(norm2(s), 1.0, 1e-12);
     ses::exact_site_rotate(s, 3, 0.0, 1.0, 0.0,
-                           3.14159265358979323846);
-    ses::exact_site_bloch(s, 3, &x, &y, &z);
-    EXPECT_NEAR(z, -static_cast<double>(out), 1e-12);
+                           std::numbers::pi);
+    EXPECT_NEAR(ses::exact_site_bloch(s, 3).z, -static_cast<double>(out),
+                1e-12);
 }
 
 }  // namespace

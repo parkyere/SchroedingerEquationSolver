@@ -6,6 +6,9 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <complex>
+#include <cstddef>
 import ses.imaginary_time;
 import ses.propagator;
 import ses.observables;
@@ -15,16 +18,15 @@ import ses.field;
 import ses.wavepacket;
 import ses.potential;
 
+#define SES_TEST_UTIL_HARMONIC
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
-using ses::Grid1D;
 using ses::Grid3D;
 using ses::Vec3d;
-
-Grid3D cube(double lo, double hi, int n) {
-    return Grid3D{Grid1D{lo, hi, n}, Grid1D{lo, hi, n}, Grid1D{lo, hi, n}};
-}
+using ses_test::cube;
 
 TEST(SplitOperator3, FreePacketDispersesAnisotropically) {
     const Grid3D grid = cube(-12.0, 12.0, 64);

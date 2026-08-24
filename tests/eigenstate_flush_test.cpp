@@ -10,6 +10,8 @@
 #include <cmath>
 #include <complex>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
 
 import ses.imaginary_time;
 import ses.observables;
@@ -22,12 +24,14 @@ import ses.spectral;
 import ses.harmonics;
 import ses.potential;
 
+#define SES_TEST_UTIL_RADIAL
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
 using ses::Grid1D;
 using ses::Grid3D;
-using ses::RadialGrid;
 using ses::Vec3d;
 
 // Coarse grid (as in regularized_coulomb_test) makes the cusp junk large --
@@ -50,11 +54,7 @@ const std::vector<double>& reg_potential() {
 // Mirrors the app's collapse-target construction: bare -1/r radial solve
 // sampled onto the grid.
 Field3D synth(int l, int node_k, int m) {
-    const RadialGrid rg{20.0, 3999};
-    std::vector<double> vr(static_cast<std::size_t>(rg.n));
-    for (int i = 0; i < rg.n; ++i) {
-        vr[static_cast<std::size_t>(i)] = -1.0 / rg.r(i);
-    }
+    const auto [rg, vr] = ses_test::bare_hydrogen_radial();
     const ses::RadialState st =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, l), node_k);
     return ses::synthesize_orbital(kGrid, rg, st.u, l, m);

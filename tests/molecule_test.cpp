@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <complex>
+#include <numbers>
 #include <vector>
 
 import ses.field;
@@ -88,7 +89,7 @@ TEST(StrippedBenzene, FirstElectronLivesOnTheCarbonsInADeepQuasiBand) {
     const Grid3D g{ax, ax, ax};
     const double ring_r = 2.63;  // benzene C-C = 1.39 A in bohr
     const double ch = 2.06;      // C-H bond = 1.09 A in bohr
-    const double kPi = 3.14159265358979323846;
+    const double kPi = std::numbers::pi;
 
     auto ring = [&](double radius) {
         std::vector<Vec3d> c;

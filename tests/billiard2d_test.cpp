@@ -10,6 +10,7 @@ import ses.scenario.billiard2d_director;
 import ses.field;
 import ses.grid;
 import ses.propagator;
+import ses.wavepacket;
 
 namespace {
 
@@ -51,18 +52,9 @@ TEST(Billiard2D, CircleKeepsTheCausticHoleTheStadiumFillsIt) {
             }
         }
         const ses::SplitOperator3D prop{g, v, 0.01};
-        ses::Field3D psi{g};
-        for (int j = 0; j < g.y.n; ++j) {
-            const double y = g.y.coord(j) - r0;
-            for (int i = 0; i < g.x.n; ++i) {
-                const double x = g.x.coord(i);
-                psi(i, j, 0) =
-                    std::exp(-(x * x + y * y) / (4.0 * 1.5 * 1.5)) *
-                    std::complex<double>{std::cos(k0 * x),
-                                         std::sin(k0 * x)};
-            }
-        }
-        ses::normalize(psi);
+        ses::Field3D psi = ses::gaussian_wavepacket(
+            g, ses::Vec3d{0.0, r0, 0.0}, ses::Vec3d{1.5, 1.5, 0.5},
+            ses::Vec3d{k0, 0.0, 0.0});
         std::vector<double> avg(static_cast<std::size_t>(g.size()), 0.0);
         for (int s = 0; s < 6000; ++s) {
             prop.step(psi, 1);

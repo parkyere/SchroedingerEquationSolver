@@ -4,6 +4,7 @@
 #include <complex>
 #include <cstddef>
 #include <cstdio>
+#include <numbers>
 #include <random>
 #include <vector>
 
@@ -18,7 +19,7 @@ ses::SpinLattice random_lattice(int n, unsigned seed) {
     l.s.resize(static_cast<std::size_t>(n * n));
     std::mt19937 rng(seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
-    std::uniform_real_distribution<double> ph(0.0, 6.28318530717958647692);
+    std::uniform_real_distribution<double> ph(0.0, 2.0 * std::numbers::pi);
     for (auto& sp : l.s) {
         const double z = u(rng);
         const double t = ph(rng);
@@ -31,13 +32,10 @@ ses::SpinLattice random_lattice(int n, unsigned seed) {
 TEST(SpinLattice, SpinorFromBlochRoundTrips) {
     const double r = 1.0 / std::sqrt(3.0);
     const ses::Spinor s = ses::spinor_from_bloch(r, -r, r);
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    ses::bloch_vector(s, &x, &y, &z);
-    EXPECT_NEAR(x, r, 1e-12);
-    EXPECT_NEAR(y, -r, 1e-12);
-    EXPECT_NEAR(z, r, 1e-12);
+    const ses::Vec3d p = ses::bloch_vector(s);
+    EXPECT_NEAR(p.x, r, 1e-12);
+    EXPECT_NEAR(p.y, -r, 1e-12);
+    EXPECT_NEAR(p.z, r, 1e-12);
 }
 
 TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
@@ -45,18 +43,15 @@ TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
     for (int k = 0; k < 6000; ++k) {
         ses::spinlattice_step(l, 0.0, 0.0, 0.0, 0.5, 0.1, 0.05);
     }
-    double mx = 0.0;
-    double my = 0.0;
-    double mz = 0.0;
-    ses::lattice_magnetization(l, &mx, &my, &mz);
-    EXPECT_GT(std::sqrt(mx * mx + my * my + mz * mz), 0.95);
+    const ses::Vec3d m = ses::lattice_magnetization(l);
+    EXPECT_GT(std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z), 0.95);
 
     ses::SpinLattice a = random_lattice(5, 12);
     for (int k = 0; k < 12000; ++k) {
         ses::spinlattice_step(a, 0.0, 0.0, 0.0, -0.5, 0.1, 0.05);
     }
-    ses::lattice_magnetization(a, &mx, &my, &mz);
-    EXPECT_LT(std::sqrt(mx * mx + my * my + mz * mz), 0.3);
+    const ses::Vec3d ma = ses::lattice_magnetization(a);
+    EXPECT_LT(std::sqrt(ma.x * ma.x + ma.y * ma.y + ma.z * ma.z), 0.3);
     EXPECT_GT(ses::lattice_staggered(a), 0.95);
 }
 
@@ -91,13 +86,10 @@ TEST(SpinLattice, AlignedLatticePrecessesRigidly) {
         ses::spinlattice_step(l, 0.0, 0.0, b, 0.7, 0.0, dt);
     }
     // Parallel exchange = no torque -> no fan-out; staggered residual mz ~ 0.034.
-    double mx = 0.0;
-    double my = 0.0;
-    double mz = 0.0;
-    ses::lattice_magnetization(l, &mx, &my, &mz);
-    EXPECT_GT(std::hypot(mx, my), 0.995);  // no fan-out
-    EXPECT_LT(std::abs(mz), 0.06);
-    EXPECT_NEAR(std::atan2(my, mx), b * n * dt, 2e-3);  // +B CCW
+    const ses::Vec3d m = ses::lattice_magnetization(l);
+    EXPECT_GT(std::hypot(m.x, m.y), 0.995);  // no fan-out
+    EXPECT_LT(std::abs(m.z), 0.06);
+    EXPECT_NEAR(std::atan2(m.y, m.x), b * n * dt, 2e-3);  // +B CCW
 }
 
 }  // namespace

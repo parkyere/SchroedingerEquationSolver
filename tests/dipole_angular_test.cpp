@@ -7,6 +7,8 @@
 #include <cmath>
 #include <complex>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
 
 import ses.harmonics;
 import ses.radial;
@@ -15,12 +17,60 @@ import ses.grid;
 import ses.vec;
 import ses.field;
 
+#define SES_TEST_UTIL_RADIAL
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
 using ses::Grid1D;
 using ses::Grid3D;
 using ses::RadialGrid;
+
+struct ShellPacket {
+    std::vector<double> u;
+    double rint;
+};
+
+// Normalized compact shell u = r exp(-2 (r - 3)^2) plus its dipole
+// self-integral; fits the +-8 box, so residual vs R*A is angular grid error
+// only.
+ShellPacket make_shell_packet(const RadialGrid& rg) {
+    ShellPacket s{std::vector<double>(static_cast<std::size_t>(rg.n)), 0.0};
+    double n2 = 0.0;
+    for (int i = 0; i < rg.n; ++i) {
+        const double r = rg.r(i);
+        const double ui = r * std::exp(-2.0 * (r - 3.0) * (r - 3.0));
+        s.u[static_cast<std::size_t>(i)] = ui;
+        n2 += ui * ui * rg.h();
+    }
+    for (double& v : s.u) {
+        v /= std::sqrt(n2);
+    }
+    s.rint = ses::radial_dipole_integral(rg, s.u, s.u);
+    return s;
+}
+
+// <to| q_axis |from> by direct 3D quadrature (real synthesized orbitals).
+double numeric_dipole(const Grid3D& g, const Field3D& to, const Field3D& from,
+                      int axis) {
+    double num = 0.0;
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double q = axis == 0   ? g.x.coord(i)
+                                 : axis == 1 ? g.y.coord(j)
+                                             : g.z.coord(k);
+                num += to(i, j, k).real() * q * from(i, j, k).real();
+            }
+        }
+    }
+    return num * g.cell_volume();
+}
+
+struct Pair {
+    int l_to, m_to, l_from, m_from;
+};
 
 TEST(TesseralE1, TwoPToOneSCarriesOneThirdInEveryOrientation) {
     // Tesseral convention: axis 2=z<->m=0 (p_z), 0=x<->m=+1 (p_x), 1=y<->m=-1 (p_y).
@@ -77,26 +127,12 @@ TEST(TesseralE1, SelectionRulesAreExactZeros) {
     }
 }
 
-// Compact shell fits the +/-8 box, so residual vs R*A is angular grid error only.
 TEST(TesseralE1, FactorizationMatchesNumeric3DIntegral) {
     const Grid3D g{Grid1D{-8.0, 8.0, 64}, Grid1D{-8.0, 8.0, 64},
                    Grid1D{-8.0, 8.0, 64}};
     const RadialGrid rg{8.0, 1599};
-    std::vector<double> u(static_cast<std::size_t>(rg.n));
-    double n2 = 0.0;
-    for (int i = 0; i < rg.n; ++i) {
-        const double r = rg.r(i);
-        u[static_cast<std::size_t>(i)] = r * std::exp(-2.0 * (r - 3.0) * (r - 3.0));
-        n2 += u[static_cast<std::size_t>(i)] * u[static_cast<std::size_t>(i)] * rg.h();
-    }
-    for (double& v : u) {
-        v /= std::sqrt(n2);
-    }
-    const double rint = ses::radial_dipole_integral(rg, u, u);
+    const auto [u, rint] = make_shell_packet(rg);
 
-    struct Pair {
-        int l_to, m_to, l_from, m_from;
-    };
     const Pair pairs[] = {{0, 0, 1, 0},   {1, 1, 2, 2},  {2, 0, 3, 1},
                           {3, -2, 4, -3}, {4, 4, 5, 5},  {4, 0, 5, -1},
                           {2, -1, 3, 0}};
@@ -105,18 +141,7 @@ TEST(TesseralE1, FactorizationMatchesNumeric3DIntegral) {
         const Field3D from =
             ses::synthesize_orbital(g, rg, u, p.l_from, p.m_from);
         for (int axis = 0; axis < 3; ++axis) {
-            double num = 0.0;
-            for (int k = 0; k < g.z.n; ++k) {
-                for (int j = 0; j < g.y.n; ++j) {
-                    for (int i = 0; i < g.x.n; ++i) {
-                        const double q = axis == 0   ? g.x.coord(i)
-                                         : axis == 1 ? g.y.coord(j)
-                                                     : g.z.coord(k);
-                        num += to(i, j, k).real() * q * from(i, j, k).real();
-                    }
-                }
-            }
-            num *= g.cell_volume();
+            const double num = numeric_dipole(g, to, from, axis);
             const double numeric_sq = num * num;
             const double predicted =
                 rint * rint *
@@ -164,21 +189,8 @@ TEST(TesseralE1, SignedFactorMatchesNumeric3DIntegralWithSign) {
     const Grid3D g{Grid1D{-8.0, 8.0, 64}, Grid1D{-8.0, 8.0, 64},
                    Grid1D{-8.0, 8.0, 64}};
     const RadialGrid rg{8.0, 1599};
-    std::vector<double> u(static_cast<std::size_t>(rg.n));
-    double n2 = 0.0;
-    for (int i = 0; i < rg.n; ++i) {
-        const double r = rg.r(i);
-        u[static_cast<std::size_t>(i)] = r * std::exp(-2.0 * (r - 3.0) * (r - 3.0));
-        n2 += u[static_cast<std::size_t>(i)] * u[static_cast<std::size_t>(i)] * rg.h();
-    }
-    for (double& v : u) {
-        v /= std::sqrt(n2);
-    }
-    const double rint = ses::radial_dipole_integral(rg, u, u);
+    const auto [u, rint] = make_shell_packet(rg);
 
-    struct Pair {
-        int l_to, m_to, l_from, m_from;
-    };
     const Pair pairs[] = {{0, 0, 1, 0},   {0, 0, 1, 1},  {0, 0, 1, -1},
                           {1, 0, 2, 0},   {1, 1, 2, 0},  {1, -1, 2, 0},
                           {1, 1, 2, 2},   {2, 2, 3, 1},  {2, -2, 3, 1},
@@ -188,18 +200,7 @@ TEST(TesseralE1, SignedFactorMatchesNumeric3DIntegralWithSign) {
         const Field3D from =
             ses::synthesize_orbital(g, rg, u, p.l_from, p.m_from);
         for (int axis = 0; axis < 3; ++axis) {
-            double num = 0.0;
-            for (int k = 0; k < g.z.n; ++k) {
-                for (int j = 0; j < g.y.n; ++j) {
-                    for (int i = 0; i < g.x.n; ++i) {
-                        const double q = axis == 0   ? g.x.coord(i)
-                                         : axis == 1 ? g.y.coord(j)
-                                                     : g.z.coord(k);
-                        num += to(i, j, k).real() * q * from(i, j, k).real();
-                    }
-                }
-            }
-            num *= g.cell_volume();
+            const double num = numeric_dipole(g, to, from, axis);
             const double predicted =
                 rint * ses::tesseral_e1_axis(axis, p.l_to, p.m_to, p.l_from,
                                              p.m_from);
@@ -218,11 +219,7 @@ TEST(TesseralE1, SignedFactorMatchesNumeric3DIntegralWithSign) {
 
 TEST(TesseralE1, FactorizedEinsteinAReproducesTextbook2pLifetime) {
     // Bare -1/r solve (app's table source) vs textbook A(2p->1s) = 1.5155e-8 /au (tau = 1.6 ns).
-    const RadialGrid rg{20.0, 3999};
-    std::vector<double> vr(static_cast<std::size_t>(rg.n));
-    for (int i = 0; i < rg.n; ++i) {
-        vr[static_cast<std::size_t>(i)] = -1.0 / rg.r(i);
-    }
+    const auto [rg, vr] = ses_test::bare_hydrogen_radial();
     const ses::RadialState s1 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
     const ses::RadialState p2 =

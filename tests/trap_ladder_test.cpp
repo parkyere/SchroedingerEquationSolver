@@ -4,10 +4,16 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <complex>
+#include <cstddef>
 
 import ses.radial;
 import ses.harmonics;
 import ses.decay;
+
+#define SES_TEST_UTIL_RADIAL
+#include "test_util.h"
 
 namespace {
 
@@ -17,7 +23,9 @@ using ses::RadialState;
 constexpr double kOmega = 0.25;  // the trap scene's kTrapOmega
 
 const RadialGrid& rg() {
-    static const RadialGrid g{20.0, 3999};
+    // Same radial box the app solves on (harmonic vr below, not -1/r).
+    static const RadialGrid g{ses_test::kRadialBoxRMax,
+                              ses_test::kRadialBoxSamples};
     return g;
 }
 

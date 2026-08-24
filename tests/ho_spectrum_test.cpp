@@ -14,6 +14,8 @@ import ses.lattice2d;
 import ses.field;
 import ses.grid;
 import ses.observables;
+import ses.potential;
+import ses.scenario.harmonic1d_director;
 import ses.wavepacket;
 
 namespace {
@@ -35,11 +37,7 @@ TEST(HoSpectrum, OneDEigenstateIsOneLineAndCoherentReconstructs) {
     // Coherent state: weighted mean rebuilds <H>.
     const double sig = 1.0 / std::sqrt(2.0 * omega);
     const ses::Field1D coh = ses::gaussian_wavepacket(g, 4.0, sig, 0.0);
-    std::vector<double> v(static_cast<std::size_t>(g.n));
-    for (int i = 0; i < g.n; ++i) {
-        const double x = g.coord(i);
-        v[static_cast<std::size_t>(i)] = 0.5 * omega * omega * x * x;
-    }
+    const std::vector<double> v = ses::harmonic_potential(g, omega, 0.0);
     const auto cl = ses::ho1d_spectrum(coh, omega, 20.0);
     double mean = 0.0;
     double tot = 0.0;
@@ -51,6 +49,40 @@ TEST(HoSpectrum, OneDEigenstateIsOneLineAndCoherentReconstructs) {
     EXPECT_NEAR(mean / tot, ses::mean_energy(coh, v), 0.01);
 }
 
+// kappa > 0 no-jump damping mutates psi every step; the strip must track it
+// BETWEEN jumps, not only on parity flips (stale-cache regression).
+TEST(HoSpectrum, StripTracksMcwfDampingBetweenJumps) {
+    ses_shell::Harmonic1DDirector d;
+    ses_shell::Ladder1dApi* ld = d.ladder1d();
+    ASSERT_NE(ld, nullptr);
+    ld->cat();
+    ld->toggle_loss();
+    // Land right after >= 25 consecutive no-jump steps: the stale path would
+    // still show the spectrum frozen at the last flip (or at t = 0).
+    int quiet = 0;
+    int steps = 0;
+    long long jumps = ld->jump_count();
+    while (quiet < 25 && steps < 3000) {
+        d.tick();
+        d.run_frame();  // steps_per_tick = 1 at scale 1
+        ++steps;
+        const long long j = ld->jump_count();
+        quiet = j == jumps ? quiet + 1 : 0;
+        jumps = j;
+    }
+    ASSERT_GE(quiet, 25);
+    const double live = ld->level_energy();  // Ha, moved by the damping
+    double tot = 0.0;
+    double mean_ev = 0.0;
+    const int n = ld->spectrum_count();
+    for (int i = 0; i < n; ++i) {
+        tot += ld->spectrum_weight(i);
+        mean_ev += ld->spectrum_ev(i) * ld->spectrum_weight(i);
+    }
+    ASSERT_GT(tot, 0.9);
+    EXPECT_NEAR(mean_ev / tot / ses_shell::kHaToEv, live, 5e-3);
+}
+
 TEST(HoSpectrum, FockDarwinGroundIsOneLineAndBReconstructs) {
     const ses::Grid3D g{ses::Grid1D{-20.0, 20.0, 128},
                         ses::Grid1D{-20.0, 20.0, 128},
@@ -58,16 +90,10 @@ TEST(HoSpectrum, FockDarwinGroundIsOneLineAndBReconstructs) {
     const double w0 = 0.5;
     const double b = 0.6;
     const double om = std::sqrt(w0 * w0 + 0.25 * b * b);
-    // Lattice ground at B (qdot boot path).
-    std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for (int j = 0; j < g.y.n; ++j) {
-        const double y = g.y.coord(j);
-        for (int i = 0; i < g.x.n; ++i) {
-            const double x = g.x.coord(i);
-            v[static_cast<std::size_t>(g.flat(i, j, 0))] =
-                0.5 * w0 * w0 * (x * x + y * y);
-        }
-    }
+    // Lattice ground at B (qdot boot path); single z = 0 plane, so the 3D
+    // builder matches the 2D slab.
+    const std::vector<double> v =
+        ses::harmonic_potential(g, w0, ses::Vec3d{});
     ses::PeierlsLattice2D prop{g, v, 0.005};
     prop.set_uniform_field(b);
     ses::Field3D psi{g};

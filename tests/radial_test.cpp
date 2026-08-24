@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 import ses.radial;
 import ses.decay;
@@ -65,12 +66,23 @@ TEST(SturmCount, MatchesTheExactDiscreteBoxSpectrum) {
     const double dh = g.h();
     // Exact FD box spectrum of -(1/2)d2/dr2, u(0)=u(R)=0.
     auto exact = [&](int k) {
-        return (1.0 - std::cos(k * 3.14159265358979323846 / (g.n + 1))) / (dh * dh);
+        return (1.0 - std::cos(k * std::numbers::pi / (g.n + 1))) / (dh * dh);
     };
     EXPECT_EQ(ses::sturm_count_below(h, 0.5 * exact(1)), 0);
     EXPECT_EQ(ses::sturm_count_below(h, 0.5 * (exact(1) + exact(2))), 1);
     EXPECT_EQ(ses::sturm_count_below(h, 0.5 * (exact(3) + exact(4))), 3);
     EXPECT_EQ(ses::sturm_count_below(h, exact(g.n) + 1.0), g.n);
+}
+
+// PIN: shared ratio-form convention (ses.radial + ses.bloch band solver).
+// lambda == diag[0] zeroes the first pivot exactly; the -1e-300 nudge comes
+// AFTER the update, so the graze counts below. Oracle: eig([[1,.5],[.5,2]])
+// = (3 +- sqrt(2))/2, one eigenvalue (0.793) below 1.0.
+TEST(SturmCount, ExactZeroPivotCountsBelow) {
+    const std::vector<double> diag{1.0, 2.0};
+    EXPECT_EQ(ses::sturm_count_below(diag, 0.5, 1.0), 1);
+    const std::vector<double> off{0.5};
+    EXPECT_EQ(ses::sturm_count_below(diag, off, 1.0), 1);
 }
 
 TEST(RadialEigenstate, BoxEigenvaluesExactAndNodesCounted) {
@@ -80,7 +92,7 @@ TEST(RadialEigenstate, BoxEigenvaluesExactAndNodesCounted) {
     for (int k = 0; k < 3; ++k) {
         const ses::RadialState s = ses::radial_eigenstate(g, h, k);
         const double exact =
-            (1.0 - std::cos((k + 1) * 3.14159265358979323846 / (g.n + 1))) / (dh * dh);
+            (1.0 - std::cos((k + 1) * std::numbers::pi / (g.n + 1))) / (dh * dh);
         EXPECT_NEAR(s.energy, exact, 1e-9 * exact);
         EXPECT_EQ(count_interior_sign_changes(s.u), k);
         double norm = 0.0;
@@ -192,6 +204,7 @@ TEST(BoundLevelTable, CountsAllFiftyFiveLevelsUpToNTen) {
                 return e.lifetime;
             }
         }
+        ADD_FAILURE() << "missing level n=" << n << " l=" << l;
         return -1.0;
     };
     // circular (l=n-1) lifetimes grow steeply: tau(10,9) >> tau(3,2).

@@ -18,6 +18,7 @@
 import ses.bloch;
 import ses.field;
 import ses.grid;
+import ses.observables;
 import ses.wavepacket;
 
 namespace {
@@ -64,15 +65,8 @@ TEST(TiltedSplitOperator1D, FreeTiltIsExactlyUniformAcceleration) {
     ses::Field1D psi = ses::gaussian_wavepacket(g, x0, 3.0, k0);
     const int steps = 1600;
     prop.step(psi, steps);
-    double num = 0.0;
-    double den = 0.0;
-    for (int i = 0; i < g.n; ++i) {
-        const double w = std::norm(psi[i]);
-        num += g.coord(i) * w;
-        den += w;
-    }
     const double t = steps * dt;
-    EXPECT_NEAR(num / den, x0 + k0 * t + 0.5 * f * t * t, 1e-6);
+    EXPECT_NEAR(ses::mean_position(psi), x0 + k0 * t + 0.5 * f * t * t, 1e-6);
     EXPECT_NEAR(prop.drift(), f * t, 1e-12);
 }
 
@@ -93,16 +87,7 @@ TEST(TiltedSplitOperator1D, BlochOscillationReturnsInsteadOfRunningAway) {
     ses::TiltedSplitOperator1D prop{g, v, dt, f};
     // broad packet at a well minimum: ground band, q ~ 0
     ses::Field1D psi = ses::gaussian_wavepacket(g, 0.0, 6.0, 0.0);
-    auto mean_x = [&] {
-        double num = 0.0;
-        double den = 0.0;
-        for (int i = 0; i < g.n; ++i) {
-            const double w = std::norm(psi[i]);
-            num += g.coord(i) * w;
-            den += w;
-        }
-        return num / den;
-    };
+    auto mean_x = [&] { return ses::mean_position(psi); };
     const double x0 = mean_x();
     const int steps = static_cast<int>(t_b / dt + 0.5);
     double excursion = 0.0;

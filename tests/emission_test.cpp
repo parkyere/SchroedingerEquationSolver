@@ -275,14 +275,20 @@ TEST(GroupByGap, ToleranceControlsDegenerateShellMerging) {
 // sampler's draws); the equatorial-candidate scripts below are accepted on
 // the first rejection try (f == bound there for a pure-axis dipole set).
 
+// Scripted draws; .at() turns an implementation over-draw into a clear
+// failure instead of out-of-bounds UB.
+auto make_script(std::vector<double> us) {
+    return [us = std::move(us), k = std::size_t{0}]() mutable {
+        return us.at(k++);
+    };
+}
+
 TEST(CollectiveDecayInterval, NoJumpLeavesAmplitudesUntouched) {
     const std::vector<ses::FreqGroup> groups{
         {{{1, 0, 0.0, 0.0, 1.0}}, 0.25, 1.0}};
     std::vector<std::complex<double>> c{{0.0, 0.0}, {1.0, 0.0}};
     // R = 1; u = e^{-5} -> t1 = 5 > dt = 1: survive.
-    std::vector<double> us{std::exp(-5.0)};
-    std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = make_script({std::exp(-5.0)});
     const ses::IntervalResult r =
         ses::collective_decay_interval(groups, c, 1.0, u01);
     EXPECT_TRUE(r.jumps.empty());
@@ -296,9 +302,7 @@ TEST(CollectiveDecayInterval, SingleGroupArrivalCollapsesAndRecords) {
     std::vector<std::complex<double>> c{{0.0, 0.0}, {1.0, 0.0}};
     // R = k*|D|^2 = 2; arrival u = e^{-2*0.5} -> t1 = 0.5 < dt 1.
     // Draws: u_arr, u_group, then sampler (ct=0.5 -> equator, phi, accept, hel).
-    std::vector<double> us{std::exp(-1.0), 0.5, 0.5, 0.25, 0.5, 0.3};
-    std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = make_script({std::exp(-1.0), 0.5, 0.5, 0.25, 0.5, 0.3});
     const ses::IntervalResult r =
         ses::collective_decay_interval(groups, c, 1.0, u01);
     ASSERT_EQ(r.jumps.size(), 1u);
@@ -319,9 +323,7 @@ TEST(CollectiveDecayInterval, GroupPickProjectsTheEnergy) {
         {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
     // u_group = 0.9 > R_A/R = 0.2 -> group B. Candidate n = y (ct 0.5,
     // phi 0.25): transverse to B's x-dipole -> accepted first try.
-    std::vector<double> us{std::exp(-5.0 * 0.5), 0.9, 0.5, 0.25, 0.5, 0.3};
-    std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = make_script({std::exp(-5.0 * 0.5), 0.9, 0.5, 0.25, 0.5, 0.3});
     const ses::IntervalResult r =
         ses::collective_decay_interval(groups, c, 1.0, u01);
     ASSERT_EQ(r.jumps.size(), 1u);
@@ -339,9 +341,7 @@ TEST(CollectiveDecayInterval, DegenerateShellsTransferCoherently) {
         {{{2, 0, 0.0, 0.0, 1.0}, {3, 1, 0.0, 0.0, 1.0}}, 0.056, 1.0}};
     std::vector<std::complex<double>> c{
         {0.0, 0.0}, {0.0, 0.0}, {0.6, 0.0}, {0.0, 0.8}};
-    std::vector<double> us{std::exp(-0.5), 0.5, 0.5, 0.25, 0.5, 0.3};
-    std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = make_script({std::exp(-0.5), 0.5, 0.5, 0.25, 0.5, 0.3});
     const ses::IntervalResult r =
         ses::collective_decay_interval(groups, c, 1.0, u01);
     ASSERT_EQ(r.jumps.size(), 1u);
@@ -359,10 +359,8 @@ TEST(CollectiveDecayInterval, ChainsWithinTheInterval) {
         {{{1, 0, 0.0, 0.0, 1.0}, {2, 1, 0.0, 0.0, 1.0}}, 0.25, 1.0}};
     std::vector<std::complex<double>> c{
         {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}};
-    std::vector<double> us{std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3,
-                           std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3};
-    std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = make_script({std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3,
+                            std::exp(-0.2), 0.5, 0.5, 0.25, 0.5, 0.3});
     const ses::IntervalResult r =
         ses::collective_decay_interval(groups, c, 1.0, u01);
     ASSERT_EQ(r.jumps.size(), 2u);
@@ -378,6 +376,10 @@ TEST(ConditionedAmplitudes, AllZeroDipolesStayZero) {
     EXPECT_NEAR(std::abs(c[1]), 0.0, 1e-15);
 }
 
+// The PhotonSampling tests are the deliberate exception to the repo's no-RNG
+// rule (fft_test.cpp): fixed seeds keep runs repeatable, and the
+// implementation-defined uniform_real_distribution output is absorbed by the
+// 0.02-0.03 statistical gates.
 TEST(PhotonSampling, PiDipoleGivesSinSquaredPatternAndBalancedHelicity) {
     const std::vector<DipoleMatrixElement> dip{dip_pi()};
     std::mt19937 rng(20260823u);

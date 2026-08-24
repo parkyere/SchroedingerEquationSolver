@@ -12,17 +12,22 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
 import ses.grid;
 import ses.vec;
 import ses.decay;
 import ses.field;
 
+#define SES_TEST_UTIL_HARMONIC
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
-using ses::Grid1D;
 using ses::Grid3D;
 using ses::Vec3d;
+using ses_test::cube;
 
 struct HarmonicStates {
     Field3D ground;
@@ -30,26 +35,8 @@ struct HarmonicStates {
 };
 
 HarmonicStates make_states(const Grid3D& g, double w0) {
-    HarmonicStates s{Field3D{g}, Field3D{g}};
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double x = g.x.coord(i);
-                const double y = g.y.coord(j);
-                const double z = g.z.coord(k);
-                const double env = std::exp(-0.5 * w0 * (x * x + y * y + z * z));
-                s.ground(i, j, k) = std::complex<double>{env, 0.0};
-                s.excited_z(i, j, k) = std::complex<double>{z * env, 0.0};
-            }
-        }
-    }
-    ses::normalize(s.ground);
-    ses::normalize(s.excited_z);
-    return s;
-}
-
-Grid3D cube(double lo, double hi, int n) {
-    return Grid3D{Grid1D{lo, hi, n}, Grid1D{lo, hi, n}, Grid1D{lo, hi, n}};
+    return {ses_test::harmonic_state(g, w0, -1),
+            ses_test::harmonic_state(g, w0, 2)};
 }
 
 TEST(DipoleMatrixElement, HarmonicAnalyticValue) {

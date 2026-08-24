@@ -9,7 +9,7 @@
 #include <vector>
 
 import ses.spheroidal;
-import ses.h2plus_atlas_data;
+import ses.h2plus_atlas_loader;
 import ses.field;
 import ses.grid;
 import ses.observables;
@@ -47,6 +47,13 @@ TEST(Spheroidal, KnownOrbitalEnergiesAtEquilibrium) {
     EXPECT_LT(pu.energy, sg2.energy);
 }
 
+// Contract: a converged solve reports valid; the flag gates h2plus_atlas, so
+// losing it would silently drop every state.
+TEST(Spheroidal, SolvedOrbitalReportsValid) {
+    EXPECT_TRUE(ses::h2plus_orbital(2.0, 0, 0, 0).valid);
+    EXPECT_TRUE(ses::h2plus_orbital(2.0, 1, 0, 0).valid);
+}
+
 TEST(Spheroidal, GroundEnergyVsInternuclearDistance) {
     // Oracle: Turbiner Table I.
     EXPECT_NEAR(ses::h2plus_orbital(1.0, 0, 0, 0).energy, -1.4517863, 0.02);
@@ -77,15 +84,12 @@ TEST(Spheroidal, SynthesizedGroundIsGeradeAndOnTheNuclei) {
         }
         return best;
     };
-    const int cx = nearest(g.x, 0.0);
     const int cy = nearest(g.y, 0.0);
     const int nx = nearest(g.x, R / 2);
     const int fx = nearest(g.x, 10.0);
     EXPECT_GT(std::norm(psi(nx, cy, cy)), 100.0 * std::norm(psi(fx, cy, cy)));
-    const int mx = g.x.n - cx;
     EXPECT_NEAR(psi(nx, cy, cy).real(), psi(g.x.n - nx, cy, cy).real(),
                 1e-6 * std::abs(psi(nx, cy, cy).real()) + 1e-9);
-    (void)mx;
 
     const std::vector<double> v = ses::regularized_coulomb_potential(
         g, 1.0, {{-R / 2, 0.0, 0.0}, {R / 2, 0.0, 0.0}});

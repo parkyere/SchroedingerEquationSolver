@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <numbers>
 #include <tuple>
 #include <vector>
 import ses.grid;
@@ -142,7 +143,7 @@ TEST(MarchingCubes, SphereAreaMatchesAnalytic) {
     for (std::size_t t = 0; t + 2 < mesh.vertices.size(); t += 3) {
         area += triangle_area(mesh.vertices[t], mesh.vertices[t + 1], mesh.vertices[t + 2]);
     }
-    const double analytic = 4.0 * 3.14159265358979323846 * 1.44;
+    const double analytic = 4.0 * std::numbers::pi * 1.44;
     EXPECT_NEAR(area, analytic, 0.02 * analytic);
 }
 

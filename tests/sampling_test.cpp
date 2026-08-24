@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 import ses.sampling;
 import ses.grid;
@@ -126,7 +127,7 @@ TEST(PhaseColors, PlaneWavePhaseTracksKx) {
     ASSERT_EQ(colors.size(), mesh.vertices.size());
     for (std::size_t i = 0; i < colors.size(); ++i) {
         const double phase = std::remainder(kx * mesh.vertices[i].x,
-                                            2.0 * 3.14159265358979323846);
+                                            2.0 * std::numbers::pi);
         const Rgb expected = ses::phase_color(phase);
         EXPECT_NEAR(colors[i].r, expected.r, 0.01);
         EXPECT_NEAR(colors[i].g, expected.g, 0.01);

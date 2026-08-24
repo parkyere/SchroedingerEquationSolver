@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <numbers>
 #include <random>
 #include <vector>
 
@@ -12,7 +13,7 @@ import ses.spin;
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 
 ses::Spinor plus_x() {
     ses::Spinor s;
@@ -30,14 +31,11 @@ TEST(Spin, LarmorPrecessesAtExactlyB) {
     for (int k = 0; k < n; ++k) {
         ses::spin_step(s, 0.0, 0.0, b, dt);
     }
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    ses::bloch_vector(s, &x, &y, &z);
+    const ses::Vec3d p = ses::bloch_vector(s);
     // sign convention: U = e^{-i theta sigma/2}, phase +b t CCW about +B.
-    EXPECT_NEAR(z, 0.0, 1e-12);
-    EXPECT_NEAR(std::hypot(x, y), 1.0, 1e-12);
-    const double phase = std::atan2(y, x);
+    EXPECT_NEAR(p.z, 0.0, 1e-12);
+    EXPECT_NEAR(std::hypot(p.x, p.y), 1.0, 1e-12);
+    const double phase = std::atan2(p.y, p.x);
     double expect = b * n * dt;
     while (expect > kPi) {
         expect -= 2.0 * kPi;
@@ -59,33 +57,26 @@ TEST(Spin, ResonantCircularDriveRabiFlips) {
         const double by = b1 * std::sin(b0 * t);
         ses::spin_step(s, bx, by, b0, dt);
     }
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    ses::bloch_vector(s, &x, &y, &z);
-    EXPECT_NEAR(z, -1.0, 5e-3);  // full flip at t = pi / Omega_R
+    EXPECT_NEAR(ses::bloch_vector(s).z, -1.0,
+                5e-3);  // full flip at t = pi / Omega_R
 }
 
 TEST(Spin, MeasurementCollapsesOntoTheAxis) {
     const double r = 1.0 / std::sqrt(3.0);
     ses::Spinor s = plus_x();
     EXPECT_EQ(ses::spin_measure(s, 1.0, 0.0, 0.0, 0.5), +1);
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    ses::bloch_vector(s, &x, &y, &z);
-    EXPECT_NEAR(x, 1.0, 1e-12);
+    EXPECT_NEAR(ses::bloch_vector(s).x, 1.0, 1e-12);
     // tilted axis: Born picks +-, collapsed state = eigenstate (<sigma.n> = +-1)
     ses::Spinor a = plus_x();
     const int oa = ses::spin_measure(a, r, r, r, 0.0);   // u=0 -> plus
     EXPECT_EQ(oa, +1);
-    ses::bloch_vector(a, &x, &y, &z);
-    EXPECT_NEAR(x * r + y * r + z * r, 1.0, 1e-12);
+    const ses::Vec3d pa = ses::bloch_vector(a);
+    EXPECT_NEAR(pa.x * r + pa.y * r + pa.z * r, 1.0, 1e-12);
     ses::Spinor b = plus_x();
     const int ob = ses::spin_measure(b, r, r, r, 0.999);  // u~1 -> minus
     EXPECT_EQ(ob, -1);
-    ses::bloch_vector(b, &x, &y, &z);
-    EXPECT_NEAR(x * r + y * r + z * r, -1.0, 1e-12);
+    const ses::Vec3d pb = ses::bloch_vector(b);
+    EXPECT_NEAR(pb.x * r + pb.y * r + pb.z * r, -1.0, 1e-12);
 }
 
 TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
@@ -104,12 +95,9 @@ TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
         double sx = 0.0;
         double sy = 0.0;
         for (const ses::Spinor& s : ens) {
-            double x = 0.0;
-            double y = 0.0;
-            double z = 0.0;
-            ses::bloch_vector(s, &x, &y, &z);
-            sx += x;
-            sy += y;
+            const ses::Vec3d p = ses::bloch_vector(s);
+            sx += p.x;
+            sy += p.y;
         }
         return std::hypot(sx, sy) / kSpins;
     };

@@ -66,4 +66,14 @@ TEST(Field1D, NormalizeMakesUnitNorm) {
     EXPECT_NEAR(norm_sq(f), 1.0, 1e-12);
 }
 
+TEST(Field1D, NormalizeZeroFieldStaysZeroNoNaN) {
+    // Guard parity with Field3D: 1/0 -> Inf -> NaN must not leak.
+    Field1D f{Grid1D{-4.0, 4.0, 32}};
+    normalize(f);
+    for (int i = 0; i < f.size(); ++i) {
+        EXPECT_EQ(f[i].real(), 0.0);
+        EXPECT_EQ(f[i].imag(), 0.0);
+    }
+}
+
 }  // namespace

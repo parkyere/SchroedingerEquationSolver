@@ -5,6 +5,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 
 import ses.scenario.carpet1d_director;
@@ -16,19 +17,14 @@ import ses.wavepacket;
 namespace {
 
 double overlap2(const ses::Field1D& a, const ses::Field1D& b) {
-    std::complex<double> ov{};
-    for (int i = 0; i < a.size(); ++i) {
-        ov += std::conj(a[i]) * b[i];
-    }
-    ov *= a.grid().spacing();
-    return std::norm(ov);
+    return std::norm(ses::inner_product(a, b));
 }
 
 TEST(Carpet1d, RingRevivesExactlyAtLSquaredOverPi) {
     const double half = 20.0;
     const ses::Grid1D g{-half, half, 1024};
     const double t_rev = ses_shell::carpet_revival_time(2.0 * half);
-    EXPECT_NEAR(t_rev, 1600.0 / 3.14159265358979323846, 1e-9);
+    EXPECT_NEAR(t_rev, 1600.0 / std::numbers::pi, 1e-9);
     const std::vector<double> zero(static_cast<std::size_t>(g.n), 0.0);
     const double dt = 0.05;
     const ses::SplitOperator1D prop{g, zero, dt};

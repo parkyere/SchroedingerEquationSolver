@@ -5,6 +5,9 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <complex>
+#include <cstddef>
 import ses.simulation;
 import ses.propagator;
 import ses.observables;
@@ -13,6 +16,8 @@ import ses.vec;
 import ses.field;
 import ses.wavepacket;
 import ses.potential;
+
+#include "test_util.h"
 
 namespace {
 
@@ -63,14 +68,7 @@ TEST(SimulationState, AdvanceEvolvesTheInjectedState) {
     const ses::SplitOperator3D prop{cfg.grid, cfg.potential, cfg.dt};
     prop.step(manual, 5);
 
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < manual.data().size(); ++i) {
-        max_diff = std::max(max_diff,
-                            std::abs(sim.psi().data()[i].real() - manual.data()[i].real()));
-        max_diff = std::max(max_diff,
-                            std::abs(sim.psi().data()[i].imag() - manual.data()[i].imag()));
-    }
-    EXPECT_LT(max_diff, 1e-14);
+    EXPECT_LT(ses_test::max_abs_diff(sim.psi(), manual), 1e-14);
 }
 
 TEST(SimulationState, PropagatorExposesTheTables) {

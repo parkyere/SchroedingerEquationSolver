@@ -9,12 +9,12 @@
 #include <cmath>
 #include <complex>
 #include <numbers>
-#include <utility>
 #include <vector>
 
 import ses.field;
 import ses.grid;
 import ses.lattice2d;
+import ses.observables;
 import ses.potential;
 import ses.scenario.landau2d_director;
 
@@ -47,19 +47,7 @@ Field3D plane_packet(const Grid3D& g, double x0, double y0, double sigma,
     return psi;
 }
 
-double mean_x(const Field3D& psi) {
-    const Grid3D& g = psi.grid();
-    double num = 0.0;
-    double den = 0.0;
-    for (int j = 0; j < g.y.n; ++j) {
-        for (int i = 0; i < g.x.n; ++i) {
-            const double w = std::norm(psi(i, j, 0));
-            num += g.x.coord(i) * w;
-            den += w;
-        }
-    }
-    return num / den;
-}
+double mean_x(const Field3D& psi) { return ses::mean_position(psi).x; }
 
 TEST(PeierlsLattice2D, IsUnitaryToRoundOff) {
     const Grid3D g = plane_grid(10.0, 64, 10.0, 64);
@@ -204,39 +192,17 @@ TEST(PeierlsLattice2D, CyclotronOrbitAndLandauRevival) {
     ses::normalize(psi);
     const Field3D start = psi;
 
-    auto mean_r = [&](const Field3D& f) {
-        double mx = 0.0;
-        double my = 0.0;
-        double den = 0.0;
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double w = std::norm(f(i, j, 0));
-                mx += g.x.coord(i) * w;
-                my += g.y.coord(j) * w;
-                den += w;
-            }
-        }
-        return std::pair<double, double>{mx / den, my / den};
-    };
-
     const double period = 2.0 * std::numbers::pi / b;
     const int half = static_cast<int>(0.5 * period / dt + 0.5);
     prop.step(psi, half);
-    const auto [hx, hy] = mean_r(psi);
-    EXPECT_NEAR(hx, -2.0, 0.4);
-    EXPECT_NEAR(hy, 0.0, 0.4);
+    const ses::Vec3d hr = ses::mean_position(psi);
+    EXPECT_NEAR(hr.x, -2.0, 0.4);
+    EXPECT_NEAR(hr.y, 0.0, 0.4);
     prop.step(psi, half);
-    const auto [fx, fy] = mean_r(psi);
-    EXPECT_NEAR(fx, 2.0, 0.4);
-    EXPECT_NEAR(fy, 0.0, 0.4);
-    std::complex<double> ov{};
-    for (int j = 0; j < g.y.n; ++j) {
-        for (int i = 0; i < g.x.n; ++i) {
-            ov += std::conj(start(i, j, 0)) * psi(i, j, 0);
-        }
-    }
-    ov *= g.x.spacing() * g.y.spacing() * g.z.spacing();
-    EXPECT_GT(std::norm(ov), 0.8);
+    const ses::Vec3d fr = ses::mean_position(psi);
+    EXPECT_NEAR(fr.x, 2.0, 0.4);
+    EXPECT_NEAR(fr.y, 0.0, 0.4);
+    EXPECT_GT(std::norm(ses::inner_product(start, psi)), 0.8);
 }
 
 TEST(PeierlsLattice2D, DoubleSlitCarriesTheSolenoidFlux) {
@@ -302,6 +268,8 @@ TEST(PeierlsLattice2D, RelaxFindsTheFockDarwinGround) {
     const Grid3D g = plane_grid(20.0, 128, 20.0, 128);
     const double w0 = 0.5;
     const double b = 0.6;
+    // plane_grid holds the single z = -1 plane, so the 3D harmonic builder
+    // would add a constant 0.5 w0^2 offset; fill the 2D form locally.
     std::vector<double> v(static_cast<std::size_t>(g.size()));
     for (int j = 0; j < g.y.n; ++j) {
         for (int i = 0; i < g.x.n; ++i) {
@@ -387,16 +355,16 @@ TEST(PeierlsLattice2D, LandauLadderClimbsOneCyclotronQuantum) {
     const double e0 = prop.energy(psi);
 
     // a annihilates the LLL (residual = lattice artifact).
-    ses::Field3D down = ses::landau_ladder(psi, b, false);
+    ses::Field3D down = ses::landau_ladder(psi, b, ses::Rung::Lower);
     EXPECT_LT(ses::norm_sq(down), 0.05);
 
     // a-dag climbs to n = 1: <H> rises by omega_c = B (lattice band tol).
-    ses::Field3D up = ses::landau_ladder(psi, b, true);
+    ses::Field3D up = ses::landau_ladder(psi, b, ses::Rung::Raise);
     ses::normalize(up);
     const double e1 = prop.energy(up);
     EXPECT_NEAR((e1 - e0) / b, 1.0, 0.15);
 
-    ses::Field3D up2 = ses::landau_ladder(up, b, true);
+    ses::Field3D up2 = ses::landau_ladder(up, b, ses::Rung::Raise);
     ses::normalize(up2);
     const double e2 = prop.energy(up2);
     EXPECT_NEAR((e2 - e1) / b, 1.0, 0.2);
@@ -448,11 +416,8 @@ TEST(PeierlsLattice2D, SinglePacketDrainsThroughTheOpenBoundary) {
                                                 std::sin(k0 * x)};
         }
     }
-    const double n0 = ses::norm_sq(psi);
-    ASSERT_GT(n0, 0.0);
-    for (auto& c : psi.data()) {
-        c /= std::sqrt(n0);
-    }
+    ASSERT_GT(ses::norm_sq(psi), 0.0);
+    ses::normalize(psi);
     const int i_scr = 102;  // x ~ +18, the screen column
     double arrivals = 0.0;
     double arrivals_early = 0.0;

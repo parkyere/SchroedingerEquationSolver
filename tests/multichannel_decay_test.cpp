@@ -9,19 +9,19 @@
 #include <cmath>
 #include <cstddef>
 #include <vector>
+#include <algorithm>
 import ses.grid;
 import ses.decay;
 import ses.field;
 
+#define SES_TEST_UTIL_HARMONIC
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
-using ses::Grid1D;
 using ses::Grid3D;
-
-Grid3D cube(double lo, double hi, int n) {
-    return Grid3D{Grid1D{lo, hi, n}, Grid1D{lo, hi, n}, Grid1D{lo, hi, n}};
-}
+using ses_test::cube;
 
 // Parity-orthonormal manifold: even ground, x-odd/y-odd excited overlap to ~0.
 struct Manifold {
@@ -31,24 +31,16 @@ struct Manifold {
 };
 
 Manifold make_manifold(const Grid3D& g) {
-    Manifold m{Field3D{g}, Field3D{g}, Field3D{g}};
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double x = g.x.coord(i);
-                const double y = g.y.coord(j);
-                const double z = g.z.coord(k);
-                const double env = std::exp(-0.5 * (x * x + y * y + z * z));
-                m.ground(i, j, k) = std::complex<double>{env, 0.0};
-                m.ex(i, j, k) = std::complex<double>{x * env, 0.0};
-                m.ey(i, j, k) = std::complex<double>{y * env, 0.0};
-            }
-        }
+    return {ses_test::harmonic_state(g, 1.0, -1),
+            ses_test::harmonic_state(g, 1.0, 0),
+            ses_test::harmonic_state(g, 1.0, 1)};
+}
+
+void expect_bitwise_equal(const Field3D& a, const Field3D& b) {
+    for (std::size_t i = 0; i < a.data().size(); ++i) {
+        EXPECT_EQ(a.data()[i].real(), b.data()[i].real());
+        EXPECT_EQ(a.data()[i].imag(), b.data()[i].imag());
     }
-    ses::normalize(m.ground);
-    ses::normalize(m.ex);
-    ses::normalize(m.ey);
-    return m;
 }
 
 // P_x = 0.36, P_y = 0.64.
@@ -80,10 +72,7 @@ TEST(MultiQuantumJump, NoJumpIsBitwiseNoOpAndReportsClosedFormP) {
     const ses::MultiJumpResult r = ses::multi_quantum_jump(psi, channels, dt, 0.999, 0.5);
     EXPECT_EQ(r.channel, -1);
     EXPECT_NEAR(r.p_total, expected_p, 1e-12);
-    for (std::size_t i = 0; i < psi.data().size(); ++i) {
-        EXPECT_EQ(psi.data()[i].real(), before.data()[i].real());
-        EXPECT_EQ(psi.data()[i].imag(), before.data()[i].imag());
-    }
+    expect_bitwise_equal(psi, before);
 }
 
 TEST(MultiQuantumJump, SingleChannelMatchesQuantumJump) {
@@ -114,10 +103,7 @@ TEST(MultiQuantumJump, JumpCollapsesOntoTheSelectedDestination) {
         const ses::MultiJumpResult r =
             ses::multi_quantum_jump(psi, channels, 5.0, 0.0, 0.0);
         EXPECT_EQ(r.channel, 0);
-        for (std::size_t i = 0; i < psi.data().size(); ++i) {
-            EXPECT_EQ(psi.data()[i].real(), m.ground.data()[i].real());
-            EXPECT_EQ(psi.data()[i].imag(), m.ground.data()[i].imag());
-        }
+        expect_bitwise_equal(psi, m.ground);
     }
     {
         Field3D psi = make_superposition(m);
@@ -128,10 +114,7 @@ TEST(MultiQuantumJump, JumpCollapsesOntoTheSelectedDestination) {
         const ses::MultiJumpResult r =
             ses::multi_quantum_jump(psi, channels, 5.0, 0.0, 0.999999);
         EXPECT_EQ(r.channel, 1);
-        for (std::size_t i = 0; i < psi.data().size(); ++i) {
-            EXPECT_EQ(psi.data()[i].real(), m.ex.data()[i].real());
-            EXPECT_EQ(psi.data()[i].imag(), m.ex.data()[i].imag());
-        }
+        expect_bitwise_equal(psi, m.ex);
     }
 }
 
@@ -185,7 +168,11 @@ TEST(MultiQuantumJump, ChannelSelectionFollowsPopulationWeightedRates) {
             {{&m.ex, &m.ground, g1}, {&m.ey, &m.ground, g2}},
             50.0, 0.0, u2);  // u1 = 0: always jump
         ASSERT_GE(r.channel, 0);
-        (r.channel == 0 ? chan0 : chan1) += 1;
+        if (r.channel == 0) {
+            ++chan0;
+        } else {
+            ++chan1;
+        }
     }
     EXPECT_EQ(chan0, expected0);
     EXPECT_EQ(chan1, kDraws - expected0);
@@ -202,10 +189,7 @@ TEST(MultiQuantumJump, ForbiddenChannelIsNeverSelected) {
         {{&m.ex, &m.ground, 0.0}, {&m.ey, &m.ground, 1.0}},
         50.0, 0.0, 0.0);
     EXPECT_EQ(r.channel, 1);
-    for (std::size_t i = 0; i < psi.data().size(); ++i) {
-        EXPECT_EQ(psi.data()[i].real(), m.ground.data()[i].real());
-        EXPECT_EQ(psi.data()[i].imag(), m.ground.data()[i].imag());
-    }
+    expect_bitwise_equal(psi, m.ground);
 }
 
 // RED: pick_decay_channel -- pure selection arithmetic factored out so the GPU
@@ -247,10 +231,7 @@ TEST(MultiQuantumJump, AllForbiddenNeverJumps) {
         50.0, 0.0, 0.5);  // u1 = 0 would jump if any rate were nonzero
     EXPECT_EQ(r.channel, -1);
     EXPECT_EQ(r.p_total, 0.0);
-    for (std::size_t i = 0; i < psi.data().size(); ++i) {
-        EXPECT_EQ(psi.data()[i].real(), before.data()[i].real());
-        EXPECT_EQ(psi.data()[i].imag(), before.data()[i].imag());
-    }
+    expect_bitwise_equal(psi, before);
 }
 
 }  // namespace

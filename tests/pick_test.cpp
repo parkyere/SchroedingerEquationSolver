@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <numbers>
 
 import ses.camera;
 import ses.vec;
@@ -20,19 +21,18 @@ void mul4(const ses::Mat4& m, const double v[4], double out[4]) {
 }
 
 TEST(PickPlane, CenterHitsTheOriginAndPointsRoundTrip) {
-    const double kPi = 3.14159265358979323846;
+    const double kPi = std::numbers::pi;
     const double az = 0.35;
     const double el = 0.95;
     const double dist = 75.0;
     const double fovy = 45.0 * kPi / 180.0;
     const double aspect = 16.0 / 9.0;
 
-    double x = 1e9;
-    double y = 1e9;
-    ASSERT_TRUE(ses::unproject_to_z0(az, el, dist, fovy, aspect, 0.0, 0.0,
-                                     &x, &y));
-    EXPECT_NEAR(x, 0.0, 1e-9);  // orbit camera looks at the origin
-    EXPECT_NEAR(y, 0.0, 1e-9);
+    const ses::StagePick center =
+        ses::unproject_to_z0(az, el, dist, fovy, aspect, 0.0, 0.0);
+    ASSERT_TRUE(center.hit);
+    EXPECT_NEAR(center.x, 0.0, 1e-9);  // orbit camera looks at the origin
+    EXPECT_NEAR(center.y, 0.0, 1e-9);
 
     const ses::Mat4 proj = ses::perspective(fovy, aspect, 0.1, 500.0);
     const ses::Vec3d eye = ses::orbit_eye(az, el, dist, ses::Vec3d{});
@@ -45,14 +45,16 @@ TEST(PickPlane, CenterHitsTheOriginAndPointsRoundTrip) {
     ASSERT_GT(clip[3], 0.0);
     const double ndc_x = clip[0] / clip[3];
     const double ndc_y = clip[1] / clip[3];
-    ASSERT_TRUE(ses::unproject_to_z0(az, el, dist, fovy, aspect, ndc_x,
-                                     ndc_y, &x, &y));
-    EXPECT_NEAR(x, 7.0, 1e-6);
-    EXPECT_NEAR(y, -4.0, 1e-6);
+    const ses::StagePick pick =
+        ses::unproject_to_z0(az, el, dist, fovy, aspect, ndc_x, ndc_y);
+    ASSERT_TRUE(pick.hit);
+    EXPECT_NEAR(pick.x, 7.0, 1e-6);
+    EXPECT_NEAR(pick.y, -4.0, 1e-6);
 
     // Degenerate: elevation pi/2 => ray lies in z = 0; must refuse, not divide by zero.
-    EXPECT_FALSE(ses::unproject_to_z0(0.0, 0.5 * kPi, dist, fovy, aspect,
-                                      0.0, 0.0, &x, &y));
+    EXPECT_FALSE(
+        ses::unproject_to_z0(0.0, 0.5 * kPi, dist, fovy, aspect, 0.0, 0.0)
+            .hit);
 }
 
 }  // namespace

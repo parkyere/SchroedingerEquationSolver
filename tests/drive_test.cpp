@@ -9,6 +9,8 @@
 #include <cmath>
 #include <numbers>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
 import ses.drive;
 import ses.propagator;
 import ses.observables;
@@ -18,17 +20,16 @@ import ses.field;
 import ses.wavepacket;
 import ses.potential;
 
+#define SES_TEST_UTIL_HARMONIC
+#include "test_util.h"
+
 namespace {
 
 using ses::DipoleDrive;
 using ses::Field3D;
-using ses::Grid1D;
 using ses::Grid3D;
 using ses::Vec3d;
-
-Grid3D cube(double lo, double hi, int n) {
-    return Grid3D{Grid1D{lo, hi, n}, Grid1D{lo, hi, n}, Grid1D{lo, hi, n}};
-}
+using ses_test::cube;
 
 double population(const Field3D& state, const Field3D& psi) {
     const std::complex<double> ip = ses::inner_product(state, psi);
@@ -47,14 +48,7 @@ TEST(DipoleDrive, ZeroAmplitudeMatchesStaticBitwise) {
     Field3D fixed = psi0;
     prop.step(fixed, 10);
 
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < fixed.data().size(); ++i) {
-        max_diff = std::max(max_diff,
-                            std::abs(driven.data()[i].real() - fixed.data()[i].real()));
-        max_diff = std::max(max_diff,
-                            std::abs(driven.data()[i].imag() - fixed.data()[i].imag()));
-    }
-    EXPECT_EQ(max_diff, 0.0);
+    EXPECT_EQ(ses_test::max_abs_diff(driven, fixed), 0.0);
 }
 
 TEST(DipoleDrive, ConstantFieldObeysEhrenfest) {
@@ -83,25 +77,9 @@ TEST(DipoleDrive, ResonantCoherentLadderAndSelectionRule) {
     const double dt = 0.05;
     const ses::SplitOperator3D prop{g, v, dt};
 
-    Field3D ground{g};
-    Field3D excited_z{g};
-    Field3D excited_y{g};
-    for (int k = 0; k < g.z.n; ++k) {
-        for (int j = 0; j < g.y.n; ++j) {
-            for (int i = 0; i < g.x.n; ++i) {
-                const double x = g.x.coord(i);
-                const double y = g.y.coord(j);
-                const double z = g.z.coord(k);
-                const double env = std::exp(-0.5 * w0 * (x * x + y * y + z * z));
-                ground(i, j, k) = std::complex<double>{env, 0.0};
-                excited_z(i, j, k) = std::complex<double>{z * env, 0.0};
-                excited_y(i, j, k) = std::complex<double>{y * env, 0.0};
-            }
-        }
-    }
-    ses::normalize(ground);
-    ses::normalize(excited_z);
-    ses::normalize(excited_y);
+    const Field3D ground = ses_test::harmonic_state(g, w0, -1);
+    const Field3D excited_z = ses_test::harmonic_state(g, w0, 2);
+    const Field3D excited_y = ses_test::harmonic_state(g, w0, 1);
 
     const double e0 = 0.2;
     const int steps = 283;  // lands near a sin(w0 t) maximum

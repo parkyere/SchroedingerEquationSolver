@@ -12,7 +12,6 @@
 import ses.scenario.anderson1d_director;
 import ses.field;
 import ses.grid;
-import ses.observables;
 import ses.propagator;
 import ses.wavepacket;
 
@@ -42,7 +41,7 @@ TEST(Anderson1D, DisorderBlocksTheBallisticPacket) {
     // transmitted tail back into the readout. Packet E is above every barrier.
     const ses::Grid1D g{-60.0, 60.0, 4096};
     const double x0 = -45.0;
-    const double w0 = 4.0;
+    const double kCapStrength = 0.04;
     const double cap_w = 6.0;
     std::vector<double> cap(static_cast<std::size_t>(g.n), 1.0);
     for (int i = 0; i < g.n; ++i) {
@@ -51,7 +50,7 @@ TEST(Anderson1D, DisorderBlocksTheBallisticPacket) {
         if (d < cap_w) {
             const double t = 1.0 - d / cap_w;
             cap[static_cast<std::size_t>(i)] =
-                std::exp(-w0 * t * t * 0.01);
+                std::exp(-kCapStrength * t * t);
         }
     }
     // transmitted = flux the RIGHT cap (x>0) absorbs; reflected exits LEFT, uncounted

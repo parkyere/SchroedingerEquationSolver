@@ -43,15 +43,10 @@ TEST(Bouncer1d, RelaxedStatesLandOnTheAiryLadder) {
     EXPECT_LT(e_ground, e1);
     EXPECT_GT(e_ground, e1 - 0.35);
     ses::Field1D excited = ses::gaussian_wavepacket(g, 6.0, 2.0, 0.0);
-    const double h = g.spacing();
     for (int s = 0; s < 6000; ++s) {
         (s < 3000 ? itp : fine).relax(excited, 1);
         // Gram-Schmidt against the captured ground each step.
-        std::complex<double> ov{};
-        for (int i = 0; i < g.n; ++i) {
-            ov += std::conj(psi[i]) * excited[i];
-        }
-        ov *= h;
+        const std::complex<double> ov = ses::inner_product(psi, excited);
         for (int i = 0; i < g.n; ++i) {
             excited[i] -= ov * psi[i];
         }

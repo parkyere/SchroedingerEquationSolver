@@ -7,6 +7,8 @@
 #include <cmath>
 #include <complex>
 #include <vector>
+#include <algorithm>
+#include <cstddef>
 import ses.imaginary_time;
 import ses.observables;
 import ses.radial;
@@ -17,12 +19,14 @@ import ses.harmonics;
 import ses.wavepacket;
 import ses.potential;
 
+#define SES_TEST_UTIL_RADIAL
+#include "test_util.h"
+
 namespace {
 
 using ses::Field3D;
 using ses::Grid1D;
 using ses::Grid3D;
-using ses::RadialGrid;
 using ses::Vec3d;
 
 // Power-of-two per axis: hand-rolled radix-2 FFT requires it. +-12 Bohr box
@@ -39,11 +43,7 @@ const std::vector<double>& reg_potential() {
 // <H> of a synthesized (u_nl/r) Y_lm orbital, mirroring the app path. Radial
 // solve uses bare -1/r, differing from reg_potential only in the nucleus cell.
 double synth_energy(int level_l, int node_k, int m) {
-    const RadialGrid rg{20.0, 3999};
-    std::vector<double> vr(static_cast<std::size_t>(rg.n));
-    for (int i = 0; i < rg.n; ++i) {
-        vr[static_cast<std::size_t>(i)] = -1.0 / rg.r(i);
-    }
+    const auto [rg, vr] = ses_test::bare_hydrogen_radial();
     const ses::RadialState st =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, level_l),
                                node_k);

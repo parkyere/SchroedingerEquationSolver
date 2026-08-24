@@ -10,6 +10,7 @@
 
 import ses.mcwf1d;
 import ses.observables;
+import ses.potential;
 import ses.propagator;
 import ses.wavepacket;
 
@@ -27,27 +28,17 @@ ses::Field1D cat(const ses::Grid1D& g, double omega, double x0, int sign) {
 }
 
 double overlap2(const ses::Field1D& a, const ses::Field1D& b) {
-    std::complex<double> ov{};
-    for (int i = 0; i < a.size(); ++i) {
-        ov += std::conj(a[i]) * b[i];
-    }
-    ov *= a.grid().spacing();
-    return std::norm(ov);
+    return std::norm(ses::inner_product(a, b));
 }
 
 TEST(Mcwf1d, JumpFlipsTheCatParity) {
     const ses::Grid1D g{-12.0, 12.0, 512};
     const double omega = 1.0;
-    std::vector<double> v(static_cast<std::size_t>(g.n));
-    for (int i = 0; i < g.n; ++i) {
-        const double x = g.coord(i);
-        v[static_cast<std::size_t>(i)] = 0.5 * omega * omega * x * x;
-    }
-    const ses::ImaginaryTimePropagator1D damp{g, v, 1e-4};
+    const std::vector<double> v = ses::harmonic_potential(g, omega, 0.0);
+    const ses::PhotonLossDamper damp{g, v, omega, 0.05, 0.01};
     ses::Field1D psi = cat(g, omega, 3.0, +1);
     // u = 0 forces the jump (<n> ~ alpha^2 = 4.5).
-    const bool jumped =
-        ses::photon_loss_step(psi, omega, v, 0.05, 0.01, 0.0, damp);
+    const bool jumped = ses::photon_loss_step(psi, 0.0, damp);
     EXPECT_TRUE(jumped);
     EXPECT_GT(overlap2(psi, cat(g, omega, 3.0, -1)), 0.9);
     EXPECT_LT(overlap2(psi, cat(g, omega, 3.0, +1)), 0.05);
@@ -58,14 +49,10 @@ TEST(Mcwf1d, NoJumpDampingBleedsNAtKappa) {
     const double omega = 1.0;
     const double kappa = 0.5;
     const double dt = 0.01;
-    std::vector<double> v(static_cast<std::size_t>(g.n));
-    for (int i = 0; i < g.n; ++i) {
-        const double x = g.coord(i);
-        v[static_cast<std::size_t>(i)] = 0.5 * omega * omega * x * x;
-    }
+    const std::vector<double> v = ses::harmonic_potential(g, omega, 0.0);
     const ses::SplitOperator1D prop{g, v, dt};
-    const ses::ImaginaryTimePropagator1D damp{g, v,
-                                              kappa * dt / (2.0 * omega)};
+    // dtau = kappa dt/(2 omega) now derived INSIDE the damper (the contract).
+    const ses::PhotonLossDamper damp{g, v, omega, kappa, dt};
     const double sig = 1.0 / std::sqrt(2.0 * omega);
     ses::Field1D psi = ses::gaussian_wavepacket(g, 3.0, sig, 0.0);
     auto n_of = [&](const ses::Field1D& f) {
@@ -75,7 +62,7 @@ TEST(Mcwf1d, NoJumpDampingBleedsNAtKappa) {
     ASSERT_GT(n0, 4.0);  // alpha^2 = x0^2 omega / 2 = 4.5
     for (int s = 0; s < 400; ++s) {  // T = 4, u = 1: never jump
         prop.step(psi, 1);
-        ses::photon_loss_step(psi, omega, v, kappa, dt, 1.0, damp);
+        ses::photon_loss_step(psi, 1.0, damp);
     }
     const double ratio = n_of(psi) / n0;
     const double pred = std::exp(-kappa * 4.0);  // e^-2 = 0.135

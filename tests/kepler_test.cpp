@@ -6,11 +6,17 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <numbers>
 
 import ses.scenario.kepler_seed;
 import ses.measurement;
 
 namespace {
+
+using ses_shell::kNumStates;
+using ses_shell::kStateSpec;
+using ses_shell::state_n;
+using ses_shell::StateSpec;
 
 TEST(KeplerSeed, CircularPairTableMatchesTheManifold) {
     const auto pairs = ses_shell::kepler_pairs();
@@ -76,7 +82,7 @@ TEST(KeplerSeed, PacketOrbitsCcwAtTheKeplerRate) {
     EXPECT_GT(std::abs(a0), 0.35);
     EXPECT_NEAR(std::arg(a0), 0.0, 1e-12);
     const double w_kepler = 1.0 / (n_bar * n_bar * n_bar);
-    const double t_probe = 0.25 * 3.14159265358979323846 / w_kepler;
+    const double t_probe = 0.25 * std::numbers::pi / w_kepler;
     const double dphi = std::arg(coherence(t_probe));  // still < pi: no wrap
     // generous 0.7-1.8 window: low-n tail skews the weighted mean fast of n_bar^-3
     EXPECT_GT(dphi, 0.7 * w_kepler * t_probe);

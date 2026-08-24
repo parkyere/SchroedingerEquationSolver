@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <numbers>
 #include <vector>
 import ses.grid;
 import ses.potential;
@@ -30,7 +31,7 @@ TEST(AbsorbingMask, OneInInteriorTapersToZeroAtWalls) {
         EXPECT_LE(v, 1.0 + 1e-12);
     }
     // coord (-7,0,0): x one step into the 3-wide layer -> sin^2(pi/6); y,z interior.
-    const double s = std::sin(0.5 * 3.14159265358979323846 * (1.0 / 3.0));
+    const double s = std::sin(0.5 * std::numbers::pi * (1.0 / 3.0));
     EXPECT_NEAR(m[static_cast<std::size_t>(g.flat(1, 8, 8))], s * s, 1e-12);
 }
 
@@ -80,7 +81,7 @@ TEST(AbsorbingMask, OneDimensionalRampMatchesTheAxisFormula) {
     ASSERT_EQ(m.size(), 16u);
     EXPECT_DOUBLE_EQ(m[8], 1.0);      // x = 0: deep interior
     EXPECT_NEAR(m[0], 0.0, 1e-12);    // x = -8: on the wall
-    const double s = std::sin(0.5 * 3.14159265358979323846 * (1.0 / 3.0));
+    const double s = std::sin(0.5 * std::numbers::pi * (1.0 / 3.0));
     EXPECT_NEAR(m[1], s * s, 1e-12);  // x = -7: one step into the layer
     for (double v : m) {
         EXPECT_GE(v, 0.0);
@@ -238,13 +239,10 @@ TEST(TiltedPotential, AddsTheAxisTiltAndNothingElse) {
             const int ix = axis == 0 ? i : 2;
             const int iy = axis == 1 ? i : 2;
             const int iz = axis == 2 ? i : 2;
-            const double want =
-                1.5 + 0.02 * (axis == 0 ? c : axis == 1 ? c : c);
             EXPECT_DOUBLE_EQ(
                 v[static_cast<std::size_t>(g.flat(ix, iy, iz))],
                 1.5 + 0.02 * c)
                 << "axis " << axis << " i " << i;
-            (void)want;
         }
         // Moving along a DIFFERENT axis leaves the tilt unchanged.
         const int other = (axis + 1) % 3;

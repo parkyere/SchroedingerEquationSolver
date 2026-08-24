@@ -79,7 +79,7 @@ TEST(SliceQuadCorner, AllSixCornersLieOnThePlaneAndSpanTheBox) {
 TEST(SliceShade, DensityModeIsMagnitudeColorAndBaseAlpha) {
     // alpha = 0.45 + 0.5*0.5 = 0.70
     const std::complex<double> psi{std::sqrt(0.5), 0.0};
-    const ses::SliceShade s = ses::slice_shade(0, psi, 1.0);
+    const ses::SliceShade s = ses::slice_shade(ses::SliceMap::Density, psi, 1.0);
     const ses::Rgb m = ses::magnitude_color(0.5);
     EXPECT_NEAR(s.col.r, m.r, 1e-12);
     EXPECT_NEAR(s.col.g, m.g, 1e-12);
@@ -88,16 +88,16 @@ TEST(SliceShade, DensityModeIsMagnitudeColorAndBaseAlpha) {
 }
 
 TEST(SliceShade, ReModeIsDivergingBySign) {
-    const ses::SliceShade pos = ses::slice_shade(1, std::complex<double>{0.8, 0.0},
-                                                 1.0);
-    const ses::SliceShade neg = ses::slice_shade(1, std::complex<double>{-0.8, 0.0},
-                                                 1.0);
+    const ses::SliceShade pos = ses::slice_shade(
+        ses::SliceMap::Real, std::complex<double>{0.8, 0.0}, 1.0);
+    const ses::SliceShade neg = ses::slice_shade(
+        ses::SliceMap::Real, std::complex<double>{-0.8, 0.0}, 1.0);
     EXPECT_GT(pos.col.r, pos.col.b);
     EXPECT_GT(neg.col.b, neg.col.r);
     EXPECT_NEAR(pos.alpha, 0.85, 1e-12);  // 0.45 + 0.5*0.8
     // zero amplitude -> dark diverging midpoint
-    const ses::SliceShade zero = ses::slice_shade(1, std::complex<double>{0.0, 0.0},
-                                                  1.0);
+    const ses::SliceShade zero = ses::slice_shade(
+        ses::SliceMap::Real, std::complex<double>{0.0, 0.0}, 1.0);
     EXPECT_NEAR(zero.col.r, 0.03, 1e-12);
     EXPECT_NEAR(zero.col.b, 0.03, 1e-12);
 }
@@ -105,7 +105,7 @@ TEST(SliceShade, ReModeIsDivergingBySign) {
 TEST(SliceShade, PhaseModeTintsThePhaseWheelByMagnitude) {
     const double mag = std::sqrt(0.25);  // dens = 0.25, bright = sqrt(dens) = 0.5
     const std::complex<double> psi{0.0, mag};
-    const ses::SliceShade s = ses::slice_shade(2, psi, 1.0);
+    const ses::SliceShade s = ses::slice_shade(ses::SliceMap::Phase, psi, 1.0);
     const ses::Rgb wheel = ses::phase_color(std::atan2(mag, 0.0));
     const double bright = 0.5;
     const double tint = 0.25 + 0.75 * bright;

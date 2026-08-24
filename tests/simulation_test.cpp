@@ -5,6 +5,9 @@
 
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <complex>
+#include <cstddef>
 import ses.simulation;
 import ses.propagator;
 import ses.grid;
@@ -13,6 +16,8 @@ import ses.marching_cubes;
 import ses.field;
 import ses.wavepacket;
 import ses.potential;
+
+#include "test_util.h"
 
 namespace {
 
@@ -63,13 +68,7 @@ TEST(WavepacketSimulation, MatchesManualPropagation) {
     const ses::SplitOperator3D prop{cfg.grid, cfg.potential, cfg.dt};
     prop.step(manual, 5);
 
-    const Field3D& s = sim.psi();
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < s.data().size(); ++i) {
-        max_diff = std::max(max_diff, std::abs(s.data()[i].real() - manual.data()[i].real()));
-        max_diff = std::max(max_diff, std::abs(s.data()[i].imag() - manual.data()[i].imag()));
-    }
-    EXPECT_LT(max_diff, 1e-14);
+    EXPECT_LT(ses_test::max_abs_diff(sim.psi(), manual), 1e-14);
 }
 
 TEST(WavepacketSimulation, DensityMatchesProbabilityDensity) {

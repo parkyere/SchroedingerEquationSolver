@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <complex>
+#include <numbers>
 #include <vector>
 
 import ses.field;
@@ -112,7 +113,7 @@ TEST(DoubleWell1D, SplittingDrivesTheFullTunnelingOscillation) {
     EXPECT_GT(ses::probability_in_range(psi, g.xmin, 0.0), 0.95);
 
     const double dt = 0.04;
-    const int steps = static_cast<int>(std::lround(3.14159265358979 / de / dt));
+    const int steps = static_cast<int>(std::lround(std::numbers::pi / de / dt));
     ses::SplitOperator1D prop{g, v, dt};
     prop.step(psi, steps);
     EXPECT_GT(ses::probability_in_range(psi, 0.0, g.xmax), 0.85)

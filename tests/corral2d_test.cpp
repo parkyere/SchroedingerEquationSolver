@@ -16,12 +16,9 @@ import ses.propagator;
 import ses.imaginary_time;
 import ses.observables;
 import ses.wavepacket;
-import ses.parallel;
 import ses.scenario.corral2d_director;
 
 namespace {
-
-constexpr double kPi = 3.14159265358979323846;
 
 // Strong non-leaky ring: the metastable disc mode tunnels out faster at
 // m* = 0.38, so both masses plateau; the leaky-fence relax is the arc's job.
@@ -107,7 +104,7 @@ TEST(Corral2D, OpenBoundaryKillsThePeriodicRevival) {
     prop.step(per, nsteps);
     EXPECT_GT(p_center(per), 0.25);
 
-    // Open boundary (per-step mask): leaked flux gone, then conditional renorm.
+    // Open boundary (per-step mask): leaked flux gone.
     ses::Field3D open = packet();
     for (int s = 0; s < nsteps; ++s) {
         prop.step(open, 1);
@@ -116,10 +113,6 @@ TEST(Corral2D, OpenBoundaryKillsThePeriodicRevival) {
         }
     }
     EXPECT_LT(ses::norm_sq(open), 0.05);
-    ses::normalize(open);
-    if (ses::norm_sq(open) > 0.0) {
-        EXPECT_NEAR(ses::norm_sq(open), 1.0, 1e-9);
-    }
 }
 
 TEST(Corral2D, BlackDotFenceAbsorbsPartially) {

@@ -7,13 +7,20 @@
 
 #include <cmath>
 #include <complex>
+#include <algorithm>
+#include <cstddef>
+#include <vector>
 import ses.rotation;
 import ses.observables;
 import ses.grid;
 import ses.vec;
 import ses.field;
 
+#include "test_util.h"
+
 namespace {
+
+using ses_test::max_abs_diff;
 
 using ses::Field3D;
 using ses::Grid1D;
@@ -77,11 +84,7 @@ TEST(RotateZ, ZSymmetricFieldIsInvariant) {
     }
     const Field3D before = f;
     ses::rotate_z(f, 0.5);
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < f.data().size(); ++i) {
-        max_diff = std::max(max_diff, std::abs(f.data()[i] - before.data()[i]));
-    }
-    EXPECT_LT(max_diff, 2e-3);
+    EXPECT_LT(max_abs_diff(f, before), 2e-3);
 }
 
 TEST(RotateAxis, AgreesWithRotateZForAxisTwo) {
@@ -90,11 +93,7 @@ TEST(RotateAxis, AgreesWithRotateZForAxisTwo) {
     Field3D b = a;
     ses::rotate_z(a, 0.5);
     ses::rotate_axis(b, 2, 0.5);
-    double d = 0.0;
-    for (std::size_t i = 0; i < a.data().size(); ++i) {
-        d = std::max(d, std::abs(a.data()[i] - b.data()[i]));
-    }
-    EXPECT_LT(d, 1e-13);
+    EXPECT_LT(max_abs_diff(a, b), 1e-13);
 }
 
 TEST(RotateAxis, AboutXRotatesInTheYZPlane) {
@@ -128,11 +127,7 @@ TEST(RotateAxis, AboutYConservesNormAndLeavesAYSymmetricFieldInvariant) {
     const double n0 = ses::norm_sq(f);
     ses::rotate_axis(f, 1, 0.5);
     EXPECT_NEAR(ses::norm_sq(f), n0, 1e-11);
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < f.data().size(); ++i) {
-        max_diff = std::max(max_diff, std::abs(f.data()[i] - before.data()[i]));
-    }
-    EXPECT_LT(max_diff, 2e-3);
+    EXPECT_LT(max_abs_diff(f, before), 2e-3);
 }
 
 TEST(RotateZ, ComposesAdditively) {
@@ -142,11 +137,7 @@ TEST(RotateZ, ComposesAdditively) {
     ses::rotate_z(a, 0.3);
     ses::rotate_z(a, 0.4);
     ses::rotate_z(b, 0.7);
-    double max_diff = 0.0;
-    for (std::size_t i = 0; i < a.data().size(); ++i) {
-        max_diff = std::max(max_diff, std::abs(a.data()[i] - b.data()[i]));
-    }
-    EXPECT_LT(max_diff, 2e-3);
+    EXPECT_LT(max_abs_diff(a, b), 2e-3);
 }
 
 }  // namespace

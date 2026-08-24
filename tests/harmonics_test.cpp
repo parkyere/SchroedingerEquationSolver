@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 import ses.observables;
 import ses.radial;
@@ -23,7 +24,7 @@ using ses::Grid1D;
 using ses::Grid3D;
 using ses::RadialGrid;
 
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPi = std::numbers::pi;
 
 TEST(RealSphericalHarmonic, PointValuesOnTheUnitSphere) {
     // Y_00 everywhere.

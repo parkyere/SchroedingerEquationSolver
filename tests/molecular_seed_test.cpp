@@ -34,33 +34,35 @@ Grid3D grid() {
     return {ax, ax, ax};
 }
 
-void plane_vs_bulk(const Field3D& f, int axis, int mid, double& node,
-                   double& bulk) {
+struct PlaneVsBulk {
+    double node;
+    double bulk;
+};
+
+PlaneVsBulk plane_vs_bulk(const Field3D& f, int axis, int mid) {
     const Grid3D& g = f.grid();
-    node = 0.0;
-    bulk = 0.0;
+    PlaneVsBulk r{0.0, 0.0};
     for (int k = 0; k < g.z.n; ++k) {
         for (int j = 0; j < g.y.n; ++j) {
             for (int i = 0; i < g.x.n; ++i) {
                 const int idx = axis == 0 ? i : (axis == 1 ? j : k);
                 const double w = std::norm(f(i, j, k));
                 if (idx == mid) {
-                    node += w;
+                    r.node += w;
                 } else {
-                    bulk += w;
+                    r.bulk += w;
                 }
             }
         }
     }
+    return r;
 }
 
 TEST(MolecularSeed, SigmaGIsEvenAndNodeless) {
     const Grid3D g = grid();
     const Field3D s = molecular_orbital_seed(g, MolOrbital::SigmaG);
     EXPECT_NEAR(ses::norm_sq(s), 1.0, 1e-9);
-    double node = 0.0;
-    double bulk = 0.0;
-    plane_vs_bulk(s, 0, 16, node, bulk);
+    const auto [node, bulk] = plane_vs_bulk(s, 0, 16);
     EXPECT_GT(node, 0.01 * bulk) << "sigma_g has NO node between the nuclei";
 }
 
@@ -81,9 +83,7 @@ TEST(MolecularSeed, SigmaUIsOddUnderXReflection) {
         }
     }
     EXPECT_LT(anti, 1e-6 * mag) << "sigma_u is x-odd (perpendicular node)";
-    double node = 0.0;
-    double bulk = 0.0;
-    plane_vs_bulk(s, 0, 16, node, bulk);
+    const auto [node, bulk] = plane_vs_bulk(s, 0, 16);
     EXPECT_LT(node, 1e-6 * bulk);
 }
 
@@ -91,14 +91,10 @@ TEST(MolecularSeed, PiUyIsOddUnderYReflection) {
     const Grid3D g = grid();
     const Field3D s = molecular_orbital_seed(g, MolOrbital::PiUy);
     EXPECT_NEAR(ses::norm_sq(s), 1.0, 1e-9);
-    double node = 0.0;
-    double bulk = 0.0;
-    plane_vs_bulk(s, 1, 16, node, bulk);
+    const auto [node, bulk] = plane_vs_bulk(s, 1, 16);
     EXPECT_LT(node, 1e-6 * bulk) << "pi_u has a nodal plane containing the axis";
     // even in x (not sigma_u): the x=0 plane is not a node.
-    double xnode = 0.0;
-    double xbulk = 0.0;
-    plane_vs_bulk(s, 0, 16, xnode, xbulk);
+    const auto [xnode, xbulk] = plane_vs_bulk(s, 0, 16);
     EXPECT_GT(xnode, 0.01 * xbulk);
 }
 
@@ -160,9 +156,7 @@ TEST(MolecularSeed, SeedsRelaxToTheOrderedH2plusOrbitals) {
     EXPECT_LT(e_sg, e_su) << "bonding below antibonding";
     EXPECT_LT(e_su, e_pu) << "pi_u sits above the antibonding sigma_u";
     // pi_u KEEPS its axis-containing node through the relax (symmetry).
-    double node = 0.0;
-    double bulk = 0.0;
-    plane_vs_bulk(pu, 1, 16, node, bulk);
+    const auto [node, bulk] = plane_vs_bulk(pu, 1, 16);
     EXPECT_LT(node, 0.05 * bulk) << "pi_u relaxes with its nodal plane intact";
 }
 
