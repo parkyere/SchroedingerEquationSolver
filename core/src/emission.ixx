@@ -5,6 +5,7 @@ module;
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <span>
 #include <vector>
 export module ses.emission;
 export import ses.decay;
@@ -129,6 +130,34 @@ inline std::vector<DipoleMatrixElement> shell_dipole_vectors(
             {tesseral_e1_axis(2, l_to, m_to[i], l_from, m_from), 0.0}};
     }
     return d;
+}
+
+// ---- collective E1 jump (equal-gap ladders) -------------------------------
+// When every transition shares ONE frequency (harmonic ladder), the photon
+// cannot resolve which rung fired: the jump operator is the collective
+// lowering sum (damped-oscillator L ~ a per axis). Building the
+// per-destination dipole vectors D_to = sum_ch m_ch c_from reduces the jump
+// to the EXISTING machinery: sample_photon_emission({D_to}) picks (n,lambda),
+// conditioned_amplitudes({D_to}) is the post-jump superposition over
+// to_states -- coherences between rungs survive.
+
+struct DipoleChannel {
+    int from;
+    int to;
+    double mx, my, mz;  // signed <to|r_axis|from> (au)
+};
+
+struct CollectiveDipoles {
+    std::vector<int> to_states;                // unique destinations, in order
+    std::vector<DipoleMatrixElement> dipoles;  // D_to (parallel to to_states)
+};
+
+inline CollectiveDipoles collective_jump_dipoles(
+    const std::vector<DipoleChannel>& channels,
+    std::span<const std::complex<double>> c) {
+    (void)channels;
+    (void)c;
+    return {};  // stub (red)
 }
 
 // Joint (n, lambda) sample from P ~ Sum_m |conj(e_lambda(n)) . D_m|^2 by
