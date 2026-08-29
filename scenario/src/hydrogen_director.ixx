@@ -10,6 +10,7 @@ module;
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <numbers>
 #include <numeric>
 #include <random>
 #include <string>
@@ -28,6 +29,7 @@ export import ses.simulation;
 export import ses.magnetic;
 export import ses.projection;
 export import ses.imaginary_time;
+import ses.rotation;
 export import ses.observables;
 export import ses.measurement;
 export import ses.decay;
@@ -59,6 +61,7 @@ constexpr double kRabiTargetOmega = 0.04;
 
 constexpr int kAtlasMontageFrames = 3;  // frames each synthesized orbital shows
 constexpr double kAuToVPerM = 5.14220674e11;  // au E-field -> V/m
+constexpr double kRotateKeyStep = std::numbers::pi / 12.0;  // X/Y/Z keys, 15 deg
 // Below this <H> the 1s counts as genuinely cooled (grid 1s ~ -0.5 Ha).
 constexpr double kCooled1sMaxE = -0.35;  // Ha
 // Projection-index l cap, derived from the manifold spec (6h -> 5).
@@ -576,6 +579,9 @@ public:
             case 'D': toggle_decay(); return true;
             case 'E': measure_energy_now(); return true;
             case 'L': toggle_laser(); return true;
+            case 'X': rotate_state(0, kRotateKeyStep); return true;
+            case 'Y': rotate_state(1, kRotateKeyStep); return true;
+            case 'Z': rotate_state(2, kRotateKeyStep); return true;
             default: return false;
         }
     }
@@ -658,8 +664,25 @@ public:
         stepping_ = BaseStepping::RealTime;
     }
 
-    // RED stub: selftest-rotate must witness the failure before wiring.
-    void rotate_state(int /*axis*/, double /*theta*/) override {}
+    // One-shot physical rotation (keys X/Y/Z; CONTRACT: selftest-rotate).
+    // Norm-exact three-shear on the live state; refused while relaxing/ITP
+    // (rotation would fight the cooling target).
+    void rotate_state(int axis, double theta) override {
+        if (axis < 0 || axis > 2 || !(std::abs(theta) < std::numbers::pi) ||
+            stepping_ != BaseStepping::RealTime) {
+            return;
+        }
+        if (use_gpu_path()) {
+            engine_.wait_async();
+            engine_.rotate_axis_shear(axis, theta);
+            cpu_is_truth_ = false;
+        } else {
+            ses::Field3D rotated = sim_.psi();
+            ses::rotate_axis(rotated, axis, theta);
+            sim_.set_psi(rotated);
+        }
+        title_dirty_ = true;
+    }
 
     // ---- display-facing accessors (the shell's FrameInput assembly) ----
 
@@ -685,7 +708,7 @@ public:
             stepping_label = strf("relaxing->{}", relax_label_);
         }
         s += strf("norm = {:.6f}   [{}, {}, {}]  1=real 2=relax R=reset tab=view "
-                  "[ ]=density M=pos E=energy",
+                  "[ ]=density M=pos E=energy X/Y/Z=rot",
                   norm_display_,
                   mode_ == BaseViewMode::Cloud ? "cloud" : "surface",
                   stepping_label,
