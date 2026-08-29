@@ -80,6 +80,9 @@ struct HydrogenApi {
     virtual void debug_prepare_state(int idx) = 0;
     virtual double probe_population(int idx) = 0;
     virtual void debug_prepare_superposition(int a, int b) = 0;
+    // One-shot physical rotation of the LIVE state about coordinate axis
+    // (0=x 1=y 2=z) by theta rad, |theta| < pi (three-shear, norm-exact).
+    virtual void rotate_state(int axis, double theta) = 0;
 };
 
 struct TunnelApi {

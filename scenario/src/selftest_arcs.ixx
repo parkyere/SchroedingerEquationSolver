@@ -65,6 +65,7 @@ inline constexpr ArcSpec kArcSpecs[] = {
     {"selftest-qdot", "qdot2d", false},
     {"selftest-qpc2d", "qpc2d", false},
     {"selftest-rabi", nullptr, false},
+    {"selftest-rotate", nullptr, false},
     {"selftest-rutherford", "rutherford3d", false},
     {"selftest-scene", nullptr, false},
     {"selftest-spin", "spin", false},
@@ -553,6 +554,29 @@ void register_verification_arcs(ShellT* the_shell) {
                             shell->request_exit(fresh >= 2 ? 0 : 1);
                         });
                     });
+                });
+            });
+        }},
+
+        // Rotation arc: 2p_z rotated 90 deg about x must land ENTIRELY on
+        // 2p_y -- rotation commutes with H, so the degenerate 2p shell is
+        // closed under it (populations are also free-evolution invariants,
+        // making the probe timing uncritical).
+        {"--selftest-rotate", +[](ShellT* shell, const char* name) {
+            run_when_manifold_ready(shell, [shell, name] {
+                shell->hy()->set_decay(false);  // no jumps during the probe
+                shell->hy()->debug_prepare_state(kP2Z);
+                shell->hy()->rotate_state(0, 0.5 * std::numbers::pi);
+                shell->sched().after(1500, [shell, name] {
+                    const double py = shell->hy()->probe_population(kP2Y);
+                    const double pz = shell->hy()->probe_population(kP2Z);
+                    const double px = shell->hy()->probe_population(kP2X);
+                    const bool pass = py > 0.95 && pz < 0.02 && px < 0.02;
+                    std::fprintf(stderr,
+                                 "%s: P(2p_y) = %.3f, P(2p_z) = %.3f, "
+                                 "P(2p_x) = %.3f  [%s]\n",
+                                 name, py, pz, px, pass ? "PASS" : "FAIL");
+                    shell->request_exit(pass ? 0 : 1);
                 });
             });
         }},

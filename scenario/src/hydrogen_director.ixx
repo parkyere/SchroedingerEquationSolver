@@ -658,6 +658,9 @@ public:
         stepping_ = BaseStepping::RealTime;
     }
 
+    // RED stub: selftest-rotate must witness the failure before wiring.
+    void rotate_state(int /*axis*/, double /*theta*/) override {}
+
     // ---- display-facing accessors (the shell's FrameInput assembly) ----
 
     // next_flash_intensity: BaseDirector's (jump flash).
