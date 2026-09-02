@@ -81,6 +81,33 @@ struct DeviceContext {
     // Set on first engine submit/fence failure; further submits skip and the
     // director falls back to the CPU path.
     bool device_lost = false;
+    // Fault-injection seam for the failure-path selftests (vkcheck): each
+    // flag is ONE-SHOT and consumed at the exact site the real failure would
+    // be detected, so the production error handling is what gets exercised.
+    // Unarmed cost: one bool test per site. The app never arms it.
+    struct FaultInjector {
+        int submit_fail_after = -1;  // >= 0: the (n+1)-th next submit fails
+        bool begin = false;          // next OneShot begin fails
+        bool vkfft = false;          // next VkFFTAppend fails
+        bool async_begin = false;    // next step_async begin fails
+        bool async_end = false;      // next step_async end fails
+        bool take_submit() noexcept {
+            if (submit_fail_after < 0) {
+                return false;
+            }
+            if (submit_fail_after == 0) {
+                submit_fail_after = -1;
+                return true;
+            }
+            --submit_fail_after;
+            return false;
+        }
+        static bool take(bool& flag) noexcept {
+            const bool armed = flag;
+            flag = false;
+            return armed;
+        }
+    } fault;
     // create_device enables ONLY the supported subset; fast paths gate on these.
     // adopt() leaves them false (owner enabled its own).
     bool feat_timeline_semaphore = false;

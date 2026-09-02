@@ -3556,6 +3556,355 @@ bool check_timestamp_profile(ses_vk::DeviceContext& ctx) {
 
 }  // namespace
 
+
+// ---- failure-path contracts (fault-injection seam: ctx.fault) -------------
+// Each check arms ONE fault, drives the public API and asserts (1) the
+// failure is reported honestly, (2) the state is exactly what the contract
+// promises, (3) the one-shot flag was consumed at the detection site. The
+// injected failure latches device_lost like a real one; take_latch() reports
+// and clears it (test-only) so the readback and the next check run clean.
+
+namespace {
+
+struct FaultRig {
+    ses::Grid3D g{ses::Grid1D{-4.0, 4.0, 8}, ses::Grid1D{-4.0, 4.0, 8},
+                  ses::Grid1D{-4.0, 4.0, 8}};
+    std::vector<double> v = ses::harmonic_potential(g, 1.0, ses::Vec3d{});
+    double dt = 0.02;
+    double dtau = 0.05;
+    ses::ImaginaryTimePropagator3D relaxer{g, v, dtau};
+    ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{1.0, 0.0, 0.0}, ses::Vec3d{1.5, 1.5, 1.5}, ses::Vec3d{});
+
+    bool boot(ses_vk::DeviceContext& ctx, ses_vk::Engine& e, const char* name,
+              bool relax_tables) {
+        if (!e.initialize(ctx, g, engine_blobs_8(), v, dt, psi0.data())) {
+            std::printf("%s: engine init FAIL\n", name);
+            return false;
+        }
+        if (relax_tables &&
+            !e.set_relax_tables(relaxer.half_potential_weight(),
+                                relaxer.kinetic_weight(), dtau,
+                                g.cell_volume())) {
+            std::printf("%s: set_relax_tables FAIL\n", name);
+            return false;
+        }
+        return true;
+    }
+};
+
+bool same_bits(const std::vector<float>& a, const std::vector<float>& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
+}
+
+double norm2_interleaved(const std::vector<float>& a, double dv) {
+    double s = 0.0;
+    for (std::size_t i = 0; i + 1 < a.size(); i += 2) {
+        s += static_cast<double>(a[i]) * a[i] +
+             static_cast<double>(a[i + 1]) * a[i + 1];
+    }
+    return s * dv;
+}
+
+bool take_latch(ses_vk::DeviceContext& ctx) {
+    const bool latched = ctx.device_lost;
+    ctx.device_lost = false;
+    return latched;
+}
+
+bool read_or_fail(ses_vk::Engine& e, std::vector<float>& out,
+                  const char* name) {
+    if (!e.readback(out)) {
+        std::printf("%s: readback FAIL\n", name);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+// relax_step: a failed submit must yield NO stats (stale partials would fake
+// energy/peak) and leave psi untouched (the batch was never submitted).
+bool check_fault_relax_submit(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault relax submit";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, true)) {
+        return false;
+    }
+    std::vector<float> pre;
+    std::vector<float> post;
+    if (!read_or_fail(e, pre, name)) {
+        return false;
+    }
+    ctx.fault.submit_fail_after = 0;
+    const ses_vk::Engine::RelaxStats st = e.relax_step(3);
+    const bool consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool latched = take_latch(ctx);
+    if (!read_or_fail(e, post, name)) {
+        return false;
+    }
+    e.destroy();
+    const bool untouched = same_bits(pre, post);
+    const bool pass = consumed && latched && st.energy == 0.0 &&
+                      st.peak == 0.0 && untouched;
+    std::printf("%s (raw Vulkan): consumed %d, latched %d, stats %.3g/%.3g, "
+                "psi untouched %d  [%s]\n",
+                name, consumed, latched, st.energy, st.peak, untouched,
+                pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// record_vkfft: a failed VkFFTAppend must drop the whole batch unsubmitted
+// (a step missing its FFT would corrupt psi) and latch device_lost.
+bool check_fault_vkfft_batch(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault vkfft batch";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, false)) {
+        return false;
+    }
+    e.step(1);  // materializes the lazy plan
+    if (!e.vkfft_active()) {
+        std::printf("%s (raw Vulkan): no native VkFFT plan -- SKIP  [PASS]\n",
+                    name);
+        e.destroy();
+        return true;
+    }
+    std::vector<float> pre;
+    std::vector<float> post;
+    if (!read_or_fail(e, pre, name)) {
+        return false;
+    }
+    ctx.fault.vkfft = true;
+    e.step(5);
+    const bool consumed = !ctx.fault.vkfft;
+    ctx.fault.vkfft = false;
+    const bool latched = take_latch(ctx);
+    if (!read_or_fail(e, post, name)) {
+        return false;
+    }
+    e.destroy();
+    const bool untouched = same_bits(pre, post);
+    const bool pass = consumed && latched && untouched;
+    std::printf("%s (raw Vulkan): consumed %d, latched %d, psi untouched %d  "
+                "[%s]\n",
+                name, consumed, latched, untouched, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// step_async: a failed begin must fall back to the blocking step -- the batch
+// still runs (bitwise equal to step()) and nothing is latched.
+bool check_fault_async_begin(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault async begin";
+    FaultRig rig;
+    ses_vk::Engine e;
+    ses_vk::Engine ref;
+    if (!rig.boot(ctx, e, name, false) || !rig.boot(ctx, ref, name, false)) {
+        return false;
+    }
+    ctx.fault.async_begin = true;
+    e.step_async(5);
+    e.wait_async();
+    const bool consumed = !ctx.fault.async_begin;
+    ctx.fault.async_begin = false;
+    const bool lost = ctx.device_lost;
+    ref.step(5);
+    std::vector<float> a;
+    std::vector<float> b;
+    if (!read_or_fail(e, a, name) || !read_or_fail(ref, b, name)) {
+        return false;
+    }
+    e.destroy();
+    ref.destroy();
+    const bool equal = same_bits(a, b);
+    const bool pass = consumed && !lost && equal;
+    std::printf("%s (raw Vulkan): consumed %d, device_lost %d, blocking "
+                "fallback bitwise %d  [%s]\n",
+                name, consumed, lost, equal, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// step_async: a failed end leaves the command buffer in an unknown state --
+// the batch must be dropped unsubmitted and device_lost latched.
+bool check_fault_async_end(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault async end";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, false)) {
+        return false;
+    }
+    std::vector<float> pre;
+    std::vector<float> post;
+    if (!read_or_fail(e, pre, name)) {
+        return false;
+    }
+    ctx.fault.async_end = true;
+    e.step_async(5);
+    e.wait_async();
+    const bool consumed = !ctx.fault.async_end;
+    ctx.fault.async_end = false;
+    const bool latched = take_latch(ctx);
+    if (!read_or_fail(e, post, name)) {
+        return false;
+    }
+    e.destroy();
+    const bool untouched = same_bits(pre, post);
+    const bool pass = consumed && latched && untouched;
+    std::printf("%s (raw Vulkan): consumed %d, latched %d, psi untouched %d  "
+                "[%s]\n",
+                name, consumed, latched, untouched, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// relax_deflated_step: a failed inner product is NOT overlap 0 -- the
+// projection and the renormalization must not run (psi stays the raw,
+// norm-decayed body output) and no stats are reported.
+bool check_fault_deflation_inner(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault deflation inner";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, true)) {
+        return false;
+    }
+    ses::Field3D ground = ses::gaussian_wavepacket(
+        rig.g, ses::Vec3d{}, ses::Vec3d{1.2, 1.2, 1.2}, ses::Vec3d{});
+    rig.relaxer.relax(ground, 600);
+    const int h = e.create_state_buffer(ground.data());
+    if (h < 0) {
+        std::printf("%s: create_state_buffer FAIL\n", name);
+        return false;
+    }
+    std::vector<float> pre;
+    std::vector<float> post;
+    if (!read_or_fail(e, pre, name)) {
+        return false;
+    }
+    ctx.fault.submit_fail_after = 1;  // body submit passes; <phi|psi> fails
+    const ses_vk::Engine::RelaxStats st = e.relax_deflated_step({h}, 1);
+    const bool consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool latched = take_latch(ctx);
+    if (!read_or_fail(e, post, name)) {
+        return false;
+    }
+    e.destroy();
+    const double n2 = norm2_interleaved(post, rig.g.cell_volume());
+    const bool body_ran = !same_bits(pre, post);
+    const bool not_renormed = n2 < 0.999;
+    const bool pass = consumed && latched && st.energy == 0.0 && body_ran &&
+                      not_renormed;
+    std::printf("%s (raw Vulkan): consumed %d, latched %d, stats %.3g, body "
+                "ran %d, norm^2 after = %.4f (must stay < 1: no renorm)  "
+                "[%s]\n",
+                name, consumed, latched, st.energy, body_ran, n2,
+                pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// synthesize_state: a failed upload/submit must not hand out a handle.
+bool check_fault_synth_submit(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault synth submit";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, false)) {
+        return false;
+    }
+    const int n_radial = 64;
+    const double h_radial = 0.1;
+    std::vector<double> u(static_cast<std::size_t>(n_radial));
+    for (int i = 0; i < n_radial; ++i) {
+        const double r = (i + 1) * h_radial;
+        u[static_cast<std::size_t>(i)] = r * std::exp(-r);
+    }
+    ctx.fault.submit_fail_after = 0;
+    const ses_vk::Engine::SynthResult r =
+        e.synthesize_state(u, 0, 0, h_radial, n_radial * h_radial, n_radial);
+    const bool consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool latched = take_latch(ctx);
+    e.destroy();
+    const bool pass = consumed && latched && r.handle < 0;
+    std::printf("%s (raw Vulkan): consumed %d, latched %d, handle %d  [%s]\n",
+                name, consumed, latched, r.handle, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// SpinEngine::measure_exact: a failed measurement submit must report nullopt
+// (0 is a valid outcome: no sentinel) and latch device_lost.
+bool check_fault_spin_measure(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault spin measure";
+    const double n0 = 0.36, n1 = -0.48, n2 = 0.8;
+    ses::SpinLattice lat;
+    lat.nx = ses::kExactSide;
+    lat.ny = ses::kExactSide;
+    lat.s.resize(ses::kExactSites);
+    for (int i = 0; i < ses::kExactSites; ++i) {
+        const double s = (i == 0 || i == 5) ? -1.0 : 1.0;
+        lat.s[static_cast<std::size_t>(i)] =
+            ses::spinor_from_bloch(s * n0, s * n1, s * n2);
+    }
+    const ses::SpinState16 st = ses::exact_from_product(lat);
+    ses_vk::SpinEngine eng;
+    if (!eng.initialize(ctx)) {
+        std::printf("%s: init FAIL\n", name);
+        return false;
+    }
+    eng.set_params(0.2, -0.1, 0.3, 0.4, 0.05);
+    eng.upload(st.c);
+    ctx.fault.submit_fail_after = 1;  // n->z rotation passes; measurement fails
+    const std::optional<std::uint32_t> m = eng.measure_exact(n0, n1, n2, 0.5);
+    const bool consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool latched = take_latch(ctx);
+    eng.destroy();
+    const bool pass = consumed && latched && !m.has_value();
+    std::printf("%s (raw Vulkan, 2^16): consumed %d, latched %d, outcome %s  "
+                "[%s]\n",
+                name, consumed, latched, m.has_value() ? "value" : "nullopt",
+                pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// Lattice2DEngine::set_lattice: a wrong-size potential must be refused without
+// mutating the lattice -- the next steps equal an engine that never saw it.
+bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
+    const char* name = "lattice2d size guard";
+    const ses::Grid1D axis{-10.0, 10.0, 64};
+    const ses::Grid3D g{axis, axis, ses::Grid1D{0.0, 2.0, 1}};
+    const std::vector<double> v = planar_bowl_potential(g);
+    const double dt = 0.01;
+    const ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{1.5, 0.0, 0.0}, ses::Vec3d{2.0, 2.0, 2.0},
+        ses::Vec3d{0.0, 0.3, 0.0});
+    ses_vk::Lattice2DEngine a;
+    ses_vk::Lattice2DEngine b;
+    if (!a.initialize(ctx) || !b.initialize(ctx)) {
+        std::printf("%s: init FAIL\n", name);
+        return false;
+    }
+    a.set_lattice(g, v, dt);
+    b.set_lattice(g, v, dt);
+    a.upload(psi0.data());
+    b.upload(psi0.data());
+    const std::vector<double> wrong(v.size() / 2, 0.0);
+    a.set_lattice(g, wrong, dt);  // must be refused
+    const bool still_ready = a.ready();
+    a.step(5);
+    b.step(5);
+    a.download();
+    b.download();
+    const std::size_t n = static_cast<std::size_t>(g.size()) * 2;
+    const bool equal = std::equal(a.state(), a.state() + n, b.state());
+    a.destroy();
+    b.destroy();
+    const bool pass = still_ready && equal;
+    std::printf("%s (raw Vulkan): ready %d, 5 steps bitwise equal %d  [%s]\n",
+                name, still_ready, equal, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 int main() {
     const char* env = std::getenv("SES_VK_VALIDATION");
     const bool want_validation = (env != nullptr && env[0] == '1');
@@ -3642,6 +3991,15 @@ int main() {
         {"native_vkfft_perf", check_native_vkfft_perf},
 #endif
         {"timestamp_profile", check_timestamp_profile},
+        // Failure-path contracts LAST: each latches + clears device_lost.
+        {"fault_relax_submit", check_fault_relax_submit},
+        {"fault_vkfft_batch", check_fault_vkfft_batch},
+        {"fault_async_begin", check_fault_async_begin},
+        {"fault_async_end", check_fault_async_end},
+        {"fault_deflation_inner", check_fault_deflation_inner},
+        {"fault_synth_submit", check_fault_synth_submit},
+        {"fault_spin_measure", check_fault_spin_measure},
+        {"lattice2d_size_guard", check_lattice2d_size_guard},
     };
 
     int failures = 0;
