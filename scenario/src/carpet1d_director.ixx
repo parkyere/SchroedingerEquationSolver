@@ -6,11 +6,9 @@ module;
 #include <complex>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 export module ses.scenario.carpet1d_director;
 export import ses.scenario.lattice2d_director;
-import ses.heightfield;
 import ses.propagator;
 import ses.wavepacket;
 import ses.parallel;
@@ -37,7 +35,6 @@ constexpr double kCp1dK0 = 1.0;
 constexpr int kCp1dStepsPerTick = 64;
 constexpr double kCp1dSurfH = 6.0;
 constexpr int kCp1dMeshStride = 2;
-constexpr double kCp1dPeakDecay = 0.98;  // display-peak decay per rebuild
 // revival oracle window: t/T_rev in (lo, hi) = scrambled, >= hi = revival.
 constexpr double kCp1dMidLo = 0.15;
 constexpr double kCp1dMidHi = 0.6;
@@ -92,13 +89,6 @@ public:
 
     // ---- carpet display (mesh path; corral rule) ----
     bool cloud() const override { return false; }
-    const ses::Mesh& mesh() const override { return hf_.mesh; }
-    const std::vector<ses::Rgb>& colors() const override {
-        return hf_.colors;
-    }
-    bool take_mesh_dirty() override {
-        return std::exchange(mesh_dirty_, false);
-    }
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.95; }
     double default_camera_distance() const override { return 75.0; }
@@ -115,20 +105,7 @@ public:
 
 protected:
     void rebuild_display() override {
-        double cur = 0.0;
-        for (int j = 0; j < kCp1dN; ++j) {
-            for (int i = 0; i < kCp1dN; ++i) {
-                cur = std::max(cur, std::norm(psi_(i, j, 0)));
-            }
-        }
-        disp_peak_ = disp_peak_ <= 0.0
-                         ? cur
-                         : std::max(cur, kCp1dPeakDecay * disp_peak_);
-        if (disp_peak_ > 0.0) {
-            hf_ = ses::heightfield_surface(psi_, kCp1dSurfH, disp_peak_,
-                                           kCp1dMeshStride);
-            mesh_dirty_ = true;
-        }
+        rebuild_surface(psi_, kCp1dSurfH, kCp1dMeshStride);
     }
 
     void do_steps(int n) override {
@@ -175,9 +152,6 @@ private:
     ses::Field1D psi1d_;
     ses::Field1D init_;
     ses::SplitOperator1D prop_;
-    ses::Heightfield hf_;
-    bool mesh_dirty_ = false;
-    double disp_peak_ = 0.0;
     int row_ = 0;
     int step_in_row_ = 0;
     int row_steps_ = 1;
