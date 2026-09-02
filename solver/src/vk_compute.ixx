@@ -317,6 +317,16 @@ public:
             ctx.device_lost = true;
             return false;
         }
+        // Seam: the cb is ended but never submitted -- exactly a failed
+        // vkQueueSubmit (same latch, same return; the pool reset on the next
+        // begin retires the orphaned recording).
+        if (ctx.fault.take_submit()) {
+            std::fprintf(stderr, "vk: INJECTED submit failure in %s (%s:%u)\n",
+                         loc.function_name(), loc.file_name(),
+                         static_cast<unsigned>(loc.line()));
+            ctx.device_lost = true;
+            return false;
+        }
         const VkResult fr = vkResetFences(ctx.device, 1, &fence_);
         if (fr != VK_SUCCESS) {
             std::fprintf(stderr, "vk: fence reset %s in %s (%s:%u)\n",
@@ -356,6 +366,10 @@ private:
     [[nodiscard]] bool begin_on(DeviceContext& ctx, VkCommandPool& pool,
                   VkCommandBuffer& cb, VkFence& fence, std::uint32_t family,
                   VkQueue queue) {
+        if (ctx.fault.take(ctx.fault.begin)) {
+            std::fprintf(stderr, "vk: INJECTED one-shot begin failure\n");
+            return false;
+        }
         if (pool == VK_NULL_HANDLE) {
             VkCommandPoolCreateInfo cpci{};
             cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;

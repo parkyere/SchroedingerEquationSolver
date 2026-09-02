@@ -678,12 +678,14 @@ public:
         VkCommandBufferBeginInfo cbbi{};
         cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        if (vkBeginCommandBuffer(async_cb_, &cbbi) != VK_SUCCESS) {
+        if (ctx_->fault.take(ctx_->fault.async_begin) ||
+            vkBeginCommandBuffer(async_cb_, &cbbi) != VK_SUCCESS) {
             step(nsteps, flags);
             return;
         }
         async_bridged_ = record_step_batch(async_cb_, nsteps, flags);
-        if (vkEndCommandBuffer(async_cb_) != VK_SUCCESS) {
+        if (ctx_->fault.take(ctx_->fault.async_end) ||
+            vkEndCommandBuffer(async_cb_) != VK_SUCCESS) {
             ctx_->device_lost = true;  // cb state unknown: poison the GPU path
             async_bridged_ = false;
             return;
@@ -3380,10 +3382,14 @@ private:
         VkFFTLaunchParams lp{};
         lp.buffer = &vkfft_psi_buf_;
         lp.commandBuffer = &cb;
-        const VkFFTResult res = VkFFTAppend(&vkfft_app_, direction, &lp);
+        // Seam: an injected failure records NO FFT (like a failed append).
+        const bool injected = ctx_->fault.take(ctx_->fault.vkfft);
+        const VkFFTResult res =
+            injected ? VKFFT_ERROR_FAILED_TO_ALLOCATE
+                     : VkFFTAppend(&vkfft_app_, direction, &lp);
         if (res != VKFFT_SUCCESS) {
-            std::fprintf(stderr, "ses_vk::Engine: VkFFTAppend = %d\n",
-                         static_cast<int>(res));
+            std::fprintf(stderr, "ses_vk::Engine: VkFFTAppend = %d%s\n",
+                         static_cast<int>(res), injected ? " (INJECTED)" : "");
             // Physics-first: a batch missing an FFT must never touch psi.
             // Latching device_lost makes submit_and_wait refuse this batch
             // (step_async gates on it too); the director falls back to CPU.

@@ -3888,7 +3888,7 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
     b.set_lattice(g, v, dt);
     a.upload(psi0.data());
     b.upload(psi0.data());
-    const std::vector<double> wrong(v.size() / 2, 0.0);
+    const std::vector<double> wrong(v.size() * 2, 0.0);  // size mismatch
     a.set_lattice(g, wrong, dt);  // must be refused
     const bool still_ready = a.ready();
     a.step(5);
