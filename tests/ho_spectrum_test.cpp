@@ -57,6 +57,10 @@ TEST(HoSpectrum, StripTracksMcwfDampingBetweenJumps) {
     ASSERT_NE(ld, nullptr);
     ld->cat();
     ld->toggle_loss();
+    // Prime the lazy cache the way the app does (strip drawn every frame):
+    // without a prior read the first read after stepping is trivially fresh
+    // and the stale path is invisible.
+    ASSERT_GT(ld->spectrum_count(), 0);
     // Land right after >= 25 consecutive no-jump steps: the stale path would
     // still show the spectrum frozen at the last flip (or at t = 0).
     int quiet = 0;

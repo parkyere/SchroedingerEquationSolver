@@ -54,6 +54,13 @@ TEST(Spheroidal, SolvedOrbitalReportsValid) {
     EXPECT_TRUE(ses::h2plus_orbital(2.0, 1, 0, 0).valid);
 }
 
+TEST(Spheroidal, UnbracketedRootReportsInvalid) {
+    // n_xi = 6 at R = 0.5: g(p^2) never changes sign below the p^2 ceiling,
+    // so p2 is a stale midpoint (E ~ -33 Ha, NEGATIVE: the old energy-only
+    // atlas filter would have admitted this garbage). The flag must say so.
+    EXPECT_FALSE(ses::h2plus_orbital(0.5, 0, 1, 6).valid);
+}
+
 TEST(Spheroidal, GroundEnergyVsInternuclearDistance) {
     // Oracle: Turbiner Table I.
     EXPECT_NEAR(ses::h2plus_orbital(1.0, 0, 0, 0).energy, -1.4517863, 0.02);
