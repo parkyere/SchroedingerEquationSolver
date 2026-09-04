@@ -670,6 +670,12 @@ private:
                 toggle_view_mode();
                 return;
             case SDLK_Z:
+                // Scene hotkey first (hydrogen z-rotation); unhandled Z snaps
+                // the camera.
+                if (director_->handle_key('Z')) {
+                    refresh_status();
+                    return;
+                }
                 snap_camera_z();
                 return;
             case SDLK_LEFTBRACKET:
