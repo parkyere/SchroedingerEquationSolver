@@ -277,4 +277,22 @@ TEST(RegularizedCoulombPotential, NucleusCellScalesWithChargeAndInverseSpacing) 
     EXPECT_DOUBLE_EQ(v[static_cast<std::size_t>(g.flat(9, 8, 8))], -2.0 / 0.5);
 }
 
+// RED: a MOVING nucleus (rigid rotor) sweeps past grid points, and -Z/r at
+// r -> 0 would blow the Trotter budget (V dt/2 << 1). The cell-average
+// regularization therefore applies to the whole cell that holds the nucleus
+// (r < h/2), not only to an exact hit; on-grid nuclei keep every value they
+// have today (their neighbours sit a full h away).
+TEST(RegularizedCoulomb, CapsTheWholeCellAroundAnOffGridNucleus) {
+    const ses::Grid1D axis{-4.0, 4.0, 16};  // h = 0.5
+    const ses::Grid3D g{axis, axis, axis};
+    const double h = 0.5;
+    const std::vector<double> v =
+        ses::regularized_coulomb_potential(g, 1.0, ses::Vec3d{0.1, 0.0, 0.0});
+    // origin: 0.1 < h/2 from the nucleus -> the cell-average cap, not -1/0.1.
+    EXPECT_DOUBLE_EQ(v[static_cast<std::size_t>(g.flat(8, 8, 8))],
+                     -ses::kCoulombCellAverage / h);
+    // next point (0.5, 0, 0): 0.4 >= h/2 -> bare -1/r.
+    EXPECT_DOUBLE_EQ(v[static_cast<std::size_t>(g.flat(9, 8, 8))], -1.0 / 0.4);
+}
+
 }  // namespace
