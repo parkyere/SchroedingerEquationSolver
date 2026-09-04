@@ -77,6 +77,7 @@ add_executable(sesolver_tests
     regularized_coulomb_test.cpp
     relaxation_in_simulation_test.cpp
     rotation_test.cpp
+    rotor_test.cpp
     sampling_test.cpp
     scheduler_test.cpp
     simulation_state_test.cpp
