@@ -8,7 +8,8 @@ file(MAKE_DIRECTORY "${_ses_solver_spv_dir}")
 set(_ses_solver_hdrs "")
 foreach(_k IN ITEMS phase_multiply scale norm_peak norm_finalize scale_buf
         inner_product
-        dipole_kick mean_force dipole pack_half unpack_half conj_scale
+        dipole_kick mean_force two_center_potential two_center_force
+        dipole pack_half unpack_half conj_scale
         shear axpy copy_state synth project_deposit
         bridge_store bridge_load flow_velocity
         half_mul kin_mul damp_mul phase_damp_mul

@@ -21,6 +21,8 @@ module;
 #include <copy_state_spv.h>
 #include <synth_spv.h>
 #include <mean_force_spv.h>
+#include <two_center_potential_spv.h>
+#include <two_center_force_spv.h>
 #include <dipole_spv.h>
 #include <project_deposit_spv.h>
 #include <bridge_store_spv.h>
@@ -91,6 +93,10 @@ inline EngineKernels engine_blobs(int n) {
     b.synth_size = k_synth_spv_size;
     b.force = k_mean_force_spv;
     b.force_size = k_mean_force_spv_size;
+    b.two_center = k_two_center_potential_spv;
+    b.two_center_size = k_two_center_potential_spv_size;
+    b.two_center_force = k_two_center_force_spv;
+    b.two_center_force_size = k_two_center_force_spv_size;
     b.dipole = k_dipole_spv;
     b.dipole_size = k_dipole_spv_size;
     b.project = k_project_deposit_spv;

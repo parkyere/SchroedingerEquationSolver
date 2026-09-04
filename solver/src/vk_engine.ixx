@@ -40,6 +40,7 @@ export import ses.vk.compute;
 import ses.mc.tables;
 export import ses.grid;
 import ses.spectral;
+import ses.potential;
 export import ses.vec;
 export import ses.drive;
 export import ses.decay;
@@ -105,6 +106,10 @@ struct EngineKernels {
     std::size_t synth_size = 0;
     const unsigned char* force = nullptr;  // mean_force.comp
     std::size_t force_size = 0;
+    const unsigned char* two_center = nullptr;  // two_center_potential.comp
+    std::size_t two_center_size = 0;
+    const unsigned char* two_center_force = nullptr;  // two_center_force.comp
+    std::size_t two_center_force_size = 0;
     const unsigned char* dipole = nullptr;   // dipole.comp
     std::size_t dipole_size = 0;
     const unsigned char* project = nullptr;  // project_deposit.comp
@@ -279,6 +284,14 @@ public:
                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
                             {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                             {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
+            !two_center_k_.create(ctx, blobs.two_center, blobs.two_center_size,
+                                  {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                   {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+            !tc_force_k_.create(ctx, blobs.two_center_force,
+                                blobs.two_center_force_size,
+                                {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                 {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+                                 {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
             !dipole_.create(ctx, blobs.dipole, blobs.dipole_size,
                             {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                              {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
@@ -1879,8 +1892,21 @@ public:
     // Rebuild the R32 potential IN PLACE as the two-center regularized
     // Coulomb of unit charges at +-(R/2) n, sampled exactly like the CPU
     // builder; half_mul reads V live, so nothing else follows. One submission.
-    bool set_two_center_potential(double /*R*/, ses::Vec3d /*n*/) {
-        return false;  // RED stub
+    bool set_two_center_potential(double R, ses::Vec3d n) {
+        if (!ensure_two_center()) {
+            return false;
+        }
+        stage_two_center(R, n);
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return false;
+        }
+        two_center_k_.bind(shot.cb(), tc_pot_set_);
+        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
+        barrier_compute_to_compute(shot.cb());
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        return ok;
     }
 
     // Per-nucleus Ehrenfest forces F_k = <psi| grad V_k |psi> (central
@@ -1891,8 +1917,31 @@ public:
         ses::Vec3d f2;
         bool ok = false;
     };
-    NuclearForces two_center_forces(double /*R*/, ses::Vec3d /*n*/) {
-        return {};  // RED stub
+    NuclearForces two_center_forces(double R, ses::Vec3d n) {
+        NuclearForces out;
+        if (!ensure_two_center()) {
+            return out;
+        }
+        stage_two_center(R, n);
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return out;
+        }
+        tc_force_k_.bind(shot.cb(), tc_force_set_);
+        vkCmdDispatch(shot.cb(), kGroups, 1, 1);
+        record_buffer_readback(shot.cb(), tc_partials_,
+                               8 * kGroups * sizeof(float));
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return out;
+        }
+        double p[7];
+        sum_partials(8, 7, p);  // {F1.xyz, pad, F2.xyz}
+        out.f1 = cell_volume_ * ses::Vec3d{p[0], p[1], p[2]};
+        out.f2 = cell_volume_ * ses::Vec3d{p[4], p[5], p[6]};
+        out.ok = true;
+        return out;
     }
 
     // ---- orbital synthesis ----------------------------------------------
@@ -2231,6 +2280,10 @@ public:
         project_.destroy(*ctx_);
         dipole_.destroy(*ctx_);
         force_.destroy(*ctx_);
+        two_center_k_.destroy(*ctx_);
+        tc_force_k_.destroy(*ctx_);
+        ctx_->destroy_buffer(&tc_ubo_);
+        ctx_->destroy_buffer(&tc_partials_);
         synth_.destroy(*ctx_);
         copy_.destroy(*ctx_);
         axpy_.destroy(*ctx_);
@@ -2560,6 +2613,81 @@ private:
     }
     void record_partials_readback(VkCommandBuffer cb) {
         record_buffer_readback(cb, partials_, 2 * kGroups * sizeof(float));
+    }
+
+    // ---- two-center (rotor) plumbing ----
+    struct alignas(16) TwoCenterParams {
+        std::uint32_t n, nx, ny, nz;
+        float box_min[4];
+        float cell_h[4];
+        float c1[4];    // xyz, w = Z
+        float c2[4];    // xyz, w = center_v
+        float misc[4];  // x = coincidence eps, yzw = 1/(2h)
+    };
+
+    // Lazy: UBO + partials + the two sets; only rotor scenes pay.
+    bool ensure_two_center() {
+        if (tc_pot_set_ != VK_NULL_HANDLE) {
+            return true;
+        }
+        const TwoCenterParams zero{};
+        if (!write_ubo(&tc_ubo_, &zero, sizeof(zero)) ||
+            !ctx_->create_device_buffer(8 * kGroups * sizeof(float),
+                                        &tc_partials_)) {
+            return false;
+        }
+        tc_pot_set_ = arena_.allocate(*ctx_, two_center_k_.set_layout());
+        tc_force_set_ = arena_.allocate(*ctx_, tc_force_k_.set_layout());
+        if (tc_pot_set_ == VK_NULL_HANDLE || tc_force_set_ == VK_NULL_HANDLE) {
+            tc_pot_set_ = VK_NULL_HANDLE;
+            return false;
+        }
+        const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        arena_.write_buffer(*ctx_, tc_pot_set_, 0, storage, v_buf_.buf);
+        arena_.write_buffer(*ctx_, tc_pot_set_, 1, uniform, tc_ubo_.buf,
+                            sizeof(TwoCenterParams));
+        arena_.write_buffer(*ctx_, tc_force_set_, 0, storage, psi_.buf);
+        arena_.write_buffer(*ctx_, tc_force_set_, 1, uniform, tc_ubo_.buf,
+                            sizeof(TwoCenterParams));
+        arena_.write_buffer(*ctx_, tc_force_set_, 2, storage,
+                            tc_partials_.buf);
+        return true;
+    }
+
+    // Nuclei at +-(R/2) n, unit charges; CPU sampling constants verbatim
+    // (ses::regularized_coulomb_potential: h = x spacing).
+    void stage_two_center(double R, ses::Vec3d n) {
+        const double h = grid_.x.spacing();
+        const ses::Vec3d c1 = (0.5 * R) * n;
+        const ses::Vec3d c2 = (-0.5 * R) * n;
+        TwoCenterParams p{};
+        p.n = static_cast<std::uint32_t>(cells_);
+        p.nx = static_cast<std::uint32_t>(grid_.x.n);
+        p.ny = static_cast<std::uint32_t>(grid_.y.n);
+        p.nz = static_cast<std::uint32_t>(grid_.z.n);
+        const float bm[4] = {static_cast<float>(grid_.x.xmin),
+                             static_cast<float>(grid_.y.xmin),
+                             static_cast<float>(grid_.z.xmin), 0.0f};
+        const float ch[4] = {static_cast<float>(grid_.x.spacing()),
+                             static_cast<float>(grid_.y.spacing()),
+                             static_cast<float>(grid_.z.spacing()), 0.0f};
+        const float k1[4] = {static_cast<float>(c1.x), static_cast<float>(c1.y),
+                             static_cast<float>(c1.z), 1.0f};
+        const float k2[4] = {static_cast<float>(c2.x), static_cast<float>(c2.y),
+                             static_cast<float>(c2.z),
+                             static_cast<float>(-ses::kCoulombCellAverage / h)};
+        const float ms[4] = {static_cast<float>(1e-6 * h),
+                             static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
+                             static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
+                             static_cast<float>(1.0 / (2.0 * grid_.z.spacing()))};
+        std::memcpy(p.box_min, bm, sizeof(bm));
+        std::memcpy(p.cell_h, ch, sizeof(ch));
+        std::memcpy(p.c1, k1, sizeof(k1));
+        std::memcpy(p.c2, k2, sizeof(k2));
+        std::memcpy(p.misc, ms, sizeof(ms));
+        std::memcpy(tc_ubo_.mapped, &p, sizeof(p));
+        vmaFlushAllocation(ctx_->allocator, tc_ubo_.alloc, 0, VK_WHOLE_SIZE);
     }
 
     // Host finish over partial records already read back into staging_:
@@ -3489,6 +3617,8 @@ private:
     Kernel copy_;
     Kernel synth_;
     Kernel force_;
+    Kernel two_center_k_;  // two_center_potential.comp
+    Kernel tc_force_k_;    // two_center_force.comp
     Kernel dipole_;
     Kernel project_;
     Kernel bridge_store_;
@@ -3652,6 +3782,10 @@ private:
     VkDescriptorSet relax_half_set_ = VK_NULL_HANDLE;
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
+    Buffer tc_ubo_;                                    // TwoCenterParams (host-visible)
+    Buffer tc_partials_;                               // {F1, F2} per group
+    VkDescriptorSet tc_pot_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet tc_force_set_ = VK_NULL_HANDLE;
     VkDescriptorSet dipole_set_ = VK_NULL_HANDLE;
     VkDescriptorSet proj_set_ = VK_NULL_HANDLE;
     VkDescriptorSet store_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
