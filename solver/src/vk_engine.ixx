@@ -1872,6 +1872,29 @@ public:
                           g3[2] * cell_volume_};
     }
 
+    // ---- Ehrenfest rigid rotor (H2+ rotor scene) -------------------------
+    // CONTRACT: vkcheck engine_two_center_potential / engine_two_center_forces
+    // (CPU oracle: ses::regularized_coulomb_potential, ses::rotor_torque).
+
+    // Rebuild the R32 potential IN PLACE as the two-center regularized
+    // Coulomb of unit charges at +-(R/2) n, sampled exactly like the CPU
+    // builder; half_mul reads V live, so nothing else follows. One submission.
+    bool set_two_center_potential(double /*R*/, ses::Vec3d /*n*/) {
+        return false;  // RED stub
+    }
+
+    // Per-nucleus Ehrenfest forces F_k = <psi| grad V_k |psi> (central
+    // differences of the sampled V_k, CPU-identical); the orientation torque
+    // is (R/2) n x (F1 - F2). ok = false on any failure.
+    struct NuclearForces {
+        ses::Vec3d f1;
+        ses::Vec3d f2;
+        bool ok = false;
+    };
+    NuclearForces two_center_forces(double /*R*/, ses::Vec3d /*n*/) {
+        return {};  // RED stub
+    }
+
     // ---- orbital synthesis ----------------------------------------------
     // psi <- normalized (u(|r|)/|r|) Y_lm, synthesized on the GPU from the
     // radial table u_nl(r). h_radial = rmax/(n_radial+1).

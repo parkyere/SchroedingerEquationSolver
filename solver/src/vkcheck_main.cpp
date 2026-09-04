@@ -90,6 +90,9 @@ import ses.field;
 import ses.harmonics;
 import ses.wavepacket;
 import ses.potential;
+import ses.rotor;
+import ses.vk.engine_blobs;
+import ses.emission;
 import ses.spinexact;
 import ses.vk.spin_engine;
 import ses.lattice2d;
@@ -3905,6 +3908,112 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+
+// ---- H2+ Ehrenfest rotor kernels (CPU oracle: ses.rotor / ses.emission) ---
+
+namespace {
+
+struct RotorRig {
+    ses::Grid3D g{ses::Grid1D{-8.0, 8.0, 64}, ses::Grid1D{-8.0, 8.0, 64},
+                  ses::Grid1D{-8.0, 8.0, 64}};
+    double R = 2.0;
+    ses::Vec3d n{0.6, 0.0, 0.8};  // tilted: nuclei sit off the grid points
+    double dt = 0.01;
+    ses::Field3D psi0 = ses::gaussian_wavepacket(
+        g, ses::Vec3d{0.3, -0.2, 0.2}, ses::Vec3d{1.0, 1.0, 1.0}, ses::Vec3d{});
+
+    std::vector<ses::Vec3d> centers() const {
+        return {(0.5 * R) * n, (-0.5 * R) * n};
+    }
+    bool boot(ses_vk::DeviceContext& ctx, ses_vk::Engine& e, const char* name) {
+        ses::normalize(psi0);
+        const std::vector<double> flat(static_cast<std::size_t>(g.size()), 0.0);
+        if (!e.initialize(ctx, g, ses_vk::engine_blobs(64), flat, dt,
+                          psi0.data())) {
+            std::printf("%s: engine init FAIL\n", name);
+            return false;
+        }
+        return true;
+    }
+};
+
+double rel_err(ses::Vec3d got, ses::Vec3d want) {
+    const double m = ses::length(want);
+    const double e = ses::length(got - want);
+    return m > 0.0 ? e / m : e;
+}
+
+}  // namespace
+
+// set_two_center_potential: the engine boots on a FLAT potential; after the
+// GPU rebuild, 20 real-time steps must match the CPU split-operator built
+// from ses::regularized_coulomb_potential at the same tilted axis.
+bool check_engine_two_center_potential(ses_vk::DeviceContext& ctx) {
+    const char* name = "engine two-center potential";
+    RotorRig rig;
+    ses_vk::Engine engine;
+    if (!rig.boot(ctx, engine, name)) {
+        return false;
+    }
+    if (!engine.set_two_center_potential(rig.R, rig.n)) {
+        std::printf("%s (raw Vulkan): set_two_center_potential FAIL\n", name);
+        return false;
+    }
+    engine.step(20);
+    std::vector<float> gpu;
+    if (!engine.readback(gpu)) {
+        std::printf("%s (raw Vulkan): readback FAIL\n", name);
+        return false;
+    }
+    engine.destroy();
+    const std::vector<double> v =
+        ses::regularized_coulomb_potential(rig.g, 1.0, rig.centers());
+    const ses::SplitOperator3D prop{rig.g, v, rig.dt};
+    ses::Field3D cpu = rig.psi0;
+    prop.step(cpu, 20);
+    const ErrStats cmp = compare_interleaved(gpu, cpu.data());
+    const double tol = cmp.tol();
+    const bool pass = cmp.max_err < tol;
+    std::printf("%s (raw Vulkan): 20 steps max |gpu - cpu| = %.3e (tol %.3e)  "
+                "[%s]\n",
+                name, cmp.max_err, tol, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// two_center_forces: per-nucleus <psi| grad V_k |psi> vs the CPU
+// mean_potential_gradient on the same sampled V_k, and the derived torque vs
+// ses::rotor_torque (the -dE/dtheta-validated core).
+bool check_engine_two_center_forces(ses_vk::DeviceContext& ctx) {
+    const char* name = "engine two-center forces";
+    RotorRig rig;
+    ses_vk::Engine engine;
+    if (!rig.boot(ctx, engine, name)) {
+        return false;
+    }
+    const ses_vk::Engine::NuclearForces f =
+        engine.two_center_forces(rig.R, rig.n);
+    engine.destroy();
+    if (!f.ok) {
+        std::printf("%s (raw Vulkan): two_center_forces FAIL\n", name);
+        return false;
+    }
+    const std::vector<double> v1 =
+        ses::regularized_coulomb_potential(rig.g, 1.0, (0.5 * rig.R) * rig.n);
+    const std::vector<double> v2 =
+        ses::regularized_coulomb_potential(rig.g, 1.0, (-0.5 * rig.R) * rig.n);
+    const ses::Vec3d c1 = ses::mean_potential_gradient(rig.psi0, v1, rig.g);
+    const ses::Vec3d c2 = ses::mean_potential_gradient(rig.psi0, v2, rig.g);
+    const ses::Vec3d tau_gpu = (0.5 * rig.R) * ses::cross(rig.n, f.f1 - f.f2);
+    const ses::Vec3d tau_cpu = ses::rotor_torque(rig.psi0, rig.R, rig.n);
+    const double r1 = rel_err(f.f1, c1);
+    const double r2 = rel_err(f.f2, c2);
+    const double rt = rel_err(tau_gpu, tau_cpu);
+    const bool pass = r1 < 1e-4 && r2 < 1e-4 && rt < 1e-4;
+    std::printf("%s (raw Vulkan): rel err F1 %.3e, F2 %.3e, torque %.3e  [%s]\n",
+                name, r1, r2, rt, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 int main() {
     const char* env = std::getenv("SES_VK_VALIDATION");
     const bool want_validation = (env != nullptr && env[0] == '1');
@@ -3987,6 +4096,8 @@ int main() {
         {"engine_bridge", check_engine_bridge},
         {"engine_step_async", check_engine_step_async},
         {"engine_collapse_flush", check_engine_collapse_flush},
+        {"engine_two_center_potential", check_engine_two_center_potential},
+        {"engine_two_center_forces", check_engine_two_center_forces},
 #ifdef SES_HAVE_VKFFT
         {"native_vkfft_perf", check_native_vkfft_perf},
 #endif
