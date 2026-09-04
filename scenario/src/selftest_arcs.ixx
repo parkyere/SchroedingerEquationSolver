@@ -54,6 +54,7 @@ inline constexpr ArcSpec kArcSpecs[] = {
     {"selftest-energy", nullptr, false},
     {"selftest-h2p", "h2plus", false},
     {"selftest-h2p-orbitals", "h2plus", false},
+    {"selftest-rotor", "h2rotor", false},
     {"selftest-kepler", nullptr, false},
     {"selftest-ladder1d", "harmonic1d", false},
     {"selftest-landau", "landau2d", false},
@@ -577,6 +578,67 @@ void register_verification_arcs(ShellT* the_shell) {
                                  "P(2p_x) = %.3f  [%s]\n",
                                  name, py, pz, px, pass ? "PASS" : "FAIL");
                     shell->request_exit(pass ? 0 : 1);
+                });
+            });
+        }},
+
+        // Rotor arc: a J = j_max kick about x must carry the axis z-hat to
+        // -y-hat after a quarter period (R_x(+): z -> -y) while the electron
+        // follows adiabatically (<H_el> drift < 2 mHa) and J stays put
+        // (sigma_g exerts no torque). Boot relax must finish first.
+        {"--selftest-rotor", +[](ShellT* shell, const char* name) {
+            shell->sched().after(1000, [shell, name] {
+                selftest_scene_wait_running(shell, "h2rotor", 0,
+                                            [shell, name](bool runs) {
+                    auto* ro = require_api(shell, name, shell->ro(), runs);
+                    if (ro == nullptr) {
+                        return;
+                    }
+                    poll_until(
+                        shell, 500, 300000,
+                        [shell] { return shell->ml()->prepared(0); },
+                        [shell, name] {
+                            auto* r = shell->ro();
+                            const double e0 = r->electronic_energy();
+                            const int jm = r->j_max();
+                            if (!r->kick(0, static_cast<double>(jm))) {
+                                std::fprintf(stderr,
+                                             "%s: kick(x, J_max = %d) refused  "
+                                             "[FAIL]\n",
+                                             name, jm);
+                                shell->request_exit(1);
+                                return;
+                            }
+                            const double t_end = shell->director().sim_time() +
+                                                 0.25 * r->period();
+                            shell->set_time_scale(kTimeScaleMax);
+                            selftest_wait_sim_time(
+                                shell, t_end, 0,
+                                [shell, name, e0, jm](bool ok) {
+                                    auto* r = shell->ro();
+                                    const ses::Vec3d n = r->axis();
+                                    const double de =
+                                        std::abs(r->electronic_energy() - e0);
+                                    const bool pass =
+                                        ok && n.y < -0.95 && std::abs(n.x) < 0.1 &&
+                                        std::abs(n.z) < 0.3 && de < 2e-3 &&
+                                        std::abs(r->j() - jm) < 1e-3;
+                                    std::fprintf(
+                                        stderr,
+                                        "%s: J_max %d, axis after T/4 = (%.3f, "
+                                        "%.3f, %.3f), <H_el> drift %.2e Ha, "
+                                        "J %.3f  [%s]\n",
+                                        name, jm, n.x, n.y, n.z, de, r->j(),
+                                        pass ? "PASS" : "FAIL");
+                                    shell->request_exit(pass ? 0 : 1);
+                                });
+                        },
+                        [shell, name] {
+                            std::fprintf(stderr,
+                                         "%s: ground relax TIMEOUT  [FAIL]\n",
+                                         name);
+                            shell->request_exit(1);
+                        });
                 });
             });
         }},

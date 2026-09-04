@@ -14,6 +14,7 @@ module;
 #include <utility>
 #include <vector>
 export module ses.scenario;
+export import ses.vec;
 export import ses.vk.device;
 export import ses.grid;
 export import ses.marching_cubes;
@@ -166,6 +167,20 @@ struct MoleculeApi {
     virtual const char* orbital_label(int k) const = 0;
     // Drop a random normalized wavefunction (a superposition, not an eigenstate).
     virtual void seed_random() = 0;
+};
+
+// Ehrenfest rigid rotor (H2+ rotor scene): classical nuclear axis driven by
+// the electron's orientation torque; kicks add nuclear angular momentum in
+// units of hbar, refused past the dissociation cap. CONTRACT: --selftest-rotor.
+struct RotorApi {
+    virtual ~RotorApi() = default;
+    virtual bool kick(int axis, double dJ) = 0;  // lab axis 0=x 1=y 2=z
+    virtual ses::Vec3d axis() const = 0;         // unit molecular axis n
+    virtual double j() const = 0;                // |L| (hbar)
+    virtual double omega() const = 0;            // |L| / I (au)
+    virtual double period() const = 0;           // 2 pi I / |L| (au)
+    virtual int j_max() const = 0;               // bound-well cap
+    virtual double electronic_energy() = 0;      // <H_el> now (Ha), CPU truth
 };
 
 // Morse anharmonic ladder (shrinking gaps).
@@ -538,6 +553,7 @@ public:
     virtual ReflectApi* reflect() { return nullptr; }
     virtual MorseApi* morse() { return nullptr; }
     virtual MoleculeApi* molecule() { return nullptr; }
+    virtual RotorApi* rotor() { return nullptr; }
     virtual SlitApi* slit() { return nullptr; }
     virtual LandauApi* landau() { return nullptr; }
     virtual BlochApi* bloch() { return nullptr; }

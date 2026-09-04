@@ -67,6 +67,7 @@ import ses.scenario.harmonic_director;
 import ses.scenario.harmonic1d_director;
 import ses.scenario.hydrogen_director;
 import ses.scenario.molecule_director;
+import ses.scenario.h2rotor_director;
 import ses.scenario.morse1d_director;
 import ses.scenario.ptwell1d_director;
 import ses.scenario.tunneling1d_director;
@@ -418,6 +419,7 @@ public:
     ses_shell::ReflectApi* rf() { return director_->reflect(); }
     ses_shell::MorseApi* mo() { return director_->morse(); }
     ses_shell::MoleculeApi* ml() { return director_->molecule(); }
+    ses_shell::RotorApi* ro() { return director_->rotor(); }
     ses_shell::SlitApi* sl() { return director_->slit(); }
     ses_shell::LandauApi* la() { return director_->landau(); }
     ses_shell::BlochApi* bl() { return director_->bloch(); }
@@ -910,6 +912,9 @@ constexpr SceneEntry kScenes[] = {
     {"benzene", "Stripped benzene (1e)",
      make_director<ses_shell::BenzeneDirector>,
      [](Shell& s) { app::draw_benzene_panel(s, s.ui(), *s.ml()); }},
+    {"h2rotor", "H2+ rotor (Ehrenfest)",
+     make_director<ses_shell::H2RotorDirector>,
+     [](Shell& s) { app::draw_h2plus_panel(s, s.ui(), *s.ml()); }},
     {"doubleslit2d", "2D double slit + AB",
      make_director<ses_shell::DoubleSlit2DDirector>,
      [](Shell& s) { app::draw_doubleslit_panel(s, s.ui(), *s.sl()); }},

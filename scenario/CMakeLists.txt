@@ -33,6 +33,7 @@ target_sources(ses_scenario
         src/corral2d_director.ixx
         src/qdot2d_director.ixx
         src/molecule_director.ixx
+        src/h2rotor_director.ixx
         src/selftest_arcs.ixx)
 target_compile_features(ses_scenario PUBLIC cxx_std_20)
 target_link_libraries(ses_scenario
