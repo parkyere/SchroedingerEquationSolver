@@ -86,18 +86,24 @@ inline void rotor_step(RigidRotor& r, Vec3d tau, double dt) {
         r.L + (0.5 * dt) * rotor_detail::perp_to(tau, r.n), r.n);
 }
 
-// tau = sum_k r_k x F_k, r_k = +-(R/2) n, F_k = <psi| grad V_k |psi> (the
-// electron's pull on nucleus k; V_k = its regularized unit-charge Coulomb
-// term): tau = (R/2) n x (F_1 - F_2) = -dE/d(orientation). psi normalized.
+// tau = sum_k r_k x F_k with r_k = +-(R/2) n and F_k the electron's pull on
+// nucleus k: tau = (R/2) n x (F_1 - F_2) = -dE/d(orientation). Shared by the
+// CPU path below and the GPU path (Engine::two_center_forces).
+inline Vec3d rotor_torque_from_forces(double R, Vec3d n, Vec3d f1,
+                                      Vec3d f2) noexcept {
+    return (0.5 * R) * cross(n, f1 - f2);
+}
+
+// F_k = <psi| grad V_k |psi>, V_k = nucleus k's regularized unit-charge
+// Coulomb term (central differences of the sampled V_k). psi normalized.
 inline Vec3d rotor_torque(const Field3D& psi, double R, Vec3d n) {
     const Grid3D& g = psi.grid();
     const std::vector<double> v1 =
         regularized_coulomb_potential(g, 1.0, (0.5 * R) * n);
     const std::vector<double> v2 =
         regularized_coulomb_potential(g, 1.0, (-0.5 * R) * n);
-    const Vec3d f1 = mean_potential_gradient(psi, v1, g);
-    const Vec3d f2 = mean_potential_gradient(psi, v2, g);
-    return (0.5 * R) * cross(n, f1 - f2);
+    return rotor_torque_from_forces(R, n, mean_potential_gradient(psi, v1, g),
+                                    mean_potential_gradient(psi, v2, g));
 }
 
 // Largest J whose V(R) + J(J+1)/(2 mu R^2) keeps a BOUND well: an interior

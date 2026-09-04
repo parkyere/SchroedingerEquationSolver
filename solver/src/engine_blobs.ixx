@@ -32,6 +32,7 @@ module;
 #include <unpack_half_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
+#include <fft_line128_spv.h>
 #include <fft_line256_spv.h>
 #include <fft_line512_spv.h>
 #include <cstdio>
@@ -123,6 +124,10 @@ inline EngineKernels engine_blobs(int n) {
         case 256:
             b.fft = k_fft_line256_spv;
             b.fft_size = k_fft_line256_spv_size;
+            break;
+        case 128:
+            b.fft = k_fft_line128_spv;
+            b.fft_size = k_fft_line128_spv_size;
             break;
         case 512:
             b.fft = k_fft_line512_spv;

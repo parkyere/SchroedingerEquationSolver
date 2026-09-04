@@ -156,7 +156,10 @@ inline std::vector<double> regularized_coulomb_potential(
             const double dy = g.y.coord(j) - c.y;
             const double dz = g.z.coord(k) - c.z;
             const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-            v[static_cast<std::size_t>(flat)] += (r < 1e-6 * h) ? center_v : -Z / r;
+            // Cell-average cap for the whole cell holding the nucleus (r < h/2):
+            // a moving nucleus must never expose -Z/r -> -inf to the Trotter
+            // step; on-grid nuclei keep every value (neighbours sit h away).
+            v[static_cast<std::size_t>(flat)] += (r < 0.5 * h) ? center_v : -Z / r;
         });
     }
     return v;

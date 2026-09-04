@@ -2677,7 +2677,7 @@ private:
         const float k2[4] = {static_cast<float>(c2.x), static_cast<float>(c2.y),
                              static_cast<float>(c2.z),
                              static_cast<float>(-ses::kCoulombCellAverage / h)};
-        const float ms[4] = {static_cast<float>(1e-6 * h),
+        const float ms[4] = {static_cast<float>(0.5 * h),  // cell cap radius
                              static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.z.spacing()))};

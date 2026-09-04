@@ -55,6 +55,7 @@
 #include <flow_velocity_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
+#include <fft_line128_spv.h>
 #include <fft_line256_spv.h>
 #include <fft_line512_spv.h>
 #include <spin_site_gate_spv.h>
@@ -3990,6 +3991,11 @@ int main() {
          [](ses_vk::DeviceContext& c) {
              return check_line_fft(c, 64, k_fft_line64_spv,
                                    k_fft_line64_spv_size);
+         }},
+        {"line_fft_128",
+         [](ses_vk::DeviceContext& c) {
+             return check_line_fft(c, 128, k_fft_line128_spv,
+                                   k_fft_line128_spv_size);
          }},
         {"line_fft_256",
          [](ses_vk::DeviceContext& c) {

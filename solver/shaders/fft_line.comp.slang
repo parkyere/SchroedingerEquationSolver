@@ -11,6 +11,9 @@
 #elif FFT_N == 64
 #define FFT_LOG2N 6
 #define FFT_NHALF 32
+#elif FFT_N == 128
+#define FFT_LOG2N 7
+#define FFT_NHALF 64
 #elif FFT_N == 256
 #define FFT_LOG2N 8
 #define FFT_NHALF 128
@@ -18,7 +21,7 @@
 #define FFT_LOG2N 9
 #define FFT_NHALF 256
 #else
-#error "FFT_N must be 8/64/256/512"
+#error "FFT_N must be 8/64/128/256/512"
 #endif
 
 import complex;

@@ -24,7 +24,7 @@ foreach(_k IN ITEMS phase_multiply scale norm_peak norm_finalize scale_buf
                     "${_ses_solver_spv_dir}" "${_k}.comp" compute "${_k}")
 endforeach()
 # fft_line: ONE source, four baked sizes (headers/symbols keep the old names).
-foreach(_n IN ITEMS 8 64 256 512)
+foreach(_n IN ITEMS 8 64 128 256 512)
     ses_bake_shader(_ses_solver_hdrs "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
                     "${_ses_solver_spv_dir}" "fft_line.comp" compute "fft_line${_n}"
                     "-DFFT_N=${_n}")

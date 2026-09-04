@@ -23,6 +23,7 @@ constexpr const char* kAxisNames[3] = {"x", "y", "z"};
 constexpr const char* kBAxisNames[3] = {"Bx", "By", "Bz"};
 
 struct UiState {
+    float rotor_dj = 1.0f;  // hbar per kick button
     float efield = 0.0f;    // au; 0 = off
     float bfield = 0.0f;    // au; 0 = off
     int time_scale = 1;     // steps-per-frame multiplier (dt untouched)
@@ -625,6 +626,57 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
         ImGui::Text("R fixed at equilibrium; E_total(1sigma_g) = %.2f eV",
                     (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
     }
+    end_panel(shell, ui);
+}
+
+template <typename ShellT>
+void draw_h2rotor_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
+                        ses_shell::RotorApi& ro) {
+    begin_panel(shell);
+    ImGui::TextUnformatted("Rigid H2+ rotor: classical nuclei (real proton "
+                           "mass), electron follows in the moving potential");
+    const int jm = ro.j_max();
+    if (jm <= 0) {
+        ImGui::TextUnformatted("J_max: computing from the exact E(R)...");
+    } else {
+        ImGui::Text("J = %.1f hbar  (J_max %d = dissociation cap)", ro.j(), jm);
+    }
+    ImGui::Text("omega = %.4f au   T = %.0f au   adiabatic margin omega/0.05 = "
+                "%.2f",
+                ro.omega(), ro.period(), ro.omega() / 0.05);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Coriolis coupling mixes 1s sigma_g into 2p pi_u "
+                          "(gap ~0.67 Ha)\nonce omega approaches 0.05 au; the "
+                          "dissociation cap keeps it far below.");
+    }
+    ImGui::SliderFloat("hbar per kick", &ui.rotor_dj, 1.0f, 6.0f, "%.0f");
+    const double dj = static_cast<double>(ui.rotor_dj);
+    if (ImGui::Button("+Lx (X)")) ro.kick(0, dj);
+    ImGui::SameLine();
+    if (ImGui::Button("-Lx")) ro.kick(0, -dj);
+    ImGui::SameLine();
+    if (ImGui::Button("+Ly (Y)")) ro.kick(1, dj);
+    ImGui::SameLine();
+    if (ImGui::Button("-Ly")) ro.kick(1, -dj);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Add nuclear angular momentum about the lab x / y "
+                          "axis.\nA linear molecule carries none along its own "
+                          "axis (that is the electron's Lambda).");
+    }
+    ImGui::TextUnformatted("rigid R = 2h-snapped equilibrium; centrifugal "
+                           "stretch ignored");
+    if (ml.prepared(0)) {
+        ImGui::Text("E_total(1 sigma_g) = %.2f eV",
+                    (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
+    } else {
+        ImGui::TextUnformatted("relaxing to 1 sigma_g...");
+    }
+    if (ImGui::Button("Random wavefunction (S)")) shell.press('S');
+    ImGui::SameLine();
+    if (ImGui::Button("Reset (R)")) shell.reset_simulation();
+    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
+    ImGui::SameLine();
+    if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
     end_panel(shell, ui);
 }
 

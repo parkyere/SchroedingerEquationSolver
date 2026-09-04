@@ -914,7 +914,7 @@ constexpr SceneEntry kScenes[] = {
      [](Shell& s) { app::draw_benzene_panel(s, s.ui(), *s.ml()); }},
     {"h2rotor", "H2+ rotor (Ehrenfest)",
      make_director<ses_shell::H2RotorDirector>,
-     [](Shell& s) { app::draw_h2plus_panel(s, s.ui(), *s.ml()); }},
+     [](Shell& s) { app::draw_h2rotor_panel(s, s.ui(), *s.ml(), *s.ro()); }},
     {"doubleslit2d", "2D double slit + AB",
      make_director<ses_shell::DoubleSlit2DDirector>,
      [](Shell& s) { app::draw_doubleslit_panel(s, s.ui(), *s.sl()); }},
