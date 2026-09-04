@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 import ses.field;
@@ -157,17 +158,21 @@ TEST(RotorTorque, PullsTheAxisTowardATiltedCloudWithMinusDEDTheta) {
 }
 
 // ---- dissociation cap: J is limited to what the REAL molecule can hold ----
-// Effective rotational potential V_J(R) = V(R) + J(J+1)/(2 mu R^2). The
-// molecule stays bound only while V_J keeps a well; rotor_j_max = last such J.
-// Independent oracle: a plain three-point local-minimum scan on the samples.
-bool has_well(const std::vector<double>& r, const std::vector<double>& v,
-              double mu, int j) {
+// Effective rotational potential V_J(R) = V(R) + J(J+1)/(2 mu R^2). BOUND
+// means a well whose floor lies below the dissociation asymptote V(inf)
+// (approximated by the last sample of the bare curve); a well held only by
+// the centrifugal barrier is quasi-bound (it tunnels away) and does NOT
+// count. rotor_j_max = the last bound J. Independent oracle: a plain
+// three-point local-minimum scan against that threshold.
+bool has_bound_well(const std::vector<double>& r, const std::vector<double>& v,
+                    double mu, int j) {
     const double c = j * (j + 1.0) / (2.0 * mu);
+    const double asymptote = v.back();
     for (std::size_t i = 1; i + 1 < r.size(); ++i) {
         const double a = v[i - 1] + c / (r[i - 1] * r[i - 1]);
         const double b = v[i] + c / (r[i] * r[i]);
         const double d = v[i + 1] + c / (r[i + 1] * r[i + 1]);
-        if (b < a && b < d) {
+        if (b < a && b < d && b < asymptote) {
             return true;
         }
     }
@@ -190,13 +195,15 @@ TEST(RotorJMax, LastJWithAWellOnAMorseCurve) {
     }
     const int jmax = ses::rotor_j_max(r, v, mu);
     EXPECT_GT(jmax, 10);
-    EXPECT_TRUE(has_well(r, v, mu, jmax));
-    EXPECT_FALSE(has_well(r, v, mu, jmax + 1));
+    EXPECT_TRUE(has_bound_well(r, v, mu, jmax));
+    EXPECT_FALSE(has_bound_well(r, v, mu, jmax + 1));
 }
 
 TEST(RotorJMax, RealH2plusGroundCurveHoldsAboutThirtyFiveQuanta) {
     // V(R) = E_1s-sigma-g(R) + 1/R from the exact spheroidal solver; mu = m_p/2.
-    // The X state's v = 0 rotational ladder ends near J ~ 35 (literature).
+    // The X state's v = 0 rotational ladder ends near J ~ 35 (literature); the
+    // classical well floor sits one zero-point energy lower, so the cap lands
+    // a few quanta above that.
     std::vector<double> r;
     std::vector<double> v;
     for (int i = 0; i <= 60; ++i) {
@@ -207,8 +214,9 @@ TEST(RotorJMax, RealH2plusGroundCurveHoldsAboutThirtyFiveQuanta) {
         v.push_back(o.energy + 1.0 / R);
     }
     const int jmax = ses::rotor_j_max(r, v, 918.08);
+    std::fprintf(stderr, "H2+ rigid-rotor bound cap: J_max = %d\n", jmax);
     EXPECT_GE(jmax, 30);
-    EXPECT_LE(jmax, 40);
+    EXPECT_LE(jmax, 42);
 }
 
 TEST(RigidRotor, KickRefusesBeyondTheCapButAlwaysAllowsSlowingDown) {
