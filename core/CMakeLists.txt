@@ -41,6 +41,7 @@ target_sources(sesolver_core
         src/phasor.ixx
         src/spectrum1d.ixx
         src/rotation.ixx
+        src/rotor.ixx
         src/propagator.ixx
         src/imaginary_time.ixx
         src/mcwf1d.ixx
