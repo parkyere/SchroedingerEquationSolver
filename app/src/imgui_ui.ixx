@@ -665,6 +665,8 @@ void draw_h2rotor_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
     }
     ImGui::TextUnformatted("rigid R = 2h-snapped equilibrium; centrifugal "
                            "stretch ignored");
+    ImGui::TextUnformatted("known artifact: grid egg-box (bare Coulomb on "
+                           "h = 0.31) drifts J ~1% per quarter turn");
     if (ml.prepared(0)) {
         ImGui::Text("E_total(1 sigma_g) = %.2f eV",
                     (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);

@@ -111,7 +111,8 @@ protected:
         const int jm = jmax_.load();
         s += strf("  rotor: J = {:.1f}/{}  w = {:.4f} au  T = {:.0f} au  "
                   "adiabatic w/{:.2f} = {:.2f}  [rigid R; centrifugal stretch "
-                  "ignored]  X/Y = +1 hbar",
+                  "ignored; grid egg-box: J drifts ~1%/quarter turn]  "
+                  "X/Y = +1 hbar",
                   j(), jm > 0 ? std::to_string(jm) : std::string{"..."}, omega(),
                   period(), kRotAdiabaticOmega, omega() / kRotAdiabaticOmega);
         return s;
