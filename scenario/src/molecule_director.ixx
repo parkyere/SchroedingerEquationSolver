@@ -239,7 +239,7 @@ protected:
     }
 
     // Coarse tables settle fast but the fixed point is Trotter-biased in a deep
-    // well (benzene V*dtau ~ 7.6): a fixed fine-dtau burst purges continuum junk
+    // well (benzene V*dtau ~ 6.4): a fixed fine-dtau burst purges continuum junk
     // before capture (post-collapse flush).
     void run_relax_batch() override {
         const ses_vk::Engine::RelaxStats stats =
@@ -776,9 +776,9 @@ private:
 
 constexpr double kBzBox = 12.0;   // Bohr half-extent, 256^3 (h ~ 0.094)
 constexpr int kBzPoints = 256;
-// dt scaled to the Z=6 well: deepest cell V ~ -152 Ha, so the half-step phase
-// V*dt/2 must stay under ~1 rad or the Trotter product heats the state.
-// 0.004 -> 0.30 rad; core-band |E|*dt ~ 0.23 rad rides along.
+// dt scaled to the Z=6 well: deepest cell V = -2Z/h ~ -128 Ha, so the
+// half-step phase V*dt/2 must stay under ~1 rad or the Trotter product heats
+// the state. 0.004 -> 0.26 rad; core-band |E|*dt ~ 0.22 rad rides along.
 constexpr double kBzDt = 0.004;
 constexpr double kBzRingR = 2.63;   // C-C 1.39 A in bohr
 constexpr double kBzCH = 2.06;      // C-H 1.09 A in bohr

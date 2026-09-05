@@ -7,6 +7,7 @@ module;
 export module ses.potential;
 export import ses.grid;
 export import ses.vec;
+import ses.parallel;
 
 
 // Potential builders. Atomic units.
@@ -109,68 +110,46 @@ inline std::vector<double> tilted_potential(std::vector<double> v,
     return v;
 }
 
-// Integral of 1/r over the unit cube centered at the origin (Waldvogel 1976
-// closed form; Hummer 1996 tabulates 2.3800774).
-inline constexpr double kCoulombCellAverage = 2.3800773639795527;
-// Cells within this many spacings of a nucleus take the cube average of
-// -Z/r; beyond it the point value is h^4-close (2e-4 relative at 3 cells).
-// A cell within rounding of the shell may take either branch (CPU double vs
-// GPU float): that is the 2e-4 jump, nothing more.
-inline constexpr double kCoulombAverageRadius = 3.0;
-
-namespace detail {
-
-// Waldvogel antiderivative, d^3F/dxdydz = 1/r, principal-value atan (NOT
-// atan2: the branch shift of pi does not cancel over the corners). A corner
-// with a zero coordinate takes the limits: x*y*ln(z + r) -> 0, x^2 atan -> 0.
-// ln(a + r) for a < 0 cancels; (s2 = the other two squares) a + r = s2/(r - a).
-inline double cube_corner_term(double x, double y, double z) {
-    const double r = std::sqrt(x * x + y * y + z * z);
-    auto lg = [r](double a, double s2) {
-        return std::log(a >= 0.0 ? a + r : s2 / (r - a));
-    };
-    double f = 0.0;
-    if (x * y != 0.0) {
-        f += x * y * lg(z, x * x + y * y);
+// Si(x) = integral_0^x sin t / t dt: term-recursive series below 4 (largest
+// term ~8, fine in float too), Abramowitz-Stegun 5.2.38/39 rational f, g
+// above (composite |err| 5.7e-7 double, 7.5e-7 float32, worst near x ~ 13).
+// Same formula in two_center.slang. CONTRACT: potential_test SineIntegral.
+inline double sine_integral(double x) {
+    if (x < 0.0) {
+        return -sine_integral(-x);
     }
-    if (y * z != 0.0) {
-        f += y * z * lg(x, y * y + z * z);
+    if (x <= 4.0) {
+        const double x2 = x * x;
+        double term = x;  // x^(2n+1) / (2n+1)!
+        double s = 0.0;
+        for (int n = 0; n < 24; ++n) {
+            s += term / (2 * n + 1);
+            term *= -x2 / ((2 * n + 2) * (2 * n + 3));
+        }
+        return s;
     }
-    if (z * x != 0.0) {
-        f += z * x * lg(y, z * z + x * x);
-    }
-    if (x != 0.0) {
-        f -= 0.5 * x * x * std::atan(y * z / (x * r));
-    }
-    if (y != 0.0) {
-        f -= 0.5 * y * y * std::atan(z * x / (y * r));
-    }
-    if (z != 0.0) {
-        f -= 0.5 * z * z * std::atan(x * y / (z * r));
-    }
-    return f;
+    const double x2 = x * x;
+    const double fn = (((x2 + 38.027264) * x2 + 265.187033) * x2 + 335.677320) * x2 + 38.102495;
+    const double fd = (((x2 + 40.021433) * x2 + 322.624911) * x2 + 570.236280) * x2 + 157.105423;
+    const double gn = (((x2 + 42.242855) * x2 + 302.757865) * x2 + 352.018498) * x2 + 21.821899;
+    const double gd = (((x2 + 48.196927) * x2 + 482.485984) * x2 + 1114.978885) * x2 + 449.690326;
+    const double f = fn / fd / x;
+    const double g = gn / gd / x2;
+    return 0.5 * std::numbers::pi - f * std::cos(x) - g * std::sin(x);
 }
 
-}  // namespace detail
-
-// (1/h^3) integral over the cube [-h/2, h/2]^3 of 1/|r - d|: the potential
-// of a homogeneous cube, exact for d inside the cube (the nucleus cell) as
-// well as outside; even in d. Signed corner sum, (-1)^(lower limits).
-inline double coulomb_cube_average(Vec3d d, double h) {
-    const double lo[3] = {-0.5 * h - d.x, -0.5 * h - d.y, -0.5 * h - d.z};
-    const double hi[3] = {0.5 * h - d.x, 0.5 * h - d.y, 0.5 * h - d.z};
-    double acc = 0.0;
-    for (int m = 0; m < 8; ++m) {
-        const bool ux = (m & 1) != 0;
-        const bool uy = (m & 2) != 0;
-        const bool uz = (m & 4) != 0;
-        const int lower = (ux ? 0 : 1) + (uy ? 0 : 1) + (uz ? 0 : 1);
-        const double f = detail::cube_corner_term(ux ? hi[0] : lo[0],
-                                                  uy ? hi[1] : lo[1],
-                                                  uz ? hi[2] : lo[2]);
-        acc += (lower % 2 == 0) ? f : -f;
-    }
-    return acc / (h * h * h);
+// Unit-charge Coulomb band-limited to the grid's Nyquist sphere K = pi/h:
+// (2/pi) Si(K r) / r, -> 2/h at r = 0. Its Gibbs tail ~cos(K r)/(K r^2) is
+// exactly the content a spacing-h lattice aliases, so the lattice sum is
+// translation invariant (egg-box 0.27 mHa at h = 0.31 vs 3.8 for the cube
+// average, 15.8 point-sampled) and the relaxed 1s lands +1.8 mHa above -0.5
+// at h = 0.31 (box-converged; the +-5 test box reads -0.4996, its periodic
+// images worth -1.5 mHa). Not softening: no free parameter, depth
+// grid-dictated.
+inline double band_limited_coulomb(double r, double h) {
+    const double k = std::numbers::pi / h;
+    return r > 0.0 ? 2.0 / std::numbers::pi * sine_integral(k * r) / r
+                   : 2.0 / h;
 }
 
 inline std::vector<double> barrier_potential(const Grid1D& g, double v0,
@@ -202,32 +181,28 @@ inline std::vector<double> barrier_potential(const Grid3D& g, double v0,
     return v;
 }
 
-// Finite-volume bare Coulomb superposed over centers: cells within
-// kCoulombAverageRadius of a nucleus take the cube average of -Z/|r-c| (the
-// nucleus cell included, wherever the nucleus sits in it), the rest the point
-// value -Z/r (docs/ARCHITECTURE.md: why not soft-Coulomb). Translation
-// invariant to the h^4 switch: moving nuclei (rotor) see no grid egg-box.
-// Cubic cells (h = x spacing). An exact hit keeps the tabulated -Z*C/h.
+// Band-limited bare Coulomb superposed over centers: every cell takes
+// -Z (2/pi) Si(pi r/h) / r for every nucleus (r = 0: -2Z/h), no window
+// (docs/ARCHITECTURE.md: why not soft-Coulomb). Cubic cells (h = x spacing).
+// Verbatim on the GPU (two_center.slang). One Si per (cell, center): z-slabs
+// in parallel (each cell written by one worker -> bitwise deterministic).
 inline std::vector<double> regularized_coulomb_potential(
     const Grid3D& g, double Z, const std::vector<Vec3d>& centers) {
     const double h = g.x.spacing();
-    const double r_avg = kCoulombAverageRadius * h;
-    const double center_v = -Z * kCoulombCellAverage / h;
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
-    for (const Vec3d& c : centers) {
-        for_each_cell(g, [&](int i, int j, int k, int flat) {
-            const Vec3d d{g.x.coord(i) - c.x, g.y.coord(j) - c.y,
-                          g.z.coord(k) - c.z};
-            const double r = length(d);
-            double vc = -Z / r;
-            if (r == 0.0) {
-                vc = center_v;
-            } else if (r < r_avg) {
-                vc = -Z * coulomb_cube_average(d, h);
+    parallel_for(g.z.n, [&](int k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                double acc = 0.0;
+                for (const Vec3d& c : centers) {
+                    const Vec3d d{g.x.coord(i) - c.x, g.y.coord(j) - c.y,
+                                  g.z.coord(k) - c.z};
+                    acc -= Z * band_limited_coulomb(length(d), h);
+                }
+                v[static_cast<std::size_t>(g.flat(i, j, k))] = acc;
             }
-            v[static_cast<std::size_t>(flat)] += vc;
-        });
-    }
+        }
+    });
     return v;
 }
 
@@ -236,8 +211,8 @@ inline std::vector<double> regularized_coulomb_potential(const Grid3D& g, double
 }
 
 // Nearest grid point per axis, clamped to valid coords (xmax is off the
-// periodic grid). Static molecular centers snap here so the atlas/oracle
-// energies stay at the tabulated on-point values.
+// periodic grid). Static molecular centers snap here so their on-point
+// energies are reproducible grid to grid.
 inline Vec3d snap_to_grid(const Grid3D& g, Vec3d p) {
     auto axis = [](const Grid1D& ax, double x) {
         const double h = ax.spacing();

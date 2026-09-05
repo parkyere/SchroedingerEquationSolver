@@ -3856,9 +3856,7 @@ struct RotorRig {
     ses::Grid3D g{ses::Grid1D{-8.0, 8.0, 64}, ses::Grid1D{-8.0, 8.0, 64},
                   ses::Grid1D{-8.0, 8.0, 64}};
     double R = 2.0;
-    // Generic tilt: nuclei off the grid points AND no cell within rounding of
-    // the 3h averaging shell (0.6/0.8 on h = 0.25 put cells exactly on it,
-    // where CPU double and GPU float may branch apart).
+    // Generic tilt: nuclei off the grid points (no lattice-symmetric shortcuts).
     ses::Vec3d n = ses::normalized(ses::Vec3d{0.61, 0.13, 0.78});
     double dt = 0.01;
     ses::Field3D psi0 = ses::gaussian_wavepacket(
@@ -3957,8 +3955,8 @@ bool check_engine_two_center_forces(ses_vk::DeviceContext& ctx) {
 }
 
 // Direct V parity: the GPU-built two-center potential read back cell by cell
-// against the CPU builder (float32 closed form near the nuclei: ~1e-5
-// relative; the step contract above would only notice ~1e-3).
+// against the CPU builder (float32 Si: ~1e-6 Ha; the step contract above
+// would only notice ~1e-3).
 bool check_engine_two_center_potential_values(ses_vk::DeviceContext& ctx) {
     const char* name = "engine two-center potential values";
     RotorRig rig;
@@ -3981,7 +3979,7 @@ bool check_engine_two_center_potential_values(ses_vk::DeviceContext& ctx) {
         max_err = std::max(max_err, std::abs(static_cast<double>(gpu[i]) - cpu[i]));
         max_mag = std::max(max_mag, std::abs(cpu[i]));
     }
-    const double tol = 2e-4;  // abs, Ha; |V| <= C/h ~ 9.5 here
+    const double tol = 2e-5;  // abs, Ha; |V| <= 2/h = 8 here, float32 Si ~1e-6
     const bool pass = gpu.size() == cpu.size() && max_err < tol;
     std::printf("%s (raw Vulkan): max |V_gpu - V_cpu| = %.3e Ha (|V| <= %.2f, "
                 "tol %.1e)  [%s]\n",

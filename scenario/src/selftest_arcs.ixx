@@ -586,9 +586,9 @@ void register_verification_arcs(ShellT* the_shell) {
         // scene): a J = j_max - 1 kick about x must carry the axis z-hat to
         // -y-hat after a quarter period (R_x(+): z -> -y) while the electron
         // follows adiabatically and J stays put (sigma_g exerts no torque).
-        // Budgets: finite-volume (cube-averaged) Coulomb kills the grid
-        // egg-box that point sampling had (<H_el> wobbled 5..14 mHa per
-        // quarter turn and its slope was a spurious torque, J drift ~0.6%):
+        // Budgets: the band-limited Coulomb leaves a 0.27 mHa egg-box (point
+        // sampling wobbled <H_el> 5..14 mHa per quarter turn and its slope was
+        // a spurious torque) and per-kick V following removes the batch bias:
         // <H_el> drift < 2 mHa, J within 0.2%.
         {"--selftest-rotor", +[](ShellT* shell, const char* name) {
             shell->sched().after(1000, [shell, name] {
@@ -1842,7 +1842,7 @@ void register_verification_arcs(ShellT* the_shell) {
                     const double closest = r->closest_approach();  // min <r> seen
                     const double back = r->backscattered_fraction();
                     const bool approached =
-                        closest > 0.4 * rmin && closest < 28.0;
+                        closest > 0.8 * rmin && closest < 28.0;
                     const bool reflected = back > 0.1;
                     const bool pass = approached && reflected;
                     std::fprintf(stderr,

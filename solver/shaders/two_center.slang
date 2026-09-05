@@ -1,9 +1,8 @@
-// Two-center finite-volume Coulomb (H2+ Ehrenfest rotor): the CPU builder's
-// sampling verbatim (ses::regularized_coulomb_potential) -- cells within the
-// averaging radius take the cube average of -Z/|r-c| (Waldvogel closed form,
-// the nucleus cell included), an exact hit the tabulated -Z*C/h, the rest
-// -Z/r. Float32: the log terms cancel to ~1e-5 relative inside 3 cells
-// (vkcheck bounds the effect on psi at 2e-6 over 20 steps).
+// Two-center band-limited Coulomb (H2+ Ehrenfest rotor): the CPU builder's
+// sampling verbatim (ses::regularized_coulomb_potential) -- every cell takes
+// -Z (2/pi) Si(pi r/h) / r per nucleus (-2Z/h at r = 0). Float32 Si is good
+// to 7.5e-7 absolute (5e-7 relative on V); sin/cos ride the AS prefactors
+// f ~ 1/x, g ~ 1/x^2, so their large-argument error is damped, not amplified.
 module two_center;
 
 public struct TwoCenterParams {
@@ -14,77 +13,50 @@ public struct TwoCenterParams {
     public float4 box_min;  // xyz
     public float4 cell_h;   // xyz, w = h (cubic: x spacing)
     public float4 c1;       // xyz nucleus 1, w = Z
-    public float4 c2;       // xyz nucleus 2, w = center_v (-Z*C/h, exact hit)
-    public float4 misc;     // x = averaging radius, yzw = 1/(2h) per axis
+    public float4 c2;       // xyz nucleus 2, w unused
+    public float4 misc;     // x unused, yzw = 1/(2h) per axis
 };
 
 public float3 tc_point(TwoCenterParams p, uint ix, uint iy, uint iz) {
     return p.box_min.xyz + float3(ix, iy, iz) * p.cell_h.xyz;
 }
 
-// Waldvogel antiderivative, d^3F/dxdydz = 1/r: principal-value atan (atan2's
-// pi shift does not cancel over the corners); a zero coordinate takes the
-// limit (x*y*ln -> 0, x^2 atan -> 0); ln(a + r), a < 0, via s2/(r - a).
-float tc_corner(float x, float y, float z) {
-    float r = sqrt(x * x + y * y + z * z);
-    float f = 0.0;
-    if (x * y != 0.0) {
-        f += x * y * log(z >= 0.0 ? z + r : (x * x + y * y) / (r - z));
+// Si(x): term-recursive series below 4, Abramowitz-Stegun 5.2.38/39 above
+// (ses::sine_integral verbatim).
+float tc_sine_integral(float x) {
+    if (x <= 4.0) {
+        float x2 = x * x;
+        float term = x;
+        float s = 0.0;
+        for (int n = 0; n < 20; ++n) {
+            s += term / float(2 * n + 1);
+            term *= -x2 / float((2 * n + 2) * (2 * n + 3));
+        }
+        return s;
     }
-    if (y * z != 0.0) {
-        f += y * z * log(x >= 0.0 ? x + r : (y * y + z * z) / (r - x));
-    }
-    if (z * x != 0.0) {
-        f += z * x * log(y >= 0.0 ? y + r : (z * z + x * x) / (r - y));
-    }
-    if (x != 0.0) {
-        f -= 0.5 * x * x * atan(y * z / (x * r));
-    }
-    if (y != 0.0) {
-        f -= 0.5 * y * y * atan(z * x / (y * r));
-    }
-    if (z != 0.0) {
-        f -= 0.5 * z * z * atan(x * y / (z * r));
-    }
-    return f;
+    float x2 = x * x;
+    float fn = (((x2 + 38.027264) * x2 + 265.187033) * x2 + 335.677320) * x2 + 38.102495;
+    float fd = (((x2 + 40.021433) * x2 + 322.624911) * x2 + 570.236280) * x2 + 157.105423;
+    float gn = (((x2 + 42.242855) * x2 + 302.757865) * x2 + 352.018498) * x2 + 21.821899;
+    float gd = (((x2 + 48.196927) * x2 + 482.485984) * x2 + 1114.978885) * x2 + 449.690326;
+    float f = fn / fd / x;
+    float g = gn / gd / x2;
+    return 1.5707963267948966 - f * cos(x) - g * sin(x);
 }
 
-// (1/h^3) integral over the h cube centered at the origin of 1/|r - d|:
-// signed corner sum, (-1)^(number of lower limits).
-public float tc_cube_average(float3 d, float h) {
-    float3 lo = -0.5 * h - d;
-    float3 hi = 0.5 * h - d;
-    float acc = 0.0;
-    for (int m = 0; m < 8; ++m) {
-        bool ux = (m & 1) != 0;
-        bool uy = (m & 2) != 0;
-        bool uz = (m & 4) != 0;
-        int lower = (ux ? 0 : 1) + (uy ? 0 : 1) + (uz ? 0 : 1);
-        float f = tc_corner(ux ? hi.x : lo.x, uy ? hi.y : lo.y, uz ? hi.z : lo.z);
-        acc += (lower % 2 == 0) ? f : -f;
-    }
-    return acc / (h * h * h);
+// (2/pi) Si(pi r/h) / r, unit charge (ses::band_limited_coulomb verbatim).
+public float tc_band_limited(float r, float h) {
+    return r > 0.0 ? 0.63661977236758134 * tc_sine_integral(3.14159265358979323 / h * r) / r
+                   : 2.0 / h;
 }
 
-public float tc_coulomb(float3 r, float3 c, float z, float center_v, float h,
-                        float r_avg) {
-    float3 d = r - c;
-    float dist = length(d);
-    if (dist == 0.0) {
-        return center_v;
-    }
-    if (dist < r_avg) {
-        return -z * tc_cube_average(d, h);
-    }
-    return -z / dist;
+public float tc_coulomb(float3 r, float3 c, float z, float h) {
+    return -z * tc_band_limited(length(r - c), h);
 }
 
 // V_1(r) and V_2(r) at one sample point.
 public float2 tc_pair(TwoCenterParams p, float3 r) {
     float z = p.c1.w;
-    float cv = p.c2.w;
     float h = p.cell_h.w;
-    float r_avg = p.misc.x;
-    return float2(tc_coulomb(r, p.c1.xyz, z, cv, h, r_avg),
-                  tc_coulomb(r, p.c2.xyz, z, cv, h, r_avg));
+    return float2(tc_coulomb(r, p.c1.xyz, z, h), tc_coulomb(r, p.c2.xyz, z, h));
 }

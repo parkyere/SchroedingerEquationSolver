@@ -2683,8 +2683,8 @@ private:
         float box_min[4];
         float cell_h[4];  // xyz, w = h
         float c1[4];      // xyz, w = Z
-        float c2[4];      // xyz, w = center_v (exact hit)
-        float misc[4];    // x = averaging radius, yzw = 1/(2h)
+        float c2[4];      // xyz, w unused
+        float misc[4];    // x unused, yzw = 1/(2h)
     };
 
     // Lazy: UBO + partials + the two sets; only rotor scenes pay.
@@ -2745,9 +2745,8 @@ private:
         return true;
     }
 
-    // Nuclei at +-(R/2) n, unit charges; CPU finite-volume constants verbatim
-    // (ses::regularized_coulomb_potential: h = x spacing, averaging radius
-    // kCoulombAverageRadius * h, exact hit -C/h).
+    // Nuclei at +-(R/2) n, unit charges; CPU band-limited constants verbatim
+    // (ses::regularized_coulomb_potential: h = x spacing).
     void stage_two_center(double R, ses::Vec3d n) {
         const TwoCenterParams p = two_center_params(R, n);
         std::memcpy(tc_ubo_.mapped, &p, sizeof(p));
@@ -2773,9 +2772,8 @@ private:
         const float k1[4] = {static_cast<float>(c1.x), static_cast<float>(c1.y),
                              static_cast<float>(c1.z), 1.0f};
         const float k2[4] = {static_cast<float>(c2.x), static_cast<float>(c2.y),
-                             static_cast<float>(c2.z),
-                             static_cast<float>(-ses::kCoulombCellAverage / h)};
-        const float ms[4] = {static_cast<float>(ses::kCoulombAverageRadius * h),
+                             static_cast<float>(c2.z), 0.0f};
+        const float ms[4] = {0.0f,
                              static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.z.spacing()))};

@@ -212,20 +212,21 @@ Explicitly *not* reused: GLM, Qt, FFTW, Eigen/BLAS/LAPACK, OpenMP.
   layout x-fastest — FFT-contiguous lines and tight GPU 3D-texture uploads.
 - **Never** `-ffast-math` / `/fp:fast`; FMA contraction stays off so the
   exact-value FP test oracles hold bitwise.
-- **Finite-volume bare Coulomb `-Z/r`** rather than softening it: every
-  cell within 3 spacings of a nucleus takes the exact cube average of
-  `-Z/|r-c|` (homogeneous-cube potential, Waldvogel closed form; an on-point
-  nucleus cell is `-Z·C/h`, `C ≈ 2.380`), every other cell the point value
-  `-Z/r` (h⁴-close). Same closed form on the GPU (`two_center.slang`). The
-  average's transform vanishes at every reciprocal-lattice vector, so moving
-  nuclei (the H2+ rotor) see a grid egg-box of ~4 mHa at h = 0.31 (was ~16
-  mHa point-sampled; ~h³, 0.4 mHa at h = 0.16). The residual is aliasing of
-  the box filter's sidelobes (0.5–1 G) against the density: a Nyquist
-  band-limited Coulomb `-(2/π) Si(πr/h)/r` measured 0.27 mHa at the same h
-  (see finite-volume-coulomb notes) — a candidate, not adopted. Radial
-  solves feed bare `-Z/r` and reproduce the textbook spectrum. Softening
-  instead would push `E(1s)` from -13.6 eV up to ~-9 eV. **No soft-Coulomb
-  anywhere** (a standing project rule).
+- **Nyquist band-limited bare Coulomb** rather than softening it: every
+  cell takes `-Z·(2/π)·Si(πr/h)/r` per nucleus (`-2Z/h` at the nucleus), the
+  bare `-Z/r` with everything above the grid's own band `K = π/h` removed —
+  no free parameter, and the same formula on the GPU (`two_center.slang`).
+  Its Gibbs tail `~cos(πr/h)/(πr²/h)` is exactly what a spacing-h lattice
+  aliases, so the lattice sum is translation invariant: moving nuclei (the
+  H2+ rotor) see a grid egg-box of 0.27 mHa at h = 0.31 (cube average 3.8,
+  point sampling 15.8) and the relaxed `E(1s)` lands +1.8 mHa above -0.5 Ha
+  at h = 0.31 (box-converged; cube average ~+10) and -1.2 mHa below it at
+  h = 0.16 (non-variational). A SAMPLED cusp (atlas/radial synthesis) is not
+  translation invariant under any diagonal V — its own aliasing egg-boxes
+  ~12-16 mHa until the state is propagated. Radial solves feed bare
+  `-Z/r` and reproduce the textbook spectrum. Softening instead would push
+  `E(1s)` from -13.6 eV up to ~-9 eV. **No soft-Coulomb anywhere** (a
+  standing project rule).
 - **VRAM policy:** resident-state precision (fp32 vs fp16) is a pure-integer
   decision (`ses.vram_budget`) from the `VK_EXT_memory_budget` probe
   (`ses.vk.vram_probe`); an unmeasurable budget never silently degrades —
