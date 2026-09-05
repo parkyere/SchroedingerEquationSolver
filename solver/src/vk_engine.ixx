@@ -1951,9 +1951,10 @@ public:
         return true;
     }
 
-    // Per-nucleus Ehrenfest forces F_k = <psi| grad V_k |psi> (central
-    // differences of the sampled V_k, CPU-identical); the orientation torque
-    // is (R/2) n x (F1 - F2). ok = false on any failure.
+    // Per-nucleus Ehrenfest forces F_k = <psi| grad V_k |psi> with the analytic
+    // band-limited gradient (ses::coulomb_mean_force, CPU-identical): the exact
+    // -dE/dc; the orientation torque is (R/2) n x (F1 - F2). ok = false on any
+    // failure.
     struct NuclearForces {
         ses::Vec3d f1;
         ses::Vec3d f2;
@@ -2684,7 +2685,7 @@ private:
         float cell_h[4];  // xyz, w = h
         float c1[4];      // xyz, w = Z
         float c2[4];      // xyz, w unused
-        float misc[4];    // x unused, yzw = 1/(2h)
+        float misc[4];    // unused (layout kept)
     };
 
     // Lazy: UBO + partials + the two sets; only rotor scenes pay.
@@ -2773,10 +2774,7 @@ private:
                              static_cast<float>(c1.z), 1.0f};
         const float k2[4] = {static_cast<float>(c2.x), static_cast<float>(c2.y),
                              static_cast<float>(c2.z), 0.0f};
-        const float ms[4] = {0.0f,
-                             static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
-                             static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
-                             static_cast<float>(1.0 / (2.0 * grid_.z.spacing()))};
+        const float ms[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // layout kept, unread
         std::memcpy(p.box_min, bm, sizeof(bm));
         std::memcpy(p.cell_h, ch, sizeof(ch));
         std::memcpy(p.c1, k1, sizeof(k1));

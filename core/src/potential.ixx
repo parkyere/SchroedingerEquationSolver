@@ -2,11 +2,13 @@ module;
 #include <numbers>
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <vector>
 export module ses.potential;
 export import ses.grid;
 export import ses.vec;
+export import ses.field;
 import ses.parallel;
 
 
@@ -150,6 +152,67 @@ inline double band_limited_coulomb(double r, double h) {
     const double k = std::numbers::pi / h;
     return r > 0.0 ? 2.0 / std::numbers::pi * sine_integral(k * r) / r
                    : 2.0 / h;
+}
+
+// d/dr of band_limited_coulomb: (2/pi)(sin Kr - Si Kr)/r^2 -> 0 linearly at
+// r = 0 (-(2/pi) K^3 r/9). sin x - Si x = sum (-1)^n 2n x^(2n+1)/((2n+1)(2n+1)!)
+// cancels against its operands for small x (1% at x = 0.3), so the series
+// runs up to x = 2 (through x^15: first omitted term 5e-10 relative) --
+// float-safe and independent of the driver's sin there. The radial factor of
+// the lattice-energy gradient; central differences of the sampled V read up
+// to 24% low on a sigma_g. Same in two_center.slang.
+inline double band_limited_coulomb_gradient(double r, double h) {
+    if (r <= 0.0) {
+        return 0.0;
+    }
+    const double k = std::numbers::pi / h;
+    const double x = k * r;
+    if (x < 2.0) {  // (sin x - Si x)/r^2 = K^3 r (series): no 0/0 at tiny r
+        const double x2 = x * x;
+        return 2.0 / std::numbers::pi * k * k * k * r *
+               (-1.0 / 9.0 +
+                x2 * (1.0 / 150.0 +
+                      x2 * (-1.0 / 5880.0 +
+                            x2 * (1.0 / 408240.0 +
+                                  x2 * (-1.0 / 43908480.0 +
+                                        x2 * (1.0 / 6745939200.0 -
+                                              x2 / 1401079680000.0))))));
+    }
+    return 2.0 / std::numbers::pi * (std::sin(x) - sine_integral(x)) / (r * r);
+}
+
+// F = sum_i |psi_i|^2 grad_r V(r_i; c) h^3 with V = -Z band_limited: the
+// electron's pull on the nucleus at c = -dE/dc of the lattice energy to the
+// Si approximation's ~5e-7 (r_i = c contributes nothing; the per-cell force
+// density carries the O(1) ripple (2/pi) sin Kr that only the lattice sum
+// cancels). Per-slab partials summed in order: bitwise deterministic.
+// CONTRACT: potential_test CoulombMeanForce, rotor_test.
+inline Vec3d coulomb_mean_force(const Field3D& psi, Vec3d c, double Z) {
+    const Grid3D& g = psi.grid();
+    const double h = g.x.spacing();
+    std::vector<Vec3d> slab(static_cast<std::size_t>(g.z.n));
+    parallel_for(g.z.n, [&](int k) {
+        Vec3d acc{};
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const Vec3d d{g.x.coord(i) - c.x, g.y.coord(j) - c.y,
+                              g.z.coord(k) - c.z};
+                const double r = length(d);
+                if (r <= 0.0) {
+                    continue;
+                }
+                const double w = std::norm(psi(i, j, k));
+                const double s = -Z * band_limited_coulomb_gradient(r, h) / r;
+                acc = acc + (w * s) * d;
+            }
+        }
+        slab[static_cast<std::size_t>(k)] = acc;
+    });
+    Vec3d f{};
+    for (const Vec3d& a : slab) {
+        f = f + a;
+    }
+    return g.cell_volume() * f;
 }
 
 inline std::vector<double> barrier_potential(const Grid1D& g, double v0,

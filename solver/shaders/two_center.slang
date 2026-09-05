@@ -1,8 +1,10 @@
 // Two-center band-limited Coulomb (H2+ Ehrenfest rotor): the CPU builder's
 // sampling verbatim (ses::regularized_coulomb_potential) -- every cell takes
 // -Z (2/pi) Si(pi r/h) / r per nucleus (-2Z/h at r = 0). Float32 Si is good
-// to 7.5e-7 absolute (5e-7 relative on V); sin/cos ride the AS prefactors
-// f ~ 1/x, g ~ 1/x^2, so their large-argument error is damped, not amplified.
+// to 7.5e-7 absolute (5e-7 relative on V); in Si the sin/cos ride the AS
+// prefactors f ~ 1/x, g ~ 1/x^2 (damped). The gradient's sin x enters at full
+// weight, so the force kernel trusts the driver's sin to ~1e-6 (NVIDIA-class,
+// not the Vulkan spec floor); the lattice sum cancels its O(1) ripple.
 module two_center;
 
 public struct TwoCenterParams {
@@ -14,7 +16,7 @@ public struct TwoCenterParams {
     public float4 cell_h;   // xyz, w = h (cubic: x spacing)
     public float4 c1;       // xyz nucleus 1, w = Z
     public float4 c2;       // xyz nucleus 2, w unused
-    public float4 misc;     // x unused, yzw = 1/(2h) per axis
+    public float4 misc;     // unused (layout kept)
 };
 
 public float3 tc_point(TwoCenterParams p, uint ix, uint iy, uint iz) {
@@ -52,6 +54,38 @@ public float tc_band_limited(float r, float h) {
 
 public float tc_coulomb(float3 r, float3 c, float z, float h) {
     return -z * tc_band_limited(length(r - c), h);
+}
+
+// d/dr of tc_band_limited (ses::band_limited_coulomb_gradient verbatim):
+// (2/pi)(sin x - Si x)/r^2, series through x^15 below x = 2 (float-safe).
+public float tc_band_limited_grad(float r, float h) {
+    if (r <= 0.0) {
+        return 0.0;
+    }
+    float k = 3.14159265358979323 / h;
+    float x = k * r;
+    if (x < 2.0) {  // K^3 r (series): no 0/0 at tiny r
+        float x2 = x * x;
+        return 0.63661977236758134 * k * k * k * r *
+               (-1.0 / 9.0 +
+                x2 * (1.0 / 150.0 +
+                      x2 * (-1.0 / 5880.0 +
+                            x2 * (1.0 / 408240.0 +
+                                  x2 * (-1.0 / 43908480.0 +
+                                        x2 * (1.0 / 6745939200.0 -
+                                              x2 / 1401079680000.0))))));
+    }
+    return 0.63661977236758134 * (sin(x) - tc_sine_integral(x)) / (r * r);
+}
+
+// grad_r V_k at r for the nucleus at c: -z * bl'(|r - c|) * (r - c)/|r - c|.
+public float3 tc_force_density(float3 r, float3 c, float z, float h) {
+    float3 d = r - c;
+    float dist = length(d);
+    if (dist <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    return (-z * tc_band_limited_grad(dist, h) / dist) * d;
 }
 
 // V_1(r) and V_2(r) at one sample point.

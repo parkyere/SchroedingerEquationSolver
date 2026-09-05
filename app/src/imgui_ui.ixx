@@ -665,7 +665,8 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
                           "axis (that is the electron's Lambda).");
     }
     ImGui::TextUnformatted("residual grid egg-box (h = 0.31): <H_el> wobbles "
-                           "~0.1 mHa; J conserved to 0.1% per quarter turn");
+                           "~0.3 mHa; J conserved to 0.2% per quarter turn "
+                           "(arc contract)");
     end_panel(shell, ui);
 }
 

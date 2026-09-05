@@ -612,7 +612,7 @@ protected:
         const int jm = jmax_.load();
         s += strf("  rotor: J = {:.1f}/{}  w = {:.4f} au  T = {:.0f} au  "
                   "adiabatic w/{:.2f} = {:.2f}  [rigid R; J conserved to "
-                  "0.1%/quarter turn]  X/Y = +1 hbar",
+                  "0.2%/quarter turn]  X/Y = +1 hbar",
                   j(), jm > 0 ? std::to_string(jm) : std::string{"..."}, omega(),
                   period(), kH2pAdiabaticOmega, omega() / kH2pAdiabaticOmega);
         return s;

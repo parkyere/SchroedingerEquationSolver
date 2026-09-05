@@ -8,7 +8,6 @@ export module ses.rotor;
 export import ses.vec;
 export import ses.field;
 export import ses.grid;
-import ses.emission;
 import ses.potential;
 
 
@@ -94,16 +93,13 @@ inline Vec3d rotor_torque_from_forces(double R, Vec3d n, Vec3d f1,
     return (0.5 * R) * cross(n, f1 - f2);
 }
 
-// F_k = <psi| grad V_k |psi>, V_k = nucleus k's regularized unit-charge
-// Coulomb term (central differences of the sampled V_k). psi normalized.
+// F_k = <psi| grad V_k |psi> analytically (ses::coulomb_mean_force): the
+// exact -dE/dc of the lattice energy, so the torque is -dE/dtheta to the
+// finite-difference floor. psi normalized.
 inline Vec3d rotor_torque(const Field3D& psi, double R, Vec3d n) {
-    const Grid3D& g = psi.grid();
-    const std::vector<double> v1 =
-        regularized_coulomb_potential(g, 1.0, (0.5 * R) * n);
-    const std::vector<double> v2 =
-        regularized_coulomb_potential(g, 1.0, (-0.5 * R) * n);
-    return rotor_torque_from_forces(R, n, mean_potential_gradient(psi, v1, g),
-                                    mean_potential_gradient(psi, v2, g));
+    return rotor_torque_from_forces(R, n,
+                                    coulomb_mean_force(psi, (0.5 * R) * n, 1.0),
+                                    coulomb_mean_force(psi, (-0.5 * R) * n, 1.0));
 }
 
 // Largest J whose V(R) + J(J+1)/(2 mu R^2) keeps a BOUND well: an interior
