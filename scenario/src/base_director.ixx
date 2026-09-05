@@ -357,6 +357,7 @@ protected:
     virtual void on_gpu_ready() {}
     virtual void after_reset() {}
     virtual void service_requests() {}   // run_frame, before stepping
+    virtual void before_step_batch(int) {}  // run_frame, before a real-time batch
     virtual void after_step_batch() {}   // run_frame, after a real-time batch
     virtual int steps_per_tick() const { return kBaseStepsPerTick; }
     virtual bool relax_allowed() const { return true; }
@@ -435,6 +436,7 @@ protected:
         }
         // ASYNC: overlaps this frame's render; next run_frame waits and flips.
         // after_step_batch hooks reading psi serialize on the same queue.
+        before_step_batch(pending_gpu_steps_);
         engine_.step_async(pending_gpu_steps_,
                            {.absorb = absorber_on_, .bridge = true});
         gpu_time_ += pending_gpu_steps_ * sim_.dt();

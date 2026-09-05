@@ -75,6 +75,22 @@ public:
         }
     }
 
+    // The step's factors, for a TIME-DEPENDENT potential (boundary-sampled
+    // Strang: half-kick V_0, [drift, full-kick V_k], drift, half-kick V_N).
+    // kick(v, dt/2) is bitwise the step's own half table. CONTRACT:
+    // propagator_test SplitOperator3DPrimitives, vkcheck rotating batch.
+    void kick(Field3D& psi, const std::vector<double>& v, double dt) const {
+        assert(psi.data().size() == v.size());
+        apply_phase(build_half_potential_table(v, 2.0 * dt, unit_phase),
+                    psi.data());
+    }
+    void drift(Field3D& psi) const {
+        assert(psi.data().size() == kinetic_.size());
+        fft(psi);
+        apply_phase(kinetic_, psi.data());
+        ifft(psi);
+    }
+
 private:
     double dt_;
     std::vector<std::complex<double>> half_v_;

@@ -664,8 +664,8 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
                           "axis.\nA linear molecule carries none along its own "
                           "axis (that is the electron's Lambda).");
     }
-    ImGui::TextUnformatted("known artifact: grid egg-box (bare Coulomb on "
-                           "h = 0.31) drifts J ~1% per quarter turn");
+    ImGui::TextUnformatted("residual grid egg-box (h = 0.31): <H_el> wobbles "
+                           "~0.1 mHa; J conserved to 0.1% per quarter turn");
     end_panel(shell, ui);
 }
 

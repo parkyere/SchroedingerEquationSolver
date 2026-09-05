@@ -286,7 +286,7 @@ public:
                             {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}}) ||
             !two_center_k_.create(ctx, blobs.two_center, blobs.two_center_size,
                                   {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                   {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER}}) ||
+                                   {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC}}) ||
             !tc_force_k_.create(ctx, blobs.two_center_force,
                                 blobs.two_center_force_size,
                                 {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
@@ -647,10 +647,24 @@ public:
     bool record_step_batch(VkCommandBuffer cb, int nsteps, StepFlags flags) {
         Recorder r{cb, true};
         const bool fuse = flags.absorb && pd_half_set_ != VK_NULL_HANDLE;
+        // Two-center schedule (consumed here): V rebuilt from slot s before
+        // the kick that closes step s, so every kick sees V(n(t)).
+        const int sched = tc_sched_count_;
+        tc_sched_count_ = 0;
+        if (sched != 0 && sched != nsteps) {
+            std::fprintf(stderr,
+                         "ses_vk::Engine: two-center schedule of %d axes on a "
+                         "%d-step batch (following only the first %d)\n",
+                         sched, nsteps, sched < nsteps ? sched : nsteps);
+        }
         if (nsteps > 0) {
             r.dispatch(half_mul_, halfv_set_, mul_groups_);
             for (int s = 0; s < nsteps; ++s) {
                 record_kin_body(r);
+                if (s < sched) {
+                    r.dispatch_dyn(two_center_k_, tc_sched_set_, mul_groups_,
+                                   static_cast<std::uint32_t>(s) * kick_stride_);
+                }
                 const bool last = s + 1 == nsteps;
                 if (fuse) {
                     r.dispatch(phase_damp_, last ? pd_half_set_ : pd_full_set_,
@@ -1901,12 +1915,40 @@ public:
         if (!shot.begin_compute(*ctx_)) {
             return false;
         }
-        two_center_k_.bind(shot.cb(), tc_pot_set_);
+        two_center_k_.bind(shot.cb(), tc_pot_set_, 0);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         barrier_compute_to_compute(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
         shot.destroy(*ctx_);
         return ok;
+    }
+
+    // Arm the NEXT step batch to rebuild V at every kick from these axes
+    // (axes[s] closes step s; the batch length must match). Inside a batch the
+    // nuclei keep turning; a frozen V biases J by ~+0.2 hbar per quarter turn
+    // at 16 steps (RotorEhrenfest contract). CONTRACT: vkcheck
+    // engine_two_center_rotating_batch.
+    bool set_two_center_schedule(double R, const std::vector<ses::Vec3d>& axes) {
+        wait_async();  // the slot UBO may still feed an in-flight batch
+        tc_sched_count_ = 0;
+        if (axes.empty()) {
+            return true;
+        }
+        const int n = static_cast<int>(axes.size());
+        if (!ensure_two_center() || !ensure_two_center_slots(n)) {
+            return false;
+        }
+        char* slots = static_cast<char*>(tc_sched_ubo_.mapped);
+        for (int s = 0; s < n; ++s) {
+            const TwoCenterParams p =
+                two_center_params(R, axes[static_cast<std::size_t>(s)]);
+            std::memcpy(slots + static_cast<std::size_t>(s) * kick_stride_, &p,
+                        sizeof(p));
+        }
+        vmaFlushAllocation(ctx_->allocator, tc_sched_ubo_.alloc, 0,
+                           VK_WHOLE_SIZE);
+        tc_sched_count_ = n;
+        return true;
     }
 
     // Per-nucleus Ehrenfest forces F_k = <psi| grad V_k |psi> (central
@@ -2240,6 +2282,25 @@ public:
         return true;
     }
 
+    // The resident R32 potential (CONTRACT: vkcheck two-center potential values).
+    bool readback_potential(std::vector<float>& out) {
+        OneShot shot;
+        if (!shot.begin_compute(*ctx_)) {
+            return false;
+        }
+        record_buffer_readback(shot.cb(), v_buf_, cells_ * sizeof(float));
+        const bool ok = shot.submit_and_wait(*ctx_);
+        shot.destroy(*ctx_);
+        if (!ok) {
+            return false;
+        }
+        vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
+                                VK_WHOLE_SIZE);
+        const float* p = static_cast<const float*>(staging_.mapped);
+        out.assign(p, p + cells_);
+        return true;
+    }
+
     // True once a submit/fence has failed (VK_ERROR_DEVICE_LOST or a 10 s hang):
     // the GPU path is dead; the director should fall back to the CPU.
     bool device_lost() const { return ctx_->device_lost; }
@@ -2283,6 +2344,7 @@ public:
         two_center_k_.destroy(*ctx_);
         tc_force_k_.destroy(*ctx_);
         ctx_->destroy_buffer(&tc_ubo_);
+        ctx_->destroy_buffer(&tc_sched_ubo_);
         ctx_->destroy_buffer(&tc_partials_);
         synth_.destroy(*ctx_);
         copy_.destroy(*ctx_);
@@ -2644,8 +2706,9 @@ private:
         }
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         const auto uniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        const auto dynamic = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         arena_.write_buffer(*ctx_, tc_pot_set_, 0, storage, v_buf_.buf);
-        arena_.write_buffer(*ctx_, tc_pot_set_, 1, uniform, tc_ubo_.buf,
+        arena_.write_buffer(*ctx_, tc_pot_set_, 1, dynamic, tc_ubo_.buf,
                             sizeof(TwoCenterParams));
         arena_.write_buffer(*ctx_, tc_force_set_, 0, storage, psi_.buf);
         arena_.write_buffer(*ctx_, tc_force_set_, 1, uniform, tc_ubo_.buf,
@@ -2655,10 +2718,43 @@ private:
         return true;
     }
 
+    // Grow the dynamic-offset schedule UBO to `n` slots (kick_stride_ each,
+    // >= sizeof(TwoCenterParams)) and (re)point its descriptor set.
+    bool ensure_two_center_slots(int n) {
+        if (tc_sched_ubo_.buf != VK_NULL_HANDLE && tc_slots_ >= n) {
+            return true;
+        }
+        ctx_->destroy_buffer(&tc_sched_ubo_);
+        if (!ctx_->create_host_buffer(
+                static_cast<VkDeviceSize>(kick_stride_) * n,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &tc_sched_ubo_)) {
+            return false;
+        }
+        tc_slots_ = n;
+        if (tc_sched_set_ == VK_NULL_HANDLE) {
+            tc_sched_set_ = arena_.allocate(*ctx_, two_center_k_.set_layout());
+            if (tc_sched_set_ == VK_NULL_HANDLE) {
+                return false;
+            }
+            arena_.write_buffer(*ctx_, tc_sched_set_, 0,
+                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, v_buf_.buf);
+        }
+        arena_.write_buffer(*ctx_, tc_sched_set_, 1,
+                            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                            tc_sched_ubo_.buf, sizeof(TwoCenterParams));
+        return true;
+    }
+
     // Nuclei at +-(R/2) n, unit charges; CPU finite-volume constants verbatim
     // (ses::regularized_coulomb_potential: h = x spacing, averaging radius
     // kCoulombAverageRadius * h, exact hit -C/h).
     void stage_two_center(double R, ses::Vec3d n) {
+        const TwoCenterParams p = two_center_params(R, n);
+        std::memcpy(tc_ubo_.mapped, &p, sizeof(p));
+        vmaFlushAllocation(ctx_->allocator, tc_ubo_.alloc, 0, VK_WHOLE_SIZE);
+    }
+
+    TwoCenterParams two_center_params(double R, ses::Vec3d n) const {
         const double h = grid_.x.spacing();
         const ses::Vec3d c1 = (0.5 * R) * n;
         const ses::Vec3d c2 = (-0.5 * R) * n;
@@ -2688,8 +2784,7 @@ private:
         std::memcpy(p.c1, k1, sizeof(k1));
         std::memcpy(p.c2, k2, sizeof(k2));
         std::memcpy(p.misc, ms, sizeof(ms));
-        std::memcpy(tc_ubo_.mapped, &p, sizeof(p));
-        vmaFlushAllocation(ctx_->allocator, tc_ubo_.alloc, 0, VK_WHOLE_SIZE);
+        return p;
     }
 
     // Host finish over partial records already read back into staging_:
@@ -3785,9 +3880,13 @@ private:
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
     Buffer tc_ubo_;                                    // TwoCenterParams (host-visible)
+    Buffer tc_sched_ubo_;                              // per-step slots (kick_stride_)
     Buffer tc_partials_;                               // {F1, F2} per group
     VkDescriptorSet tc_pot_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet tc_sched_set_ = VK_NULL_HANDLE;
     VkDescriptorSet tc_force_set_ = VK_NULL_HANDLE;
+    int tc_slots_ = 0;
+    int tc_sched_count_ = 0;  // armed for the next batch; consumed there
     VkDescriptorSet dipole_set_ = VK_NULL_HANDLE;
     VkDescriptorSet proj_set_ = VK_NULL_HANDLE;
     VkDescriptorSet store_set_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};

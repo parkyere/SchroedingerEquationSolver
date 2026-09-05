@@ -385,6 +385,7 @@ constexpr double kH2pProtonMassAu = 1836.15267343;  // CODATA m_p / m_e
 constexpr double kH2pMu = 0.5 * kH2pProtonMassAu;   // two protons
 // Coriolis mixing 1s sigma_g -> 2p pi_u (gap ~0.67 Ha) stays < 1% below this.
 constexpr double kH2pAdiabaticOmega = 0.05;  // au
+constexpr double kH2pScheduleMinTurn = 1e-9;  // rad per batch: below, V is static
 constexpr double kH2pScanRMin = 1.0;         // E(R) scan for the cap
 constexpr double kH2pScanRStep = 0.15;
 constexpr int kH2pScanSamples = 61;          // 1.0 .. 10.0 bohr
@@ -539,6 +540,29 @@ protected:
     // -> rotor advance over the batch's dt -> potential rebuilt for the new
     // axis (half_mul reads it live on the next batch); e1 rides along by
     // parallel transport so the pi partner lobes keep their body-frame sense.
+    // Inside the batch the nuclei keep turning: the engine rebuilds V at every
+    // kick from the free-rotation axes (exact for L fixed), the torque
+    // impulse lands once per batch below. A frozen V biases J by ~+0.2 hbar
+    // per quarter turn (RotorEhrenfest contract).
+    void before_step_batch(int nsteps) override {
+        scheduled_ = false;
+        // A resting ion (egg-box torque leaves |L| ~ 1e-10) needs no rebuilds.
+        const double turn = ses::length(ses::rotor_omega(rotor_)) * nsteps * sim_.dt();
+        if (!use_gpu_path() || stepping_ != BaseStepping::RealTime ||
+            nsteps <= 0 || turn < kH2pScheduleMinTurn) {
+            return;
+        }
+        ses::RigidRotor pred = rotor_;
+        std::vector<ses::Vec3d> axes;
+        axes.reserve(static_cast<std::size_t>(nsteps));
+        for (int s = 0; s < nsteps; ++s) {
+            ses::rotor_step(pred, ses::Vec3d{}, sim_.dt());
+            axes.push_back(pred.n);
+        }
+        scheduled_ = engine_.set_two_center_schedule(snap_r(param_), axes);
+        pred_n_ = pred.n;
+    }
+
     void after_step_batch() override {
         if (!use_gpu_path() || stepping_ != BaseStepping::RealTime ||
             pending_gpu_steps_ <= 0) {
@@ -547,10 +571,14 @@ protected:
         const double R = snap_r(param_);
         const double dt = pending_gpu_steps_ * sim_.dt();
         engine_.wait_async();  // the forces read psi
-        const ses_vk::Engine::NuclearForces f =
-            engine_.two_center_forces(R, rotor_.n);
+        // psi just evolved up to V(pred_n_): forces AND lever arm live on
+        // that axis. Mixing axes (lever n_0, forces at n_N) turns the bond
+        // force 2a n_N into a spurious torque 2a (R/2) sin(omega dt_batch)
+        // ~3e-3 au that bled 1.3% of J per quarter turn (--selftest-rotor).
+        const ses::Vec3d n_f = scheduled_ ? pred_n_ : rotor_.n;
+        const ses_vk::Engine::NuclearForces f = engine_.two_center_forces(R, n_f);
         const ses::Vec3d tau =
-            f.ok ? ses::rotor_torque_from_forces(R, rotor_.n, f.f1, f.f2)
+            f.ok ? ses::rotor_torque_from_forces(R, n_f, f.f1, f.f2)
                  : ses::Vec3d{};
         ses::rotor_step(rotor_, tau, dt);
         const ses::Vec3d e = e1_ - ses::dot(e1_, rotor_.n) * rotor_.n;
@@ -583,8 +611,8 @@ protected:
                   static_cast<int>(atlas_.size()));
         const int jm = jmax_.load();
         s += strf("  rotor: J = {:.1f}/{}  w = {:.4f} au  T = {:.0f} au  "
-                  "adiabatic w/{:.2f} = {:.2f}  [rigid R; grid egg-box: J drifts "
-                  "~1%/quarter turn]  X/Y = +1 hbar",
+                  "adiabatic w/{:.2f} = {:.2f}  [rigid R; J conserved to "
+                  "0.1%/quarter turn]  X/Y = +1 hbar",
                   j(), jm > 0 ? std::to_string(jm) : std::string{"..."}, omega(),
                   period(), kH2pAdiabaticOmega, omega() / kH2pAdiabaticOmega);
         return s;
@@ -738,6 +766,8 @@ private:
     int cur_ = 0;  // currently-shown atlas index
     ses::RigidRotor rotor_;
     ses::Vec3d e1_{1.0, 0.0, 0.0};  // azimuth reference, parallel-transported
+    ses::Vec3d pred_n_{};           // scheduled batch's end axis
+    bool scheduled_ = false;
     std::atomic<int> jmax_{0};
     std::jthread jmax_thread_;  // declared last: joins before jmax_ dies
 };
