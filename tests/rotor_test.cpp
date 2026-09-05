@@ -24,6 +24,7 @@ import ses.wavepacket;
 import ses.propagator;
 import ses.observables;
 import ses.h2plus_atlas_loader;
+import ses.imaginary_time;
 
 namespace {
 
@@ -155,7 +156,9 @@ TEST(RotorTorque, PullsTheAxisTowardATiltedCloudWithMinusDEDTheta) {
     const double de_dtheta = (e_plus - e_minus) / (2.0 * d);
     EXPECT_LT(de_dtheta, 0.0) << "energy must fall as n turns toward the cloud";
     EXPECT_GT(tau.y, 0.0);
-    EXPECT_NEAR(tau.y, -de_dtheta, 0.03 * std::abs(de_dtheta));
+    // Exact: the analytic force is -dE/dc of the same lattice sum; only the
+    // theta finite difference (d = 1e-3) separates them.
+    EXPECT_NEAR(tau.y, -de_dtheta, 1e-4 * std::abs(de_dtheta));
     EXPECT_NEAR(tau.x, 0.0, 1e-8);  // lobes lie in the xz-plane
     EXPECT_NEAR(tau.z, 0.0, 1e-8);
 }
@@ -242,9 +245,35 @@ TEST(RigidRotor, KickRefusesBeyondTheCapButAlwaysAllowsSlowingDown) {
 // the following scheme keeps |dJ| < 0.05 while the electron exchanges up to
 // ~0.1 hbar mid-turn and hands it back (libration, not drift).
 
+// The real thing: the ITP-relaxed sigma_g (cusped, lattice-scale content)
+// tilted off the axis must pull with EXACTLY -dE/dtheta -- central
+// differences of the sampled V read 24% low here.
+TEST(RotorTorque, MatchesMinusDEDThetaForTheRelaxedSigmaG) {
+    const ses::Grid3D g = cube(5.0, 32);  // h = 0.3125
+    const double R = 1.875;
+    const double eps = 0.2;
+    const Vec3d m{std::sin(eps), 0.0, std::cos(eps)};
+    const std::vector<double> v = ses::regularized_coulomb_potential(
+        g, 1.0, std::vector<Vec3d>{(0.5 * R) * m, (-0.5 * R) * m});
+    ses::Field3D psi = ses::gaussian_wavepacket(g, Vec3d{}, Vec3d{1.2, 1.2, 1.2},
+                                                Vec3d{});
+    const ses::ImaginaryTimePropagator3D relaxer{g, v, 0.05};
+    relaxer.relax(psi, 400);
+    const Vec3d n{0.0, 0.0, 1.0};
+    const Vec3d tau = ses::rotor_torque(psi, R, n);
+    const double d = 1e-3;
+    const double e_plus = orientation_energy(psi, R, Vec3d{std::sin(d), 0.0, std::cos(d)});
+    const double e_minus = orientation_energy(psi, R, Vec3d{-std::sin(d), 0.0, std::cos(d)});
+    const double de_dtheta = (e_plus - e_minus) / (2.0 * d);
+    std::printf("  sigma_g torque %.6e vs -dE/dtheta %.6e\n", tau.y, -de_dtheta);
+    EXPECT_LT(de_dtheta, 0.0);
+    EXPECT_NEAR(tau.y, -de_dtheta, 1e-4 * std::abs(de_dtheta));
+}
+
 struct QuarterTurnResult {
     double j_end;
     double n_y;
+    double e_total_drift;  // (E_el + E_rot)(T/4) - (E_el + E_rot)(0)
 };
 
 QuarterTurnResult quarter_turn(bool follow, int batch) {
@@ -263,6 +292,7 @@ QuarterTurnResult quarter_turn(bool follow, int batch) {
     ses::RigidRotor r{z, Vec3d{35.0, 0.0, 0.0}, mu * R * R};
     const double t_end = 0.25 * ses::rotor_period(r);
     const ses::SplitOperator3D prop{g, potential(z), dt};  // drift tables
+    const double e0 = ses::mean_energy(psi, potential(r.n)) + ses::rotor_energy(r);
     double t = 0.0;
     while (t < t_end) {
         ses::RigidRotor pred = r;
@@ -282,14 +312,19 @@ QuarterTurnResult quarter_turn(bool follow, int batch) {
         const Vec3d tau = ses::rotor_torque(psi, R, pred.n);
         ses::rotor_step(r, tau, batch * dt);
     }
-    return {ses::length(r.L), r.n.y};
+    const double e1 = ses::mean_energy(psi, potential(r.n)) + ses::rotor_energy(r);
+    return {ses::length(r.L), r.n.y, e1 - e0};
 }
 
 TEST(RotorEhrenfest, PotentialFollowingBatchesConserveJOverAQuarterTurn) {
     const QuarterTurnResult f = quarter_turn(true, 16);
-    std::printf("  following B=16: J = %.4f, n_y = %.4f\n", f.j_end, f.n_y);
+    std::printf("  following B=16: J = %.4f, n_y = %.4f, dE_total = %.2e Ha\n",
+                f.j_end, f.n_y, f.e_total_drift);
     EXPECT_LT(f.n_y, -0.99);
     EXPECT_NEAR(f.j_end, 35.0, 0.05);
+    // Exact forces make the exchange conservative: what the electron gains
+    // the rotor pays (a stencil force leaks ~5e-4 Ha per quarter turn).
+    EXPECT_LT(std::abs(f.e_total_drift), 2e-4);
 }
 
 TEST(RotorEhrenfest, FrozenPotentialBatchesBiasJ) {

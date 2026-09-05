@@ -484,4 +484,63 @@ TEST(ClampTrotterPhase, IsTheIdentityWhenEveryKickIsWithinBudget) {
     }
 }
 
+// ---- d/dr of the band-limited Coulomb: (2/pi)(sin Kr - Si Kr)/r^2, the
+// radial factor of the EXACT lattice-energy gradient (central differences of
+// the sampled V miss up to 24% of the sigma_g torque: sin(kh)/(kh) on a V
+// with content up to Nyquist). -> 0 linearly at r = 0: -(2/pi) K^3 r/9.
+TEST(BandLimitedCoulombGradient, MatchesTheFiniteDifferenceOfThePotential) {
+    const double h = 0.3125;
+    for (const double cells : {0.3, 1.0, 1.7, 2.5, 7.0, 30.0}) {
+        const double r = cells * h;
+        const double d = 1e-5 * h;
+        const double fd = (ses::band_limited_coulomb(r + d, h) -
+                           ses::band_limited_coulomb(r - d, h)) /
+                          (2.0 * d);
+        const double an = ses::band_limited_coulomb_gradient(r, h);
+        EXPECT_NEAR(an, fd, 1e-6 * std::abs(fd) + 1e-9) << "r = " << cells << " h";
+    }
+}
+
+TEST(BandLimitedCoulombGradient, VanishesLinearlyAtTheOrigin) {
+    const double h = 0.3125;
+    const double k = std::numbers::pi / h;
+    EXPECT_EQ(ses::band_limited_coulomb_gradient(0.0, h), 0.0);
+    const double r = 1e-4 * h;
+    const double lead = -2.0 / std::numbers::pi * k * k * k * r / 9.0;
+    EXPECT_NEAR(ses::band_limited_coulomb_gradient(r, h), lead,
+                1e-3 * std::abs(lead));
+    EXPECT_LT(ses::band_limited_coulomb_gradient(0.5 * h, h), 0.0);
+}
+
+// F(c) = sum_i rho_i grad_r V(r_i; c) h^3 is -dE/dc of the lattice energy
+// E(c) = sum_i rho_i V_i(c) h^3 for ANY density -- no smoothness needed.
+TEST(CoulombMeanForce, IsMinusTheGradientOfTheLatticeEnergy) {
+    const ses::Grid1D ax{-4.0, 4.0, 32};  // h = 0.25
+    const ses::Grid3D g{ax, ax, ax};
+    ses::Field3D psi = ses::gaussian_wavepacket(
+        g, ses::Vec3d{0.4, -0.3, 0.2}, ses::Vec3d{0.8, 0.9, 1.1}, ses::Vec3d{});
+    ses::normalize(psi);
+    const ses::Vec3d c{0.15, 0.05, -0.1};
+    const double Z = 1.0;
+    auto energy = [&](ses::Vec3d cc) {
+        const std::vector<double> v = ses::regularized_coulomb_potential(g, Z, cc);
+        double e = 0.0;
+        for (int i = 0; i < g.size(); ++i) {
+            e += std::norm(psi.data()[static_cast<std::size_t>(i)]) *
+                 v[static_cast<std::size_t>(i)];
+        }
+        return e * g.cell_volume();
+    };
+    const ses::Vec3d f = ses::coulomb_mean_force(psi, c, Z);
+    const double d = 1e-4;
+    const double fx = -(energy({c.x + d, c.y, c.z}) - energy({c.x - d, c.y, c.z})) / (2.0 * d);
+    const double fy = -(energy({c.x, c.y + d, c.z}) - energy({c.x, c.y - d, c.z})) / (2.0 * d);
+    const double fz = -(energy({c.x, c.y, c.z + d}) - energy({c.x, c.y, c.z - d})) / (2.0 * d);
+    const double scale = std::sqrt(fx * fx + fy * fy + fz * fz);
+    EXPECT_NEAR(f.x, fx, 1e-6 * scale);
+    EXPECT_NEAR(f.y, fy, 1e-6 * scale);
+    EXPECT_NEAR(f.z, fz, 1e-6 * scale);
+    EXPECT_GT(scale, 0.05);  // the cloud is off-center: a real pull
+}
+
 }  // namespace
