@@ -10,12 +10,17 @@ module;
 #include <random>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <thread>
 export module ses.scenario.molecule_director;
 export import ses.scenario.base_director;
 import ses.wavepacket;
 import ses.scenario.molecular_seed;
 import ses.spheroidal;
 import ses.h2plus_atlas_loader;
+import ses.rotor;
+import ses.observables;
+import ses.vec;
 
 
 // One-electron molecules, fixed Born-Oppenheimer nuclei in a multi-center
@@ -374,12 +379,64 @@ constexpr double kH2pDt = 0.04;
 constexpr double kH2pRDefault = 2.0;  // H2+ equilibrium bond length ~ 2.0 bohr
 constexpr double kH2pRMin = 1.0;
 constexpr double kH2pRMax = 8.0;
+// Ehrenfest rigid rotor (the ion rotates IN this scene): real proton mass,
+// kicks in hbar, capped at the bound-well limit from the exact E(R).
+constexpr double kH2pProtonMassAu = 1836.15267343;  // CODATA m_p / m_e
+constexpr double kH2pMu = 0.5 * kH2pProtonMassAu;   // two protons
+// Coriolis mixing 1s sigma_g -> 2p pi_u (gap ~0.67 Ha) stays < 1% below this.
+constexpr double kH2pAdiabaticOmega = 0.05;  // au
+constexpr double kH2pScanRMin = 1.0;         // E(R) scan for the cap
+constexpr double kH2pScanRStep = 0.15;
+constexpr int kH2pScanSamples = 61;          // 1.0 .. 10.0 bohr
 
-class H2PlusDirector final : public MoleculeDirectorBase {
+class H2PlusDirector final : public MoleculeDirectorBase, public RotorApi {
 public:
     H2PlusDirector() : MoleculeDirectorBase(make(kH2pRDefault)) {
         param_ = snap_r(kH2pRDefault);
+        reset_rotor();
         rebuild_markers();
+        // ~10 s of spheroidal solves off the main thread; stop-aware so a
+        // scene switch never waits on it.
+        jmax_thread_ = std::jthread(
+            [this](std::stop_token st) { jmax_.store(compute_j_max(st)); });
+    }
+
+    RotorApi* rotor() override { return this; }
+
+    // ---- RotorApi: the ion rotates in place (CONTRACT: --selftest-rotor) ----
+    bool kick(int axis, double dJ) override {
+        if (!use_gpu_path() || stepping_ != BaseStepping::RealTime) {
+            return false;
+        }
+        ses::Vec3d a{};
+        switch (axis) {
+            case 0: a.x = 1.0; break;
+            case 1: a.y = 1.0; break;
+            case 2: a.z = 1.0; break;
+            default: return false;
+        }
+        const bool ok = ses::rotor_kick(rotor_, a, dJ,
+                                        static_cast<double>(j_max_blocking()));
+        title_dirty_ = true;
+        return ok;
+    }
+    ses::Vec3d axis() const override { return rotor_.n; }
+    double j() const override { return ses::length(rotor_.L); }
+    double omega() const override { return ses::length(ses::rotor_omega(rotor_)); }
+    double period() const override { return ses::rotor_period(rotor_); }
+    int j_max() const override { return jmax_.load(); }  // 0 = still computing
+    // <H_el> in the CURRENT-axis potential, CPU truth (readback + FFT kinetic).
+    double electronic_energy() override {
+        ensure_cpu_current();
+        return ses::mean_energy(sim_.psi(), current_potential());
+    }
+
+    bool handle_key(char key) override {
+        switch (key) {
+            case 'X': kick(0, 1.0); return true;
+            case 'Y': kick(1, 1.0); return true;
+            default: return MoleculeDirectorBase::handle_key(key);
+        }
     }
 
     double default_camera_azimuth() const override { return 0.35; }
@@ -400,7 +457,7 @@ protected:
 
     std::vector<ses::Vec3d> centers() const override {
         const double d = 0.5 * snap_r(param_);
-        return {{-d, 0.0, 0.0}, {d, 0.0, 0.0}};
+        return {(-d) * rotor_.n, d * rotor_.n};
     }
 
     // ---- analytic (prolate-spheroidal) orbital atlas ----
@@ -435,7 +492,7 @@ protected:
         showing_random_ = false;
         cur_ = k;
         const Mo& mo = atlas_[static_cast<std::size_t>(k)];
-        set_state_field(ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner));
+        set_state_field(ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner, rotor_.n, e1_));
     }
     // Random = normalized superposition of atlas orbitals: a legitimate bound
     // state, not a raw random blob.
@@ -449,7 +506,7 @@ protected:
         std::normal_distribution<double> gauss(0.0, 1.0);
         for (const Mo& mo : atlas_) {
             const ses::Field3D o =
-                ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner);
+                ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner, rotor_.n, e1_);
             const std::complex<double> c{gauss(rng), gauss(rng)};
             for (int i = 0; i < acc.size(); ++i) {
                 acc.data()[static_cast<std::size_t>(i)] +=
@@ -478,9 +535,38 @@ protected:
         rebuild_markers();
     }
 
+    // Ehrenfest: after every real-time GPU batch, torque from the electron
+    // -> rotor advance over the batch's dt -> potential rebuilt for the new
+    // axis (half_mul reads it live on the next batch); e1 rides along by
+    // parallel transport so the pi partner lobes keep their body-frame sense.
+    void after_step_batch() override {
+        if (!use_gpu_path() || stepping_ != BaseStepping::RealTime ||
+            pending_gpu_steps_ <= 0) {
+            return;
+        }
+        const double R = snap_r(param_);
+        const double dt = pending_gpu_steps_ * sim_.dt();
+        engine_.wait_async();  // the forces read psi
+        const ses_vk::Engine::NuclearForces f =
+            engine_.two_center_forces(R, rotor_.n);
+        const ses::Vec3d tau =
+            f.ok ? ses::rotor_torque_from_forces(R, rotor_.n, f.f1, f.f2)
+                 : ses::Vec3d{};
+        ses::rotor_step(rotor_, tau, dt);
+        const ses::Vec3d e = e1_ - ses::dot(e1_, rotor_.n) * rotor_.n;
+        e1_ = (1.0 / ses::length(e)) * e;
+        engine_.set_two_center_potential(R, rotor_.n);
+        rebuild_markers();
+    }
+
+    void after_reset() override {
+        reset_rotor();
+        rebuild_markers();
+    }
+
     std::string title_suffix() override {
         const double rep = nuclear_repulsion();
-        std::string s = strf("  R = {:.3f} Bohr (fixed nuclei)", snap_r(param_));
+        std::string s = strf("  R = {:.3f} Bohr (rigid)", snap_r(param_));
         if (!atlas_.empty()) {
             s += strf("  E_total(1sigma_g) = {:.2f} eV",
                       (atlas_[0].orb.energy + rep) * kHaToEv);
@@ -495,6 +581,12 @@ protected:
         }
         s += strf("  ({} known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
+        const int jm = jmax_.load();
+        s += strf("  rotor: J = {:.1f}/{}  w = {:.4f} au  T = {:.0f} au  "
+                  "adiabatic w/{:.2f} = {:.2f}  [rigid R; grid egg-box: J drifts "
+                  "~1%/quarter turn]  X/Y = +1 hbar",
+                  j(), jm > 0 ? std::to_string(jm) : std::string{"..."}, omega(),
+                  period(), kH2pAdiabaticOmega, omega() / kH2pAdiabaticOmega);
         return s;
     }
 
@@ -506,7 +598,7 @@ private:
         return ses::WavepacketSimulation{ses::WavepacketSimulation::Config{
             grid,
             ses::regularized_coulomb_potential(
-                grid, 1.0, {{-d, 0.0, 0.0}, {d, 0.0, 0.0}}),
+                grid, 1.0, {{0.0, 0.0, -d}, {0.0, 0.0, d}}),
             ses::Vec3d{},
             ses::Vec3d{1.8, 1.8, 1.8},
             ses::Vec3d{},
@@ -573,7 +665,7 @@ private:
         std::string s = strf("{}{}_{}{}", o.n_xi + o.n_eta + o.m + 1, sym, g,
                              o.parity < 0 && o.m == 0 ? "*" : "");
         if (o.m > 0) {
-            s += partner == 0 ? " (y)" : " (z)";
+            s += partner == 0 ? " (x)" : " (y)";
         }
         return s;
     }
@@ -603,9 +695,51 @@ private:
     }
 
     // lazy const-built atlas cache (rebuilt on R change)
+    // Boot frame: axis z, azimuth reference x (e2 = y).
+    void reset_rotor() {
+        rotor_.n = ses::Vec3d{0.0, 0.0, 1.0};
+        rotor_.L = ses::Vec3d{};
+        rotor_.inertia = kH2pMu * snap_r(param_) * snap_r(param_);
+        e1_ = ses::Vec3d{1.0, 0.0, 0.0};
+    }
+
+    std::vector<double> current_potential() const {
+        return ses::regularized_coulomb_potential(sim_.grid(), 1.0, centers());
+    }
+
+    // Bound-well cap from the exact 1s sigma_g curve E(R) + 1/R; 0 = aborted.
+    static int compute_j_max(std::stop_token st) {
+        std::vector<double> r;
+        std::vector<double> v;
+        for (int i = 0; i < kH2pScanSamples; ++i) {
+            if (st.stop_requested()) {
+                return 0;
+            }
+            const double R = kH2pScanRMin + kH2pScanRStep * i;
+            const ses::H2plusOrbital o = ses::h2plus_orbital(R, 0, 0, 0);
+            if (!o.valid) {
+                continue;
+            }
+            r.push_back(R);
+            v.push_back(o.energy + 1.0 / R);
+        }
+        return ses::rotor_j_max(r, v, kH2pMu);
+    }
+
+    int j_max_blocking() {
+        if (jmax_.load() <= 0 && jmax_thread_.joinable()) {
+            jmax_thread_.join();
+        }
+        return jmax_.load();
+    }
+
     mutable std::vector<Mo> atlas_;
     mutable double atlas_R_ = -1.0;
     int cur_ = 0;  // currently-shown atlas index
+    ses::RigidRotor rotor_;
+    ses::Vec3d e1_{1.0, 0.0, 0.0};  // azimuth reference, parallel-transported
+    std::atomic<int> jmax_{0};
+    std::jthread jmax_thread_;  // declared last: joins before jmax_ dies
 };
 
 // ---- Benzene one-electron toy --------------------------------------------

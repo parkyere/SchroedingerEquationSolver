@@ -54,7 +54,7 @@ inline constexpr ArcSpec kArcSpecs[] = {
     {"selftest-energy", nullptr, false},
     {"selftest-h2p", "h2plus", false},
     {"selftest-h2p-orbitals", "h2plus", false},
-    {"selftest-rotor", "h2rotor", false},
+    {"selftest-rotor", "h2plus", false},
     {"selftest-kepler", nullptr, false},
     {"selftest-ladder1d", "harmonic1d", false},
     {"selftest-landau", "landau2d", false},
@@ -582,7 +582,8 @@ void register_verification_arcs(ShellT* the_shell) {
             });
         }},
 
-        // Rotor arc: a J = j_max kick about x must carry the axis z-hat to
+        // Rotor arc ON THE H2+ SCENE (the ion rotates in place; no separate
+        // scene): a J = j_max - 1 kick about x must carry the axis z-hat to
         // -y-hat after a quarter period (R_x(+): z -> -y) while the electron
         // follows adiabatically and J stays put (sigma_g exerts no torque).
         // Budgets carry the measured GRID EGG-BOX (bare Coulomb sampled on
@@ -592,15 +593,20 @@ void register_verification_arcs(ShellT* the_shell) {
         // J within 1%. Tighten both when the finite-volume Coulomb lands.
         {"--selftest-rotor", +[](ShellT* shell, const char* name) {
             shell->sched().after(1000, [shell, name] {
-                selftest_scene_wait_running(shell, "h2rotor", 0,
+                selftest_scene_wait_running(shell, "h2plus", 0,
                                             [shell, name](bool runs) {
                     auto* ro = require_api(shell, name, shell->ro(), runs);
                     if (ro == nullptr) {
                         return;
                     }
+                    // The atlas makes prepared(0) immediate; the cap's E(R)
+                    // scan (~10 s, background) must have landed too.
                     poll_until(
                         shell, 500, 300000,
-                        [shell] { return shell->ml()->prepared(0); },
+                        [shell] {
+                            return shell->ml()->prepared(0) &&
+                                   shell->ro()->j_max() > 0;
+                        },
                         [shell, name] {
                             auto* r = shell->ro();
                             const double e0 = r->electronic_energy();

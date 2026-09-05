@@ -589,7 +589,8 @@ void draw_doublewell_panel(ShellT& shell, UiState& ui,
 }
 
 template <typename ShellT>
-void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
+void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
+                       ses_shell::RotorApi& ro) {
     begin_panel(shell);
     const int nmo = ml.state_count();
     ImGui::TextUnformatted("Known orbitals (exact prolate-spheroidal atlas):");
@@ -626,15 +627,9 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml) {
         ImGui::Text("R fixed at equilibrium; E_total(1sigma_g) = %.2f eV",
                     (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
     }
-    end_panel(shell, ui);
-}
-
-template <typename ShellT>
-void draw_h2rotor_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
-                        ses_shell::RotorApi& ro) {
-    begin_panel(shell);
-    ImGui::TextUnformatted("Rigid H2+ rotor: classical nuclei (real proton "
-                           "mass), electron follows in the moving potential");
+    ImGui::Separator();
+    ImGui::TextUnformatted("Rigid rotation (Ehrenfest nuclei, real proton mass; "
+                           "the electron follows in the moving potential)");
     const int jm = ro.j_max();
     if (jm <= 0) {
         ImGui::TextUnformatted("J_max: computing from the exact E(R)...");
@@ -647,38 +642,30 @@ void draw_h2rotor_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Coriolis coupling mixes 1s sigma_g into 2p pi_u "
                           "(gap ~0.67 Ha)\nonce omega approaches 0.05 au; the "
-                          "dissociation cap keeps it far below.");
+                          "dissociation cap keeps it far below.\nJ_max needs a "
+                          "few minutes per turn at 256^3: many quanta per kick "
+                          "makes it watchable.");
     }
-    ImGui::SliderFloat("hbar per kick", &ui.rotor_dj, 1.0f, 6.0f, "%.0f");
+    // Keys X/Y add ONE hbar; the slider scales the buttons only.
+    ImGui::SliderFloat("hbar per kick button", &ui.rotor_dj, 1.0f,
+                       static_cast<float>(std::max(1, jm)), "%.0f");
     const double dj = static_cast<double>(ui.rotor_dj);
-    if (ImGui::Button("+Lx (X)")) ro.kick(0, dj);
+    if (ImGui::Button("+Lx")) ro.kick(0, dj);
     ImGui::SameLine();
     if (ImGui::Button("-Lx")) ro.kick(0, -dj);
     ImGui::SameLine();
-    if (ImGui::Button("+Ly (Y)")) ro.kick(1, dj);
+    if (ImGui::Button("+Ly")) ro.kick(1, dj);
     ImGui::SameLine();
     if (ImGui::Button("-Ly")) ro.kick(1, -dj);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("(X / Y keys: +1 hbar)");
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Add nuclear angular momentum about the lab x / y "
                           "axis.\nA linear molecule carries none along its own "
                           "axis (that is the electron's Lambda).");
     }
-    ImGui::TextUnformatted("rigid R = 2h-snapped equilibrium; centrifugal "
-                           "stretch ignored");
     ImGui::TextUnformatted("known artifact: grid egg-box (bare Coulomb on "
                            "h = 0.31) drifts J ~1% per quarter turn");
-    if (ml.prepared(0)) {
-        ImGui::Text("E_total(1 sigma_g) = %.2f eV",
-                    (ml.energy(0) + ml.nuclear_repulsion()) * kHaToEv);
-    } else {
-        ImGui::TextUnformatted("relaxing to 1 sigma_g...");
-    }
-    if (ImGui::Button("Random wavefunction (S)")) shell.press('S');
-    ImGui::SameLine();
-    if (ImGui::Button("Reset (R)")) shell.reset_simulation();
-    if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
-    ImGui::SameLine();
-    if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
     end_panel(shell, ui);
 }
 

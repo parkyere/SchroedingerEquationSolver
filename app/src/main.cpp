@@ -67,7 +67,6 @@ import ses.scenario.harmonic_director;
 import ses.scenario.harmonic1d_director;
 import ses.scenario.hydrogen_director;
 import ses.scenario.molecule_director;
-import ses.scenario.h2rotor_director;
 import ses.scenario.morse1d_director;
 import ses.scenario.ptwell1d_director;
 import ses.scenario.tunneling1d_director;
@@ -908,13 +907,10 @@ constexpr SceneEntry kScenes[] = {
                                   {"Ground (2)", '2'}});
      }},
     {"h2plus", "H2+ molecular ion", make_director<ses_shell::H2PlusDirector>,
-     [](Shell& s) { app::draw_h2plus_panel(s, s.ui(), *s.ml()); }},
+     [](Shell& s) { app::draw_h2plus_panel(s, s.ui(), *s.ml(), *s.ro()); }},
     {"benzene", "Stripped benzene (1e)",
      make_director<ses_shell::BenzeneDirector>,
      [](Shell& s) { app::draw_benzene_panel(s, s.ui(), *s.ml()); }},
-    {"h2rotor", "H2+ rotor (Ehrenfest)",
-     make_director<ses_shell::H2RotorDirector>,
-     [](Shell& s) { app::draw_h2rotor_panel(s, s.ui(), *s.ml(), *s.ro()); }},
     {"doubleslit2d", "2D double slit + AB",
      make_director<ses_shell::DoubleSlit2DDirector>,
      [](Shell& s) { app::draw_doubleslit_panel(s, s.ui(), *s.sl()); }},
