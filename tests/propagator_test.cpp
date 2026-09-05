@@ -16,6 +16,7 @@ import ses.field;
 import ses.wavepacket;
 import ses.potential;
 import ses.imaginary_time;
+import ses.vec;
 
 namespace {
 
@@ -132,4 +133,75 @@ TEST(MassParameter, HarmonicGroundUnderMassRelaxesToOmegaOverTwoRootM) {
     EXPECT_NEAR(ses::mean_energy(psi, v, mass), 0.5 * w / std::sqrt(mass), 2e-3);
     // m=1 readout counts full kinetic; mass readout is /m, hence smaller.
     EXPECT_GT(ses::mean_energy(psi, v), ses::mean_energy(psi, v, mass));
+}
+
+// ---- kick / drift primitives: the split step exposed as its factors so a
+// TIME-DEPENDENT potential (the H2+ rotor's turning nuclei) can be composed
+// as half-kick(V_0) [drift full-kick(V_k)]... drift half-kick(V_N) -- the
+// boundary-sampled Strang scheme the GPU engine records (CONTRACT: vkcheck
+// engine_two_center_rotating_batch uses these as its oracle).
+
+namespace {
+ses::Field3D primitive_seed(const ses::Grid3D& g) {
+    return ses::gaussian_wavepacket(g, ses::Vec3d{0.3, -0.2, 0.1},
+                                    ses::Vec3d{1.0, 1.2, 0.9},
+                                    ses::Vec3d{0.4, 0.0, -0.3});
+}
+}  // namespace
+
+TEST(SplitOperator3DPrimitives, KickDriftKickIsBitwiseOneStep) {
+    const ses::Grid1D ax{-6.0, 6.0, 16};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> v = ses::harmonic_potential(g, 0.7, ses::Vec3d{});
+    const double dt = 0.05;
+    const ses::SplitOperator3D prop{g, v, dt};
+    ses::Field3D a = primitive_seed(g);
+    ses::Field3D b = a;
+    prop.step(a, 1);
+    prop.kick(b, v, 0.5 * dt);
+    prop.drift(b);
+    prop.kick(b, v, 0.5 * dt);
+    for (std::size_t i = 0; i < a.data().size(); ++i) {
+        ASSERT_EQ(a.data()[i], b.data()[i]) << "cell " << i;
+    }
+}
+
+TEST(SplitOperator3DPrimitives, BoundarySampledBatchOfAFrozenPotentialIsTheStepBatch) {
+    const ses::Grid1D ax{-6.0, 6.0, 16};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> v = ses::harmonic_potential(g, 0.7, ses::Vec3d{});
+    const double dt = 0.05;
+    const int n = 6;
+    const ses::SplitOperator3D prop{g, v, dt};
+    ses::Field3D a = primitive_seed(g);
+    ses::Field3D b = a;
+    prop.step(a, n);
+    prop.kick(b, v, 0.5 * dt);
+    for (int k = 1; k < n; ++k) {
+        prop.drift(b);
+        prop.kick(b, v, dt);  // two adjacent half-kicks merged
+    }
+    prop.drift(b);
+    prop.kick(b, v, 0.5 * dt);
+    for (std::size_t i = 0; i < a.data().size(); ++i) {
+        EXPECT_NEAR(std::abs(a.data()[i] - b.data()[i]), 0.0, 1e-13) << "cell " << i;
+    }
+}
+
+TEST(SplitOperator3DPrimitives, KickIsTheDiagonalPhaseAndDriftIsUnitary) {
+    const ses::Grid1D ax{-6.0, 6.0, 16};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> v = ses::harmonic_potential(g, 0.7, ses::Vec3d{});
+    const ses::SplitOperator3D prop{g, v, 0.05};
+    ses::Field3D a = primitive_seed(g);
+    ses::normalize(a);
+    ses::Field3D b = a;
+    prop.kick(b, v, 0.3);
+    for (std::size_t i = 0; i < a.data().size(); ++i) {
+        const std::complex<double> want =
+            a.data()[i] * std::polar(1.0, -0.3 * v[i]);
+        EXPECT_NEAR(std::abs(b.data()[i] - want), 0.0, 1e-15);
+    }
+    prop.drift(b);
+    EXPECT_NEAR(ses::norm_sq(b), 1.0, 1e-12);
 }

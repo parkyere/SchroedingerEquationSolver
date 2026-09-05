@@ -21,6 +21,9 @@ import ses.rotor;
 import ses.spheroidal;
 import ses.vec;
 import ses.wavepacket;
+import ses.propagator;
+import ses.observables;
+import ses.h2plus_atlas_loader;
 
 namespace {
 
@@ -226,6 +229,71 @@ TEST(RigidRotor, KickRefusesBeyondTheCapButAlwaysAllowsSlowingDown) {
     EXPECT_NEAR(r.L.x, 3.0, 1e-15);  // refused kick leaves L untouched
     EXPECT_TRUE(ses::rotor_kick(r, Vec3d{-1.0, 0.0, 0.0}, 3.0, 5.0));
     EXPECT_NEAR(ses::length(r.L), 0.0, 1e-15);
+}
+
+// ---- Ehrenfest integration scheme (CONTRACT for the scene's GPU batches):
+// inside a step batch the nuclei keep turning (free rotation is exact), so
+// the electron must see V(n(t)) at EVERY kick -- half-kick V(n_0), then
+// [drift, full-kick V(n_k)], drift, half-kick V(n_N) -- with the torque
+// impulse applied once per batch. A batch that FREEZES V for 16 steps biases
+// J by +0.2 hbar per quarter turn (measured; the old arc's 35.18); the
+// following scheme keeps |dJ| < 0.05 while the electron exchanges up to
+// ~0.1 hbar mid-turn and hands it back (libration, not drift).
+
+struct QuarterTurnResult {
+    double j_end;
+    double n_y;
+};
+
+QuarterTurnResult quarter_turn(bool follow, int batch) {
+    const ses::Grid3D g = cube(5.0, 32);  // h = 0.3125 like the 256^3 scene
+    const double R = 1.875;
+    const double mu = 918.076;
+    const double dt = 0.04;
+    const ses::H2plusOrbital orb = ses::h2plus_atlas_baked(R).front();
+    const Vec3d z{0.0, 0.0, 1.0};
+    auto potential = [&](Vec3d n) {
+        return ses::regularized_coulomb_potential(
+            g, 1.0, std::vector<Vec3d>{(0.5 * R) * n, (-0.5 * R) * n});
+    };
+    ses::Field3D psi = ses::synthesize_h2plus(g, orb, 0, z, Vec3d{1.0, 0.0, 0.0});
+    ses::normalize(psi);
+    ses::RigidRotor r{z, Vec3d{35.0, 0.0, 0.0}, mu * R * R};
+    const double t_end = 0.25 * ses::rotor_period(r);
+    const ses::SplitOperator3D prop{g, potential(z), dt};  // drift tables
+    double t = 0.0;
+    while (t < t_end) {
+        ses::RigidRotor pred = r;
+        if (follow) {
+            prop.kick(psi, potential(pred.n), 0.5 * dt);
+            for (int s = 0; s < batch; ++s) {
+                prop.drift(psi);
+                ses::rotor_step(pred, Vec3d{}, dt);
+                prop.kick(psi, potential(pred.n), s + 1 < batch ? dt : 0.5 * dt);
+            }
+        } else {
+            const ses::SplitOperator3D frozen{g, potential(r.n), dt};
+            frozen.step(psi, batch);
+            ses::rotor_step(pred, Vec3d{}, batch * dt);
+        }
+        t += batch * dt;
+        const Vec3d tau = ses::rotor_torque(psi, R, pred.n);
+        ses::rotor_step(r, tau, batch * dt);
+    }
+    return {ses::length(r.L), r.n.y};
+}
+
+TEST(RotorEhrenfest, PotentialFollowingBatchesConserveJOverAQuarterTurn) {
+    const QuarterTurnResult f = quarter_turn(true, 16);
+    std::printf("  following B=16: J = %.4f, n_y = %.4f\n", f.j_end, f.n_y);
+    EXPECT_LT(f.n_y, -0.99);
+    EXPECT_NEAR(f.j_end, 35.0, 0.05);
+}
+
+TEST(RotorEhrenfest, FrozenPotentialBatchesBiasJ) {
+    const QuarterTurnResult z = quarter_turn(false, 32);
+    std::printf("  frozen B=32: J = %.4f, n_y = %.4f\n", z.j_end, z.n_y);
+    EXPECT_GT(z.j_end - 35.0, 0.15);  // the artifact the scene must not carry
 }
 
 }  // namespace
