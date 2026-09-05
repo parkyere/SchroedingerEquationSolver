@@ -34,6 +34,13 @@ constexpr double kRu3dZMax = 100.0;
 constexpr double kRu3dLaunchX = -30.0;
 constexpr double kRu3dSigma = 4.0;
 constexpr double kRu3dDt = 0.01;        // small: V*dt/2 moderate at the turn
+// Kick-phase budget for the core cells: |V| <= 2*1.5/dt = 300 Ha, i.e. only
+// r < Z_eff/300 is capped while the turning point is r_min = Z_eff/E >=
+// Z_eff/80 -- never reachable at any slider setting. Uncapped, the +2Z/h
+// core aliased (5 rad) into a -245 Ha trap that collected the absorbed
+// packet's residue (--selftest-rutherford closest <r> 4.5 < r_min).
+constexpr double kRu3dMaxKickPhase = 1.5;  // rad
+constexpr double kRu3dTallyMinNorm = 0.5;   // tallies need the packet present
 
 class Rutherford3DDirector final : public BaseDirector, public RutherfordApi {
 public:
@@ -129,12 +136,19 @@ protected:
             })) {
             return;
         }
-        if (den > 0.0) {
+        if (den <= 0.0) {
+            return;
+        }
+        // The closest approach is the PACKET's: once the absorber has eaten
+        // most of the norm, <r> would report the residue instead. The
+        // backscatter fraction is the left layer's share of what remains,
+        // peaked while the reflected packet is being absorbed.
+        if (den * g.cell_volume() > kRu3dTallyMinNorm) {
             const double mean_r = mr / den;
             r_min_seen_ = std::min(r_min_seen_.value_or(mean_r), mean_r);
-            back_ = std::max(back_, back / den);
-            title_dirty_ = true;
         }
+        back_ = std::max(back_, back / den);
+        title_dirty_ = true;
     }
 
     void after_reset() override {
@@ -150,8 +164,10 @@ private:
         const double p0 = std::sqrt(2.0 * e);
         return ses::WavepacketSimulation{ses::WavepacketSimulation::Config{
             grid,
-            ses::regularized_coulomb_potential(grid, -kRu3dZProj * z,
-                                               ses::Vec3d{}),
+            ses::clamp_trotter_phase(
+                ses::regularized_coulomb_potential(grid, -kRu3dZProj * z,
+                                                   ses::Vec3d{}),
+                kRu3dDt, kRu3dMaxKickPhase),
             ses::Vec3d{kRu3dLaunchX, 0.0, 0.0},
             ses::Vec3d{kRu3dSigma, kRu3dSigma, kRu3dSigma},
             ses::Vec3d{p0, 0.0, 0.0},

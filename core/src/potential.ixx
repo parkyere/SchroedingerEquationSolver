@@ -210,6 +210,20 @@ inline std::vector<double> regularized_coulomb_potential(const Grid3D& g, double
     return regularized_coulomb_potential(g, Z, std::vector<Vec3d>{c});
 }
 
+// Cap |V| so every split-operator kick e^{-iV dt/2} stays below max_phase
+// rad: a kick past pi ALIASES into a potential of the opposite sign (the
+// Rutherford +2Z/h core at dt = 0.01 read 5.06 rad = a -245 Ha trap). Only
+// for cells the physics never reaches; reachable cells must stay under the
+// budget on their own. CONTRACT: potential_test ClampTrotterPhase.
+inline std::vector<double> clamp_trotter_phase(std::vector<double> v, double dt,
+                                               double max_phase) {
+    const double cap = 2.0 * max_phase / dt;
+    for (double& x : v) {
+        x = std::clamp(x, -cap, cap);
+    }
+    return v;
+}
+
 // Nearest grid point per axis, clamped to valid coords (xmax is off the
 // periodic grid). Static molecular centers snap here so their on-point
 // energies are reproducible grid to grid.

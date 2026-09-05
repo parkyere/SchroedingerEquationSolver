@@ -3920,9 +3920,9 @@ bool check_engine_two_center_potential(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
-// two_center_forces: per-nucleus <psi| grad V_k |psi> vs the CPU
-// mean_potential_gradient on the same sampled V_k, and the derived torque vs
-// ses::rotor_torque (the -dE/dtheta-validated core).
+// two_center_forces: per-nucleus <psi| grad V_k |psi> vs the CPU analytic
+// ses::coulomb_mean_force (the exact -dE/dc of the lattice energy), and the
+// derived torque vs ses::rotor_torque (the -dE/dtheta-validated core).
 bool check_engine_two_center_forces(ses_vk::DeviceContext& ctx) {
     const char* name = "engine two-center forces";
     RotorRig rig;
@@ -3937,12 +3937,10 @@ bool check_engine_two_center_forces(ses_vk::DeviceContext& ctx) {
         std::printf("%s (raw Vulkan): two_center_forces FAIL\n", name);
         return false;
     }
-    const std::vector<double> v1 =
-        ses::regularized_coulomb_potential(rig.g, 1.0, (0.5 * rig.R) * rig.n);
-    const std::vector<double> v2 =
-        ses::regularized_coulomb_potential(rig.g, 1.0, (-0.5 * rig.R) * rig.n);
-    const ses::Vec3d c1 = ses::mean_potential_gradient(rig.psi0, v1, rig.g);
-    const ses::Vec3d c2 = ses::mean_potential_gradient(rig.psi0, v2, rig.g);
+    const ses::Vec3d c1 =
+        ses::coulomb_mean_force(rig.psi0, (0.5 * rig.R) * rig.n, 1.0);
+    const ses::Vec3d c2 =
+        ses::coulomb_mean_force(rig.psi0, (-0.5 * rig.R) * rig.n, 1.0);
     const ses::Vec3d tau_gpu = (0.5 * rig.R) * ses::cross(rig.n, f.f1 - f.f2);
     const ses::Vec3d tau_cpu = ses::rotor_torque(rig.psi0, rig.R, rig.n);
     const double r1 = rel_err(f.f1, c1);
