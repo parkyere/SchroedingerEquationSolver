@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <vector>
@@ -59,6 +60,52 @@ TEST(Spheroidal, UnbracketedRootReportsInvalid) {
     // so p2 is a stale midpoint (E ~ -33 Ha, NEGATIVE: the old energy-only
     // atlas filter would have admitted this garbage). The flag must say so.
     EXPECT_FALSE(ses::h2plus_orbital(0.5, 0, 1, 6).valid);
+}
+
+// RED: synthesize_h2plus along an ARBITRARY molecular axis n with azimuth
+// reference e1 (e2 = n x e1). The legacy call is axis = x-hat, e1 = y-hat
+// (phi = atan2(z, y)); the rotor scene needs the orbital along its live
+// axis. Oracle: for n = z-hat, e1 = y-hat the field is the x-axis field
+// under (x, y, z) -> (z, y, -x): f_z(i, j, k) == f_x(k, j, n - i) on the
+// symmetric grid (i >= 1: index 0 has no mirror on a periodic axis).
+TEST(SynthesizeH2plus, GeneralAxisMatchesTheXAxisFieldUnderRotation) {
+    const int n = 24;
+    const ses::Grid1D axis{-4.0, 4.0, n};
+    const ses::Grid3D g{axis, axis, axis};
+    for (const int m : {0, 1}) {
+        for (const int partner : {0, 1}) {
+            if (m == 0 && partner == 1) {
+                continue;  // m = 0 ignores the partner
+            }
+            const ses::H2plusOrbital o = ses::h2plus_orbital(2.0, m, 0, 0);
+            const ses::Field3D fx = ses::synthesize_h2plus(g, o, partner);
+            const ses::Field3D fz = ses::synthesize_h2plus(
+                g, o, partner, ses::Vec3d{0.0, 0.0, 1.0}, ses::Vec3d{0.0, 1.0, 0.0});
+            double max_err = 0.0;
+            for (int k = 0; k < n; ++k) {
+                for (int j = 0; j < n; ++j) {
+                    for (int i = 1; i < n; ++i) {
+                        max_err = std::max(
+                            max_err,
+                            std::abs(fz(i, j, k).real() - fx(k, j, n - i).real()));
+                    }
+                }
+            }
+            EXPECT_LT(max_err, 1e-12) << "m = " << m << " partner = " << partner;
+        }
+    }
+}
+
+TEST(SynthesizeH2plus, DefaultAxisIsBitwiseTheLegacyXCall) {
+    const ses::Grid1D axis{-4.0, 4.0, 16};
+    const ses::Grid3D g{axis, axis, axis};
+    const ses::H2plusOrbital o = ses::h2plus_orbital(2.0, 1, 0, 0);
+    const ses::Field3D legacy = ses::synthesize_h2plus(g, o, 1);
+    const ses::Field3D general = ses::synthesize_h2plus(
+        g, o, 1, ses::Vec3d{1.0, 0.0, 0.0}, ses::Vec3d{0.0, 1.0, 0.0});
+    for (std::size_t c = 0; c < legacy.data().size(); ++c) {
+        ASSERT_EQ(general.data()[c], legacy.data()[c]) << "cell " << c;
+    }
 }
 
 TEST(Spheroidal, GroundEnergyVsInternuclearDistance) {
