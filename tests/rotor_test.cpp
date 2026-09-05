@@ -293,7 +293,9 @@ TEST(RotorEhrenfest, PotentialFollowingBatchesConserveJOverAQuarterTurn) {
 TEST(RotorEhrenfest, FrozenPotentialBatchesBiasJ) {
     const QuarterTurnResult z = quarter_turn(false, 32);
     std::printf("  frozen B=32: J = %.4f, n_y = %.4f\n", z.j_end, z.n_y);
-    EXPECT_GT(z.j_end - 35.0, 0.15);  // the artifact the scene must not carry
+    // Magnitude only: the sign follows where the torque is sampled (batch
+    // start +0.2, batch end -0.9 at 32 steps). The scene must carry neither.
+    EXPECT_GT(std::abs(z.j_end - 35.0), 0.15);
 }
 
 }  // namespace
