@@ -175,7 +175,7 @@ TEST(SoftCoulombPotential, DeepestAtNucleusAndAttractive) {
 // Nyquist band-limited bare Coulomb: V_i = -Z (2/pi) Si(pi r/h) / r at EVERY
 // cell (no window: the Gibbs tail ~cos(pi r/h)/(pi r^2/h) is what the grid
 // aliases), V(0) = -2Z/h. Parameter-free (K = pi/h is the grid's own band),
-// deeper than -Z/r at the nearest cell (-1.18 Z/h), 10 mHa-accurate 1s at
+// deeper than -Z/r at the nearest cell (-1.18 Z/h), relaxed 1s +1.8 mHa at
 // h = 0.31 and a 14x smaller egg-box than the cube average
 // (docs/ARCHITECTURE.md: why not soft-Coulomb).
 TEST(RegularizedCoulombPotential, IsTheBandLimitedCoulombEverywhere) {
@@ -279,7 +279,7 @@ TEST(BandLimitedCoulomb, OriginLimitNearestCellAndFarTail) {
 
 TEST(SnapToGrid, RoundsEachAxisToTheNearestGridPointAndClamps) {
     // Static molecular centers snap to lattice points so their nucleus cells keep
-    // the tabulated on-point average. h=1, coords -8..7; xmax not a point
+    // reproducible on-point depths. h=1, coords -8..7; xmax not a point
     // (periodic) -> 7.7 clamps to 7.
     const ses::Grid1D ax{-8.0, 8.0, 16};
     const ses::Grid3D g{ax, ax, ax};
@@ -401,7 +401,7 @@ TEST(RegularizedCoulomb, EggBoxOfASmoothCloudIsBelowBudget) {
     }
     const double dv = spread(e);
     std::printf("  smooth cloud egg-box spread = %.3e Ha\n", dv);
-    EXPECT_LT(dv, 5.0e-5);
+    EXPECT_LT(dv, 1.0e-6);  // measured 6e-8: aliasing of a width-1 Gaussian
 }
 
 // The discrete ground state itself (ITP, kinetic + potential): the energy a
@@ -438,7 +438,7 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
     const ses::Grid3D fine{ses::Grid1D{-5.0, 5.0, 64}, ses::Grid1D{-5.0, 5.0, 64},
                            ses::Grid1D{-5.0, 5.0, 64}};
     const double hf = 0.5 * kEggBoxH;
-    // V dtau / 2 < 0.3 at the deeper -C/hf cell.
+    // V dtau / 2 = 0.19 at the -2/hf nucleus cell.
     const double coarse = spread({relaxed_ground_energy(kEggBoxGrid, {}, 0.05, 400),
                                   relaxed_ground_energy(
                                       kEggBoxGrid,
@@ -453,6 +453,35 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
     EXPECT_LT(refined, 5.0e-5);
     EXPECT_LT(refined, coarse / 6.0);
     EXPECT_NEAR(relaxed_ground_energy(fine, {}, 0.03, 600), -0.5, 1.0e-3);
+}
+
+// ---- Trotter-phase guard: a kick e^{-iV dt/2} with |V| dt/2 > pi ALIASES
+// (the Rutherford +2Z/h core at dt = 0.01 is 5.06 rad = an attractive -245 Ha
+// trap that collected the absorbed packet's residue). Cells the physics never
+// reaches may be clamped so every kick stays below max_phase; reachable cells
+// must be untouched. CONTRACT: rutherford3d make(), --selftest-rutherford.
+TEST(ClampTrotterPhase, CapsOnlyCellsBeyondThePhaseBudgetSymmetrically) {
+    const std::vector<double> v = {0.0, 25.0, -25.0, 300.0, 1011.0, -1011.0};
+    const double dt = 0.01;
+    const std::vector<double> c = ses::clamp_trotter_phase(v, dt, 1.5);  // |V| <= 300
+    ASSERT_EQ(c.size(), v.size());
+    EXPECT_EQ(c[0], 0.0);
+    EXPECT_EQ(c[1], 25.0);
+    EXPECT_EQ(c[2], -25.0);
+    EXPECT_DOUBLE_EQ(c[3], 300.0);
+    EXPECT_DOUBLE_EQ(c[4], 300.0);
+    EXPECT_DOUBLE_EQ(c[5], -300.0);
+}
+
+TEST(ClampTrotterPhase, IsTheIdentityWhenEveryKickIsWithinBudget) {
+    const ses::Grid1D ax{-8.0, 8.0, 16};
+    const ses::Grid3D g{ax, ax, ax};
+    const std::vector<double> v = ses::regularized_coulomb_potential(g, 1.0, ses::Vec3d{});
+    // deepest cell -2/h = -2 Ha, dt 0.05 -> 0.05 rad << 1.5.
+    const std::vector<double> c = ses::clamp_trotter_phase(v, 0.05, 1.5);
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        ASSERT_EQ(c[i], v[i]) << i;
+    }
 }
 
 }  // namespace

@@ -41,7 +41,7 @@ const std::vector<double>& reg_potential() {
 }
 
 // <H> of a synthesized (u_nl/r) Y_lm orbital, mirroring the app path. Radial
-// solve uses bare -1/r, differing from reg_potential only in the nucleus cell.
+// solve uses bare -1/r; reg_potential is its Nyquist band limit.
 double synth_energy(int level_l, int node_k, int m) {
     const auto [rg, vr] = ses_test::bare_hydrogen_radial();
     const ses::RadialState st =
@@ -58,9 +58,9 @@ TEST(RegularizedCoulomb3D, GroundStateNearBareHydrogenAndDeeperThanSoft) {
     relaxer.relax(psi, 900);  // tau = 18: converged to 1s
     const double e0 = ses::mean_energy(psi, reg_potential());
     EXPECT_LT(e0, 0.0);
-    // -0.5 Ha = bare-hydrogen anchor; grid cusp relaxes to -0.470 (+0.030,
-    // finite-volume cells; point sampling gave -0.473).
-    // 0.08 band catches a wrong kCoulombCellAverage (halved -0.400, doubled -1.12).
+    // -0.5 Ha = bare-hydrogen anchor; the band-limited grid relaxes near it
+    // (the cube average gave -0.470, point sampling -0.473 at this h = 0.75).
+    // 0.08 band catches a wrong nucleus depth (halved -0.400, doubled -1.12).
     EXPECT_NEAR(e0, -0.5, 0.08);
     // Below the soft-Coulomb well (~-0.27 Ha): distinct regularizations, don't confuse.
     EXPECT_LT(e0, -0.35);

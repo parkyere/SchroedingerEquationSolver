@@ -83,8 +83,8 @@ TEST(H2Plus, BondingAndAntibondingAndTheChemicalBond) {
 }
 
 TEST(StrippedBenzene, FirstElectronLivesOnTheCarbonsInADeepQuasiBand) {
-    // First electron of C6H6^41+ over bare regularized Coulomb, no soft cores.
-    // Centers snapped to lattice so each nucleus cell takes the analytic average.
+    // First electron of C6H6^41+ over the band-limited bare Coulomb, no soft
+    // cores. Centers snapped to lattice for reproducible on-point depths.
     const Grid1D ax{-8.0, 8.0, 32};
     const Grid3D g{ax, ax, ax};
     const double ring_r = 2.63;  // benzene C-C = 1.39 A in bohr
@@ -126,7 +126,8 @@ TEST(StrippedBenzene, FirstElectronLivesOnTheCarbonsInADeepQuasiBand) {
     const double ee1 = ses::mean_energy(e1, v);
     const double ee2 = ses::mean_energy(e2, v);
     // No ordering assertion: deflated ITP finds a quasi-degenerate band's
-    // members in arbitrary energy order (E0 = -23.886, E1 = -23.910, split 0.024).
+    // members in arbitrary energy order (a point-sampled run once gave
+    // E0 = -23.886 above E1 = -23.910).
     const double lo = std::min(ee0, std::min(ee1, ee2));
     const double hi = std::max(ee0, std::max(ee1, ee2));
     EXPECT_LT(hi, -5.0) << "Z = 6 core states, far below hydrogenic scales";

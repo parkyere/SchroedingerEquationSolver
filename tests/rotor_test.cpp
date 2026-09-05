@@ -235,9 +235,11 @@ TEST(RigidRotor, KickRefusesBeyondTheCapButAlwaysAllowsSlowingDown) {
 // inside a step batch the nuclei keep turning (free rotation is exact), so
 // the electron must see V(n(t)) at EVERY kick -- half-kick V(n_0), then
 // [drift, full-kick V(n_k)], drift, half-kick V(n_N) -- with the torque
-// impulse applied once per batch. A batch that FREEZES V for 16 steps biases
-// J by +0.2 hbar per quarter turn (measured; the old arc's 35.18); the
-// following scheme keeps |dJ| < 0.05 while the electron exchanges up to
+// impulse applied once per batch. A batch that FREEZES V biases J by 0.2-1
+// hbar per quarter turn (sign and size follow the batch length and the
+// state: the old arc read 35.18 at 16 steps sampling the torque at the batch
+// start; the control below reads 34.06 at 32 steps sampling at the end);
+// the following scheme keeps |dJ| < 0.05 while the electron exchanges up to
 // ~0.1 hbar mid-turn and hands it back (libration, not drift).
 
 struct QuarterTurnResult {
