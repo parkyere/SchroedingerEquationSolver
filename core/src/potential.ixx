@@ -89,7 +89,6 @@ inline std::vector<double> morse_potential(const Grid1D& g, double d,
     return v;
 }
 
-// Integral of 1/r over the unit cube centered at origin; 7-digit quadrature.
 // Uniform static E folded into the potential: V += e0 * coord_axis (odd in
 // e0; axis 0=x 1=y 2=z). Relax tables MUST ride this same effective V or
 // imaginary time cools to the field-free ground.
@@ -110,7 +109,69 @@ inline std::vector<double> tilted_potential(std::vector<double> v,
     return v;
 }
 
-inline constexpr double kCoulombCellAverage = 2.3800774;
+// Integral of 1/r over the unit cube centered at the origin (Waldvogel 1976
+// closed form; Hummer 1996 tabulates 2.3800774).
+inline constexpr double kCoulombCellAverage = 2.3800773639795527;
+// Cells within this many spacings of a nucleus take the cube average of
+// -Z/r; beyond it the point value is h^4-close (2e-4 relative at 3 cells).
+// A cell within rounding of the shell may take either branch (CPU double vs
+// GPU float): that is the 2e-4 jump, nothing more.
+inline constexpr double kCoulombAverageRadius = 3.0;
+
+namespace detail {
+
+// Waldvogel antiderivative, d^3F/dxdydz = 1/r, principal-value atan (NOT
+// atan2: the branch shift of pi does not cancel over the corners). A corner
+// with a zero coordinate takes the limits: x*y*ln(z + r) -> 0, x^2 atan -> 0.
+// ln(a + r) for a < 0 cancels; (s2 = the other two squares) a + r = s2/(r - a).
+inline double cube_corner_term(double x, double y, double z) {
+    const double r = std::sqrt(x * x + y * y + z * z);
+    auto lg = [r](double a, double s2) {
+        return std::log(a >= 0.0 ? a + r : s2 / (r - a));
+    };
+    double f = 0.0;
+    if (x * y != 0.0) {
+        f += x * y * lg(z, x * x + y * y);
+    }
+    if (y * z != 0.0) {
+        f += y * z * lg(x, y * y + z * z);
+    }
+    if (z * x != 0.0) {
+        f += z * x * lg(y, z * z + x * x);
+    }
+    if (x != 0.0) {
+        f -= 0.5 * x * x * std::atan(y * z / (x * r));
+    }
+    if (y != 0.0) {
+        f -= 0.5 * y * y * std::atan(z * x / (y * r));
+    }
+    if (z != 0.0) {
+        f -= 0.5 * z * z * std::atan(x * y / (z * r));
+    }
+    return f;
+}
+
+}  // namespace detail
+
+// (1/h^3) integral over the cube [-h/2, h/2]^3 of 1/|r - d|: the potential
+// of a homogeneous cube, exact for d inside the cube (the nucleus cell) as
+// well as outside; even in d. Signed corner sum, (-1)^(lower limits).
+inline double coulomb_cube_average(Vec3d d, double h) {
+    const double lo[3] = {-0.5 * h - d.x, -0.5 * h - d.y, -0.5 * h - d.z};
+    const double hi[3] = {0.5 * h - d.x, 0.5 * h - d.y, 0.5 * h - d.z};
+    double acc = 0.0;
+    for (int m = 0; m < 8; ++m) {
+        const bool ux = (m & 1) != 0;
+        const bool uy = (m & 2) != 0;
+        const bool uz = (m & 4) != 0;
+        const int lower = (ux ? 0 : 1) + (uy ? 0 : 1) + (uz ? 0 : 1);
+        const double f = detail::cube_corner_term(ux ? hi[0] : lo[0],
+                                                  uy ? hi[1] : lo[1],
+                                                  uz ? hi[2] : lo[2]);
+        acc += (lower % 2 == 0) ? f : -f;
+    }
+    return acc / (h * h * h);
+}
 
 inline std::vector<double> barrier_potential(const Grid1D& g, double v0,
                                              double x_lo, double x_hi) {
@@ -141,25 +202,30 @@ inline std::vector<double> barrier_potential(const Grid3D& g, double v0,
     return v;
 }
 
-// Bare -Z/|r-c| superposed over centers: each exact-hit nucleus cell takes the
-// analytic cell average, others add plain -Z/r (docs/ARCHITECTURE.md: why not
-// soft-Coulomb). Requires cubic cells + centers on grid points (BO molecular
-// potentials, e.g. H2+); an off-point nucleus just gets -Z/r throughout.
+// Finite-volume bare Coulomb superposed over centers: cells within
+// kCoulombAverageRadius of a nucleus take the cube average of -Z/|r-c| (the
+// nucleus cell included, wherever the nucleus sits in it), the rest the point
+// value -Z/r (docs/ARCHITECTURE.md: why not soft-Coulomb). Translation
+// invariant to the h^4 switch: moving nuclei (rotor) see no grid egg-box.
+// Cubic cells (h = x spacing). An exact hit keeps the tabulated -Z*C/h.
 inline std::vector<double> regularized_coulomb_potential(
     const Grid3D& g, double Z, const std::vector<Vec3d>& centers) {
     const double h = g.x.spacing();
+    const double r_avg = kCoulombAverageRadius * h;
     const double center_v = -Z * kCoulombCellAverage / h;
     std::vector<double> v(static_cast<std::size_t>(g.size()), 0.0);
     for (const Vec3d& c : centers) {
         for_each_cell(g, [&](int i, int j, int k, int flat) {
-            const double dx = g.x.coord(i) - c.x;
-            const double dy = g.y.coord(j) - c.y;
-            const double dz = g.z.coord(k) - c.z;
-            const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
-            // Cell-average cap for the whole cell holding the nucleus (r < h/2):
-            // a moving nucleus must never expose -Z/r -> -inf to the Trotter
-            // step; on-grid nuclei keep every value (neighbours sit h away).
-            v[static_cast<std::size_t>(flat)] += (r < 0.5 * h) ? center_v : -Z / r;
+            const Vec3d d{g.x.coord(i) - c.x, g.y.coord(j) - c.y,
+                          g.z.coord(k) - c.z};
+            const double r = length(d);
+            double vc = -Z / r;
+            if (r == 0.0) {
+                vc = center_v;
+            } else if (r < r_avg) {
+                vc = -Z * coulomb_cube_average(d, h);
+            }
+            v[static_cast<std::size_t>(flat)] += vc;
         });
     }
     return v;
@@ -170,9 +236,8 @@ inline std::vector<double> regularized_coulomb_potential(const Grid3D& g, double
 }
 
 // Nearest grid point per axis, clamped to valid coords (xmax is off the
-// periodic grid). Molecular centers MUST snap here: the multi-center builder
-// regularizes only exact-hit cells, so an off-grid center gets an arbitrary
-// -Z/r depth.
+// periodic grid). Static molecular centers snap here so the atlas/oracle
+// energies stay at the tabulated on-point values.
 inline Vec3d snap_to_grid(const Grid3D& g, Vec3d p) {
     auto axis = [](const Grid1D& ax, double x) {
         const double h = ax.spacing();

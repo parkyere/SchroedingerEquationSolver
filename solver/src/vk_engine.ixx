@@ -2619,10 +2619,10 @@ private:
     struct alignas(16) TwoCenterParams {
         std::uint32_t n, nx, ny, nz;
         float box_min[4];
-        float cell_h[4];
-        float c1[4];    // xyz, w = Z
-        float c2[4];    // xyz, w = center_v
-        float misc[4];  // x = coincidence eps, yzw = 1/(2h)
+        float cell_h[4];  // xyz, w = h
+        float c1[4];      // xyz, w = Z
+        float c2[4];      // xyz, w = center_v (exact hit)
+        float misc[4];    // x = averaging radius, yzw = 1/(2h)
     };
 
     // Lazy: UBO + partials + the two sets; only rotor scenes pay.
@@ -2655,8 +2655,9 @@ private:
         return true;
     }
 
-    // Nuclei at +-(R/2) n, unit charges; CPU sampling constants verbatim
-    // (ses::regularized_coulomb_potential: h = x spacing).
+    // Nuclei at +-(R/2) n, unit charges; CPU finite-volume constants verbatim
+    // (ses::regularized_coulomb_potential: h = x spacing, averaging radius
+    // kCoulombAverageRadius * h, exact hit -C/h).
     void stage_two_center(double R, ses::Vec3d n) {
         const double h = grid_.x.spacing();
         const ses::Vec3d c1 = (0.5 * R) * n;
@@ -2671,13 +2672,14 @@ private:
                              static_cast<float>(grid_.z.xmin), 0.0f};
         const float ch[4] = {static_cast<float>(grid_.x.spacing()),
                              static_cast<float>(grid_.y.spacing()),
-                             static_cast<float>(grid_.z.spacing()), 0.0f};
+                             static_cast<float>(grid_.z.spacing()),
+                             static_cast<float>(h)};
         const float k1[4] = {static_cast<float>(c1.x), static_cast<float>(c1.y),
                              static_cast<float>(c1.z), 1.0f};
         const float k2[4] = {static_cast<float>(c2.x), static_cast<float>(c2.y),
                              static_cast<float>(c2.z),
                              static_cast<float>(-ses::kCoulombCellAverage / h)};
-        const float ms[4] = {static_cast<float>(0.5 * h),  // cell cap radius
+        const float ms[4] = {static_cast<float>(ses::kCoulombAverageRadius * h),
                              static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
                              static_cast<float>(1.0 / (2.0 * grid_.z.spacing()))};

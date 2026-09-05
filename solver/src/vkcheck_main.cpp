@@ -3856,7 +3856,10 @@ struct RotorRig {
     ses::Grid3D g{ses::Grid1D{-8.0, 8.0, 64}, ses::Grid1D{-8.0, 8.0, 64},
                   ses::Grid1D{-8.0, 8.0, 64}};
     double R = 2.0;
-    ses::Vec3d n{0.6, 0.0, 0.8};  // tilted: nuclei sit off the grid points
+    // Generic tilt: nuclei off the grid points AND no cell within rounding of
+    // the 3h averaging shell (0.6/0.8 on h = 0.25 put cells exactly on it,
+    // where CPU double and GPU float may branch apart).
+    ses::Vec3d n = ses::normalized(ses::Vec3d{0.61, 0.13, 0.78});
     double dt = 0.01;
     ses::Field3D psi0 = ses::gaussian_wavepacket(
         g, ses::Vec3d{0.3, -0.2, 0.2}, ses::Vec3d{1.0, 1.0, 1.0}, ses::Vec3d{});
@@ -3953,6 +3956,96 @@ bool check_engine_two_center_forces(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// Direct V parity: the GPU-built two-center potential read back cell by cell
+// against the CPU builder (float32 closed form near the nuclei: ~1e-5
+// relative; the step contract above would only notice ~1e-3).
+bool check_engine_two_center_potential_values(ses_vk::DeviceContext& ctx) {
+    const char* name = "engine two-center potential values";
+    RotorRig rig;
+    ses_vk::Engine engine;
+    if (!rig.boot(ctx, engine, name)) {
+        return false;
+    }
+    std::vector<float> gpu;
+    if (!engine.set_two_center_potential(rig.R, rig.n) ||
+        !engine.readback_potential(gpu)) {
+        std::printf("%s (raw Vulkan): build/readback FAIL\n", name);
+        return false;
+    }
+    engine.destroy();
+    const std::vector<double> cpu =
+        ses::regularized_coulomb_potential(rig.g, 1.0, rig.centers());
+    double max_err = 0.0;
+    double max_mag = 0.0;
+    for (std::size_t i = 0; i < cpu.size(); ++i) {
+        max_err = std::max(max_err, std::abs(static_cast<double>(gpu[i]) - cpu[i]));
+        max_mag = std::max(max_mag, std::abs(cpu[i]));
+    }
+    const double tol = 2e-4;  // abs, Ha; |V| <= C/h ~ 9.5 here
+    const bool pass = gpu.size() == cpu.size() && max_err < tol;
+    std::printf("%s (raw Vulkan): max |V_gpu - V_cpu| = %.3e Ha (|V| <= %.2f, "
+                "tol %.1e)  [%s]\n",
+                name, max_err, max_mag, tol, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+// Rotating batch: with a two-center SCHEDULE armed, the batch rebuilds V at
+// every kick from the scheduled axes (boundary-sampled Strang: half V(n_0),
+// [drift, full V(n_k)], drift, half V(n_N)); afterwards V stays at n_N. Oracle
+// = the CPU kick/drift primitives composed the same way, then two frozen
+// steps at n_N.
+bool check_engine_two_center_rotating_batch(ses_vk::DeviceContext& ctx) {
+    const char* name = "engine two-center rotating batch";
+    RotorRig rig;
+    ses_vk::Engine engine;
+    if (!rig.boot(ctx, engine, name)) {
+        return false;
+    }
+    const int n = 8;
+    const double dth = 0.02;  // rad per step about x-hat
+    std::vector<ses::Vec3d> axes;
+    ses::RigidRotor rot{rig.n, ses::Vec3d{1.0, 0.0, 0.0}, 1.0 / dth};
+    for (int k = 0; k < n; ++k) {
+        ses::rotor_step(rot, ses::Vec3d{}, rig.dt);  // |omega| dt = dth
+        axes.push_back(rot.n);
+    }
+    if (!engine.set_two_center_potential(rig.R, rig.n) ||
+        !engine.set_two_center_schedule(rig.R, axes)) {
+        std::printf("%s (raw Vulkan): schedule FAIL\n", name);
+        return false;
+    }
+    engine.step(n);
+    engine.step(2);  // frozen at n_N
+    std::vector<float> gpu;
+    if (!engine.readback(gpu)) {
+        std::printf("%s (raw Vulkan): readback FAIL\n", name);
+        return false;
+    }
+    engine.destroy();
+    auto potential = [&](ses::Vec3d ax) {
+        return ses::regularized_coulomb_potential(
+            rig.g, 1.0, std::vector<ses::Vec3d>{(0.5 * rig.R) * ax,
+                                                (-0.5 * rig.R) * ax});
+    };
+    const ses::SplitOperator3D prop{rig.g, potential(rig.n), rig.dt};
+    ses::Field3D cpu = rig.psi0;
+    prop.kick(cpu, potential(rig.n), 0.5 * rig.dt);
+    for (int k = 0; k < n; ++k) {
+        prop.drift(cpu);
+        prop.kick(cpu, potential(axes[static_cast<std::size_t>(k)]),
+                  k + 1 < n ? rig.dt : 0.5 * rig.dt);
+    }
+    const ses::SplitOperator3D frozen{rig.g, potential(axes.back()), rig.dt};
+    frozen.step(cpu, 2);
+    const ErrStats cmp = compare_interleaved(gpu, cpu.data());
+    const double tol = cmp.tol();
+    const bool pass = cmp.max_err < tol;
+    std::printf("%s (raw Vulkan): 8 turning + 2 frozen steps max |gpu - cpu| = "
+                "%.3e (tol %.3e)  [%s]\n",
+                name, cmp.max_err, tol, pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 int main() {
     const char* env = std::getenv("SES_VK_VALIDATION");
     const bool want_validation = (env != nullptr && env[0] == '1');
@@ -4042,6 +4135,10 @@ int main() {
         {"engine_collapse_flush", check_engine_collapse_flush},
         {"engine_two_center_potential", check_engine_two_center_potential},
         {"engine_two_center_forces", check_engine_two_center_forces},
+        {"engine_two_center_potential_values",
+         check_engine_two_center_potential_values},
+        {"engine_two_center_rotating_batch",
+         check_engine_two_center_rotating_batch},
 #ifdef SES_HAVE_VKFFT
         {"native_vkfft_perf", check_native_vkfft_perf},
 #endif
