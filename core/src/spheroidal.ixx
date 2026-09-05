@@ -327,14 +327,19 @@ inline std::vector<H2plusOrbital> h2plus_atlas(double R, int max_states) {
     return out;
 }
 
-// Sample a real orbital onto a Cartesian grid. Molecular axis = x, nuclei at
-// +-R/2. partner: 0 = cos(m phi) (y-lobed), 1 = sin(m phi) (z-lobed); m=0
-// ignores it. Grid-normalized.
+// Sample a real orbital onto a Cartesian grid along the molecular axis n
+// (unit), nuclei at -+(R/2) n; azimuth phi about n measured from e1 with
+// e2 = n x e1. partner: 0 = cos(m phi) (e1-lobed), 1 = sin(m phi)
+// (e2-lobed); m=0 ignores it. Grid-normalized. CONTRACT:
+// tests/spheroidal_test.cpp SynthesizeH2plus.*.
 inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
-                                 int partner) {
+                                 int partner, Vec3d n, Vec3d e1) {
     Field3D f{g};
     const double R = o.R;
     const double half = 0.5 * R;
+    const Vec3d e2 = cross(n, e1);
+    const Vec3d na = (-half) * n;  // nucleus A
+    const Vec3d nb = half * n;     // nucleus B
     // high_zero: xi (semi-infinite) decays to 0 past xi_max; eta (compact)
     // holds its edge value.
     auto interp = [](const std::vector<double>& xs,
@@ -361,18 +366,18 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
         for (int j = 0; j < g.y.n; ++j) {
             const double y = g.y.coord(j);
             for (int i = 0; i < g.x.n; ++i) {
-                const double x = g.x.coord(i);
-                const double rA =
-                    std::sqrt((x + half) * (x + half) + y * y + z * z);
-                const double rB =
-                    std::sqrt((x - half) * (x - half) + y * y + z * z);
+                const Vec3d r{g.x.coord(i), y, z};
+                const Vec3d da = r - na;
+                const Vec3d db = r - nb;
+                const double rA = std::sqrt(dot(da, da));
+                const double rB = std::sqrt(dot(db, db));
                 double xi = (rA + rB) / R;
                 double eta = (rA - rB) / R;
                 xi = std::max(1.0, xi);
                 eta = std::clamp(eta, -1.0, 1.0);
                 double ang = 1.0;
                 if (o.m > 0) {
-                    const double phi = std::atan2(z, y);
+                    const double phi = std::atan2(dot(r, e2), dot(r, e1));
                     ang = partner == 0 ? std::cos(o.m * phi)
                                        : std::sin(o.m * phi);
                 }
@@ -390,6 +395,12 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
         }
     }
     return f;
+}
+
+inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
+                                 int partner) {
+    return synthesize_h2plus(g, o, partner, Vec3d{1.0, 0.0, 0.0},
+                             Vec3d{0.0, 1.0, 0.0});
 }
 
 }  // namespace ses
