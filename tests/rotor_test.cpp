@@ -276,11 +276,10 @@ struct QuarterTurnResult {
     double e_total_drift;  // (E_el + E_rot)(T/4) - (E_el + E_rot)(0)
 };
 
-QuarterTurnResult quarter_turn(bool follow, int batch) {
+QuarterTurnResult quarter_turn(bool follow, int batch, double dt = 0.04) {
     const ses::Grid3D g = cube(5.0, 32);  // h = 0.3125 like the 256^3 scene
     const double R = 1.875;
     const double mu = 918.076;
-    const double dt = 0.04;
     const ses::H2plusOrbital orb = ses::h2plus_atlas_baked(R).front();
     const Vec3d z{0.0, 0.0, 1.0};
     auto potential = [&](Vec3d n) {
@@ -322,9 +321,14 @@ TEST(RotorEhrenfest, PotentialFollowingBatchesConserveJOverAQuarterTurn) {
                 f.j_end, f.n_y, f.e_total_drift);
     EXPECT_LT(f.n_y, -0.99);
     EXPECT_NEAR(f.j_end, 35.0, 0.05);
-    // Exact forces make the exchange conservative: what the electron gains
-    // the rotor pays (a stencil force leaks ~5e-4 Ha per quarter turn).
-    EXPECT_LT(std::abs(f.e_total_drift), 2e-4);
+    // Total energy: the exact force makes the exchange itself conservative;
+    // what remains is the boundary-sampled Strang error of the MOVING V,
+    // ~dt^2 and independent of the batch length (1.4 mHa at dt 0.04, 0.23
+    // at 0.02, same at B = 1..64). Ceiling at the scene dt + convergence.
+    EXPECT_LT(std::abs(f.e_total_drift), 2e-3);
+    const QuarterTurnResult g = quarter_turn(true, 16, 0.02);
+    std::printf("  following B=16 dt/2: dE_total = %.2e Ha\n", g.e_total_drift);
+    EXPECT_LT(std::abs(g.e_total_drift), std::abs(f.e_total_drift) / 3.0);
 }
 
 TEST(RotorEhrenfest, FrozenPotentialBatchesBiasJ) {

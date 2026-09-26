@@ -434,7 +434,8 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateIsBelowBudget) {
 
 // The residual must fall at least as h^2.6 (measured ~10x: 0.27 -> 0.026 mHa).
 // Extremes only (on-point vs corner); 64^3 at h/2 is the costly half. The
-// h/2 ground state is within 1 mHa of exact (non-variational: -0.5007).
+// h/2 discrete ground is -0.50123 (1.2 mHa BELOW exact: non-variational);
+// the dtau 0.03 fixed point reads -0.50072 (+0.5 mHa Trotter bias).
 TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
     const ses::Grid3D fine{ses::Grid1D{-5.0, 5.0, 64}, ses::Grid1D{-5.0, 5.0, 64},
                            ses::Grid1D{-5.0, 5.0, 64}};
@@ -453,7 +454,7 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
                 refined);
     EXPECT_LT(refined, 5.0e-5);
     EXPECT_LT(refined, coarse / 6.0);
-    EXPECT_NEAR(relaxed_ground_energy(fine, {}, 0.03, 600), -0.5, 1.0e-3);
+    EXPECT_NEAR(relaxed_ground_energy(fine, {}, 0.03, 600), -0.5, 2.0e-3);
 }
 
 // ---- Trotter-phase guard: a kick e^{-iV dt/2} with |V| dt/2 > pi ALIASES

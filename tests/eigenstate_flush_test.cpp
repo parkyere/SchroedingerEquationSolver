@@ -135,7 +135,9 @@ TEST(EigenstateFlush, GroundDeepBurstConvergesToTheGridGroundState) {
     relaxer.relax(psi, kBurstStepsGround);
 
     EXPECT_NEAR(ses::mean_energy(psi, reg_potential()), e_ref, 5e-3);
-    EXPECT_GT(population(psi0, psi), 0.99);
+    // The synthesized cusp overlaps the band-limited grid ground at 0.989
+    // (point-sampled grid: 0.995): the burst may move it that much.
+    EXPECT_GT(population(psi0, psi), 0.98);
 }
 
 TEST(EigenstateFlush, TwoPzBurstOpensNoParityForbiddenOneSChannel) {
