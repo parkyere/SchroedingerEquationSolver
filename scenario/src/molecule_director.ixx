@@ -475,9 +475,11 @@ protected:
                    ? atlas_[static_cast<std::size_t>(k)].label.c_str()
                    : "";
     }
+    // Ready = a valid member and no flush in flight (the shown member sits on
+    // the grid's bound manifold; the atlas itself is immediate).
     bool prepared(int k) const override {
         ensure_atlas();
-        return k >= 0 && k < static_cast<int>(atlas_.size());
+        return k >= 0 && k < static_cast<int>(atlas_.size()) && flushed_;
     }
     double energy(int k) const override {
         ensure_atlas();
@@ -492,8 +494,8 @@ protected:
         }
         showing_random_ = false;
         cur_ = k;
-        const Mo& mo = atlas_[static_cast<std::size_t>(k)];
-        set_state_field(ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner, rotor_.n, e1_));
+        set_state_field(synth_member(k));
+        start_flush(k);
     }
     // Random = normalized superposition of atlas orbitals: a legitimate bound
     // state, not a raw random blob.
@@ -516,7 +518,7 @@ protected:
         }
         ses::normalize(acc);
         showing_random_ = true;
-        set_state_field(acc);
+        set_state_field(acc);  // sampled members, unflushed (see title)
     }
 
     void on_gpu_ready() override {
@@ -588,6 +590,7 @@ protected:
     }
 
     void after_reset() override {
+        abort_flush();
         reset_rotor();
         rebuild_markers();
     }
@@ -600,12 +603,13 @@ protected:
                       (atlas_[0].orb.energy + rep) * kHaToEv);
         }
         if (showing_random_) {
-            s += "  showing: random atlas superposition";
+            s += "  showing: random atlas superposition (sampled, unflushed)";
         } else if (cur_ >= 0 && cur_ < static_cast<int>(atlas_.size())) {
-            s += strf("  showing {}: E_elec = {:.2f} eV",
+            s += strf("  showing {}: E_elec = {:.2f} eV{}",
                       atlas_[static_cast<std::size_t>(cur_)].label.c_str(),
                       atlas_[static_cast<std::size_t>(cur_)].orb.energy *
-                          kHaToEv);
+                          kHaToEv,
+                      flushed_ ? "" : "  (flushing onto the grid...)");
         }
         s += strf("  ({} known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
@@ -659,12 +663,91 @@ private:
     };
 
     void set_state_field(const ses::Field3D& psi) {
+        abort_flush();
         sim_.set_psi(psi);
         cpu_is_truth_ = true;  // run_frame uploads it to the engine
         stepping_ = BaseStepping::RealTime;
         title_dirty_ = true;
         stage_active_view();
     }
+
+    ses::Field3D synth_member(int k) const {
+        const Mo& mo = atlas_[static_cast<std::size_t>(k)];
+        ses::Field3D f =
+            ses::synthesize_h2plus(sim_.grid(), mo.orb, mo.partner, rotor_.n, e1_);
+        ses::normalize(f);
+        return f;
+    }
+
+    // ---- atlas flush (ses::kH2plusAtlasFlush*; CONTRACT: --selftest-h2p) ----
+    // ITP on the freshly uploaded member, deflated against the lower members
+    // synthesized along the SAME axis (GPU handles, released when it lands).
+    // Tables bake current_potential() (relax_potential), so a rotated axis
+    // flushes in its own V.
+    void start_flush(int k) {
+        if (!use_gpu_path()) {
+            flushed_ = true;  // CPU path: shown as sampled
+            return;
+        }
+        flush_v_ = current_potential();  // the live axis (relax_potential)
+        if (!ensure_relax_tables()) {
+            flush_v_.clear();
+            flushed_ = true;
+            return;
+        }
+        for (int i = 0; i < k; ++i) {
+            const int h = engine_.create_state_buffer(synth_member(i).data());
+            if (h >= 0) {
+                flush_deflate_.push_back(h);
+            }
+        }
+        flush_left_ = ses::kH2plusAtlasFlushSteps;
+        flushed_ = false;
+        stepping_ = BaseStepping::Relaxing;
+    }
+
+    void run_relax_batch() override {
+        const ses_vk::Engine::RelaxStats stats =
+            flush_deflate_.empty()
+                ? engine_.relax_step(pending_gpu_steps_)
+                : engine_.relax_deflated_step(flush_deflate_, pending_gpu_steps_);
+        relax_energy_display_ = stats.energy;
+        if (stats.peak > 0.0) {
+            peak_ = stats.peak;
+        }
+        norm_display_ = 1.0;
+        flush_left_ -= pending_gpu_steps_;
+        if (flush_left_ <= 0) {
+            finish_flush(true);
+        }
+    }
+
+    void finish_flush(bool landed) {
+        for (const int h : flush_deflate_) {
+            engine_.release_state(h);
+        }
+        flush_deflate_.clear();
+        flush_left_ = 0;
+        engine_.release_relax_tables();
+        std::vector<double>().swap(flush_v_);  // 134 MB at 256^3: drop it
+        flushed_ = landed || flushed_;
+        if (landed) {
+            stepping_ = BaseStepping::RealTime;
+        }
+        title_dirty_ = true;
+    }
+
+    void abort_flush() {
+        if (flush_left_ > 0 || !flush_deflate_.empty()) {
+            finish_flush(false);
+        }
+        flushed_ = true;  // whatever replaces the member is shown as-is
+    }
+
+    const std::vector<double>& relax_potential() const override {
+        return flush_v_;
+    }
+    double relax_dtau() const override { return ses::kH2plusAtlasFlushDtau; }
 
     // Representable if Lambda(xi) has decayed well inside the box
     // (physical r ~ (R/2) xi).
@@ -766,6 +849,10 @@ private:
     int cur_ = 0;  // currently-shown atlas index
     ses::RigidRotor rotor_;
     ses::Vec3d e1_{1.0, 0.0, 0.0};  // azimuth reference, parallel-transported
+    std::vector<int> flush_deflate_;  // lower members' GPU handles, in flight
+    std::vector<double> flush_v_;     // V along the live axis, tables only
+    int flush_left_ = 0;
+    bool flushed_ = true;
     ses::Vec3d pred_n_{};           // scheduled batch's end axis
     bool scheduled_ = false;
     std::atomic<int> jmax_{0};

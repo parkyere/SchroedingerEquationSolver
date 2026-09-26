@@ -403,4 +403,12 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
                              Vec3d{0.0, 1.0, 0.0});
 }
 
+// A SAMPLED member is not a grid eigenstate (h = 0.31: 1sigma_g 145 mHa above
+// the grid ground, Var 1.8 Ha^2, 4% continuum that disperses in ~40 au).
+// Scene flush: ITP tau = 2, deflated against the lower synthesized members,
+// lands it on the grid state (E within 1 mHa, overlap 0.9998). CONTRACT:
+// spheroidal_test AtlasFlush; --selftest-h2p grid <H_el>.
+inline constexpr double kH2plusAtlasFlushDtau = 0.05;
+inline constexpr int kH2plusAtlasFlushSteps = 40;
+
 }  // namespace ses
