@@ -1700,13 +1700,20 @@ void register_verification_arcs(ShellT* the_shell) {
                             const double e_g = m->energy(0);
                             const double e_u = m->energy(1);
                             const double et = e_g + m->nuclear_repulsion();
+                            // The SHOWN state (1sigma_u*) must be the grid's
+                            // own: its <H_el> within 5 mHa of the atlas
+                            // energy (raw sampling sits 30 mHa above; 145 for
+                            // sigma_g).
+                            const double e_grid = shell->ro()->electronic_energy();
                             const bool order_ok = e_u > e_g;
                             const bool bond_ok = et < -0.5;
-                            const bool pass = order_ok && bond_ok;
+                            const bool flushed = std::abs(e_grid - e_u) < 5e-3;
+                            const bool pass = order_ok && bond_ok && flushed;
                             std::fprintf(stderr,
                                          "%s: E_g = %.4f, E_u = %.4f, "
-                                         "E_tot = %.4f < -0.5 (bound)?  [%s]\n",
-                                         name, e_g, e_u, et,
+                                         "E_tot = %.4f < -0.5 (bound)?  "
+                                         "grid <H_el>(1su*) = %.4f  [%s]\n",
+                                         name, e_g, e_u, et, e_grid,
                                          pass ? "PASS" : "FAIL");
                             shell->request_exit(pass ? 0 : 1);
                         },
