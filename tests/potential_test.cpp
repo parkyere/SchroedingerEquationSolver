@@ -237,7 +237,8 @@ TEST(RegularizedCoulomb, AnOffGridNucleusIsTheSameFunctionOfDistance) {
 }
 
 // ---- Si(x) = integral_0^x sin t / t dt: series below 4, the Abramowitz-Stegun
-// 5.2.38/39 rational f, g above (|err| < 5e-7). Oracle: composite Simpson.
+// 5.2.38/39 rational f, g above (composite |err| 5.7e-7, worst near x ~ 13;
+// <= 5.2e-7 at the points below). Oracle: composite Simpson.
 double si_simpson(double x) {
     const int n = 200000;  // even
     const double h = x / n;
@@ -485,17 +486,21 @@ TEST(ClampTrotterPhase, IsTheIdentityWhenEveryKickIsWithinBudget) {
 }
 
 // ---- d/dr of the band-limited Coulomb: (2/pi)(sin Kr - Si Kr)/r^2, the
-// radial factor of the EXACT lattice-energy gradient (central differences of
-// the sampled V miss up to 24% of the sigma_g torque: sin(kh)/(kh) on a V
-// with content up to Nyquist). -> 0 linearly at r = 0: -(2/pi) K^3 r/9.
+// radial factor of the lattice-energy gradient (central differences of the
+// sampled V miss up to 24% of the sigma_g torque: sin(kh)/(kh) on a V with
+// content up to Nyquist). -> 0 linearly at r = 0: -(2/pi) K^3 r/9.
+// Oracle: finite difference of the EXACT band limit (Simpson Si, ~1e-11).
+// The production Si is the AS rational fit above x = 4 (|err| <= 5.7e-7), so
+// the gradient is good to ~1e-6 relative; an FD of the production potential
+// would add the fit's derivative error, x * 5e-7 relative (1e-5 at 7 h).
 TEST(BandLimitedCoulombGradient, MatchesTheFiniteDifferenceOfThePotential) {
     const double h = 0.3125;
+    const double k = std::numbers::pi / h;
+    auto exact = [&](double r) { return 2.0 / std::numbers::pi * si_simpson(k * r) / r; };
     for (const double cells : {0.3, 1.0, 1.7, 2.5, 7.0, 30.0}) {
         const double r = cells * h;
         const double d = 1e-5 * h;
-        const double fd = (ses::band_limited_coulomb(r + d, h) -
-                           ses::band_limited_coulomb(r - d, h)) /
-                          (2.0 * d);
+        const double fd = (exact(r + d) - exact(r - d)) / (2.0 * d);
         const double an = ses::band_limited_coulomb_gradient(r, h);
         EXPECT_NEAR(an, fd, 1e-6 * std::abs(fd) + 1e-9) << "r = " << cells << " h";
     }

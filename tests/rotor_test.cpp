@@ -330,8 +330,9 @@ TEST(RotorEhrenfest, PotentialFollowingBatchesConserveJOverAQuarterTurn) {
 TEST(RotorEhrenfest, FrozenPotentialBatchesBiasJ) {
     const QuarterTurnResult z = quarter_turn(false, 32);
     std::printf("  frozen B=32: J = %.4f, n_y = %.4f\n", z.j_end, z.n_y);
-    // Magnitude only: the sign follows where the torque is sampled (batch
-    // start +0.2, batch end -0.9 at 32 steps). The scene must carry neither.
+    // Magnitude only: the sign follows the state and the batch length (the
+    // old scene read +0.2 at 16 steps from the atlas state; this control
+    // reads -0.9 at 32 steps). The scene must carry neither.
     EXPECT_GT(std::abs(z.j_end - 35.0), 0.15);
 }
 

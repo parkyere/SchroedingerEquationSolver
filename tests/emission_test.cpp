@@ -79,8 +79,8 @@ TEST(LarmorPower, ExactFactorAndQuadraticScaling) {
 }
 
 // QED photon record: detecting the E1 photon as a plane wave (n, lambda)
-// projects the atom onto c_m ~ conj(e_lambda(n)).D_m -- angular momentum
-// conservation lives in this coupling.
+// projects the atom onto c_m ~ conj(e_lambda(n)).D_m -- the J-conserving
+// coupling (the record's lambda n is the photon's spin, half of <dL>).
 
 using ses::DipoleMatrixElement;
 const double kS2 = 1.0 / std::sqrt(2.0);

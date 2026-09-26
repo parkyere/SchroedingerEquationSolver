@@ -1,4 +1,5 @@
-// Photon display policy: streak helix (twist sense = helicity, comoving
+// Photon display policy: streak helix (spatial screw sense = -helicity, the
+// field's own: Re[(th + i lam ph) e^{i(ks - wt)}] = th cos - lam ph sin; comoving
 // phase), constant display speed (Lyman-alpha = 2 s), flash 1/3 peak, and the
 // 16-slot concurrent-flight pool. Contract for core/src/photon_display.ixx.
 
@@ -157,10 +158,12 @@ TEST(PhotonStreak, HelixTwistSenseFollowsHelicity) {
         EXPECT_NEAR(v[0].z, sh - ses::kPhotonTurns * 25.0, 1e-9);
         EXPECT_NEAR(v[0].x, ses::kPhotonStreakRadius, 1e-9);
         EXPECT_NEAR(v[0].y, 0.0, 1e-9);
-        // Twist sense: consecutive transverse vectors rotate with sign lam.
+        // Screw sense: along +n the field of helicity lam rotates th -> -lam ph
+        // (a left-handed screw for lam = +1, which rotates right-handed in
+        // TIME at a fixed point). The mirror image is the other helicity.
         for (std::size_t i = 0; i + 1 < body; ++i) {
             const double cross = v[i].x * v[i + 1].y - v[i].y * v[i + 1].x;
-            EXPECT_GT(lam * cross, 0.0);
+            EXPECT_LT(lam * cross, 0.0);
         }
     }
 }
