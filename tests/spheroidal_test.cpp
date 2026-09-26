@@ -16,6 +16,9 @@ import ses.grid;
 import ses.observables;
 import ses.potential;
 import ses.vec;
+import ses.imaginary_time;
+import ses.spectral;
+import ses.fft;
 
 namespace {
 
@@ -203,6 +206,94 @@ TEST(Spheroidal, BakedGroundSynthesizesLikeTheLiveSolve) {
         g, 1.0, {{-R / 2, 0.0, 0.0}, {R / 2, 0.0, 0.0}});
     const double e = ses::mean_energy(psi, v);
     EXPECT_LT(e, -0.5) << "baked ground synthesizes a bound state";
+}
+
+// ---- atlas flush (CONTRACT for the H2+ scene's prepare(k)) ----
+// A spheroidal orbital SAMPLED on h = 0.3125 is not a grid eigenstate: the
+// cusp's high-k content puts 1sigma_g 145 mHa above the grid ground (Var 1.8
+// Ha^2, 3.7% continuum that disperses over the box in ~40 au). The scene's
+// flush -- ITP kH2plusAtlasFlushSteps x kH2plusAtlasFlushDtau, deflated
+// against the lower SYNTHESIZED members -- must land each member on its grid
+// state: |E - E_grid| < 1 mHa, overlap > 0.999, Var < 1e-2.
+
+double energy_variance3(const Field3D& psi, const std::vector<double>& v) {
+    const Grid3D& g = psi.grid();
+    Field3D hp = psi;
+    ses::fft(hp);
+    const std::vector<double> kx = ses::wavenumbers(g.x);
+    const std::vector<double> ky = ses::wavenumbers(g.y);
+    const std::vector<double> kz = ses::wavenumbers(g.z);
+    ses::for_each_cell(g, [&](int i, int j, int k) {
+        hp(i, j, k) *= 0.5 * (kx[i] * kx[i] + ky[j] * ky[j] + kz[k] * kz[k]);
+    });
+    ses::ifft(hp);
+    double hh = 0.0;
+    double nn = 0.0;
+    for (std::size_t i = 0; i < psi.data().size(); ++i) {
+        hh += std::norm(hp.data()[i] + v[i] * psi.data()[i]);
+        nn += std::norm(psi.data()[i]);
+    }
+    const double e = ses::mean_energy(psi, v);
+    return hh / nn - e * e;
+}
+
+struct AtlasFlushRig {
+    Grid3D g{Grid1D{-10.0, 10.0, 64}, Grid1D{-10.0, 10.0, 64},
+             Grid1D{-10.0, 10.0, 64}};  // h = 0.3125 = the 256^3/+-40 scene
+    double R = 1.875;
+    std::vector<double> v = ses::regularized_coulomb_potential(
+        g, 1.0, std::vector<Vec3d>{{0.0, 0.0, 0.5 * R}, {0.0, 0.0, -0.5 * R}});
+    std::vector<ses::H2plusOrbital> atlas = ses::h2plus_atlas_baked(R);
+    Field3D synth(int k) const {
+        Field3D f = ses::synthesize_h2plus(g, atlas[static_cast<std::size_t>(k)], 0,
+                                           Vec3d{0.0, 0.0, 1.0}, Vec3d{1.0, 0.0, 0.0});
+        ses::normalize(f);
+        return f;
+    }
+};
+
+TEST(AtlasFlush, SynthesizedSigmaGLandsOnTheGridGround) {
+    const AtlasFlushRig rig;
+    const ses::ImaginaryTimePropagator3D itp{rig.g, rig.v, ses::kH2plusAtlasFlushDtau};
+    const Field3D sg = rig.synth(0);
+    Field3D ground = sg;
+    itp.relax(ground, 400);  // converged reference (tau = 20)
+    const double e_grid = ses::mean_energy(ground, rig.v);
+    // Before: not a grid eigenstate (the defect the flush exists for).
+    EXPECT_GT(ses::mean_energy(sg, rig.v) - e_grid, 0.1);
+    EXPECT_LT(std::norm(ses::inner_product(ground, sg)), 0.97);
+    Field3D psi = sg;
+    itp.relax(psi, ses::kH2plusAtlasFlushSteps);
+    const double e = ses::mean_energy(psi, rig.v);
+    std::printf("  sigma_g: E %.5f -> %.5f (grid %.5f), Var %.2e, overlap %.5f\n",
+                ses::mean_energy(sg, rig.v), e, e_grid, energy_variance3(psi, rig.v),
+                std::norm(ses::inner_product(ground, psi)));
+    EXPECT_NEAR(e, e_grid, 1e-3);
+    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.999);
+    EXPECT_LT(energy_variance3(psi, rig.v), 1e-2);
+}
+
+TEST(AtlasFlush, ExcitedMemberDeflatedAgainstTheSynthesizedLowerOnes) {
+    const AtlasFlushRig rig;
+    const ses::ImaginaryTimePropagator3D itp{rig.g, rig.v, ses::kH2plusAtlasFlushDtau};
+    const Field3D sg = rig.synth(0);
+    const Field3D su = rig.synth(1);
+    Field3D ground = sg;
+    itp.relax(ground, 400);
+    Field3D excited = su;
+    itp.relax_deflated(excited, {&ground}, 400);  // converged 1sigma_u* reference
+    const double e_grid = ses::mean_energy(excited, rig.v);
+    EXPECT_GT(ses::mean_energy(su, rig.v) - e_grid, 0.02);
+    // The scene deflates against the synthesized (not flushed) lower members.
+    Field3D psi = su;
+    itp.relax_deflated(psi, {&sg}, ses::kH2plusAtlasFlushSteps);
+    const double e = ses::mean_energy(psi, rig.v);
+    std::printf("  sigma_u*: E %.5f -> %.5f (grid %.5f), overlap %.5f\n",
+                ses::mean_energy(su, rig.v), e, e_grid,
+                std::norm(ses::inner_product(excited, psi)));
+    EXPECT_NEAR(e, e_grid, 1e-3);
+    EXPECT_GT(std::norm(ses::inner_product(excited, psi)), 0.999);
+    EXPECT_LT(energy_variance3(psi, rig.v), 1e-2);
 }
 
 }  // namespace
