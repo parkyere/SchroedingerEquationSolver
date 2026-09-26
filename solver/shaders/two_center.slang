@@ -30,7 +30,7 @@ float tc_sine_integral(float x) {
         float x2 = x * x;
         float term = x;
         float s = 0.0;
-        for (int n = 0; n < 20; ++n) {
+        for (int n = 0; n < 24; ++n) {
             s += term / float(2 * n + 1);
             term *= -x2 / float((2 * n + 2) * (2 * n + 3));
         }

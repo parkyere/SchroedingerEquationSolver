@@ -71,8 +71,11 @@ inline constexpr double larmor_power(const Vec3d& dipole_accel) noexcept {
 
 // ---- QED photon record: E1 direction + helicity conditioning ----
 // Detecting the photon as a plane wave (n, lambda) projects the atom onto
-// c_m ~ conj(e_lambda(n)) . D_m over the degenerate destination sublevels;
-// angular momentum bookkeeping is automatic in this coupling.
+// c_m ~ conj(e_lambda(n)) . D_m over the degenerate destination sublevels:
+// the J-conserving coupling itself. The record carries the photon's SPIN
+// only: ensemble <lambda n> = (1/2)(<L>_before - <L>_after); the other half
+// is the E1 photon's orbital part, which no plane-wave record holds.
+// Per-event closure holds only for detection along the source's axis.
 
 struct PhotonRecord {
     Vec3d n;       // propagation direction (unit)
