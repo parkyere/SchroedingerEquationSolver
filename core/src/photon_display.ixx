@@ -10,8 +10,9 @@ export import ses.emission;
 import ses.vec;
 
 
-// Photon DISPLAY policy: streak helix e^{i lambda k s} (twist/rotation sense
-// = helicity, comoving phase), constant display speed (Lyman-alpha = 2 s),
+// Photon DISPLAY policy: streak helix = Re[(th + i lam ph) e^{i k (s - s_head)}]
+// (the field's own screw: sense -lambda along n, comoving phase), constant
+// display speed (Lyman-alpha = 2 s),
 // flash peak, concurrent-flight pool. The physics (conditioning, sampling)
 // lives in ses.emission.
 
@@ -138,7 +139,9 @@ inline double photon_streak_alpha(double progress) noexcept {
 // Body helix trails the head by kPhotonTurns wavelengths (clamped at the
 // nucleus); the last vertex is the on-axis arrow tip ahead of the body.
 // Transverse frame = helicity_vector's (theta_hat, phi_hat) and phase =
-// k(s - s_head), so the spring twists AND rotates in flight, sense = helicity.
+// k(s - s_head): th cos a - lam ph sin a, the plane wave's own field, so the
+// spring twists (sense -lambda along n) AND rotates in flight (sense +lambda
+// in time at a fixed point).
 inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
                                                  double delta_e,
                                                  double progress) {
@@ -162,7 +165,7 @@ inline std::vector<Vec3d> photon_streak_vertices(const PhotonRecord& ph,
             s0 + (sh - s0) * static_cast<double>(i) / (nb - 1);
         const double a = k * (s - sh);
         const double cx = std::cos(a) * kPhotonStreakRadius;
-        const double cy = lam * std::sin(a) * kPhotonStreakRadius;
+        const double cy = -lam * std::sin(a) * kPhotonStreakRadius;
         v[static_cast<std::size_t>(i)] =
             Vec3d{n.x * s + th.x * cx + fi.x * cy,
                   n.y * s + th.y * cx + fi.y * cy,
