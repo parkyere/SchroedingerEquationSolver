@@ -296,4 +296,76 @@ TEST(AtlasFlush, ExcitedMemberDeflatedAgainstTheSynthesizedLowerOnes) {
     EXPECT_LT(energy_variance3(psi, rig.v), 1e-2);
 }
 
+
+// Flushed reference chain: member k relaxed 400 steps deflated against the
+// converged lower members (the grid's own bound states, in atlas order).
+std::vector<Field3D> flushed_reference_chain(const AtlasFlushRig& rig, int top) {
+    const ses::ImaginaryTimePropagator3D itp{rig.g, rig.v, ses::kH2plusAtlasFlushDtau};
+    std::vector<Field3D> ref;
+    for (int k = 0; k < top; ++k) {
+        std::vector<const Field3D*> lower;
+        for (const Field3D& r : ref) {
+            lower.push_back(&r);
+        }
+        Field3D f = rig.synth(k);
+        itp.relax_deflated(f, lower, 400);
+        ref.push_back(std::move(f));
+    }
+    return ref;
+}
+
+// The scene exposes up to 24 members. For k >= 2 the flush cannot reach the
+// converged grid state at tau = 2: a sampled member carries ~0.5% of the
+// SAME-symmetry higher bound states (2p pi_u holds 3p pi_u, dE = 0.23 Ha ->
+// e^{-0.47} per flush; pre-flushing the projectors changes nothing, the
+// lower sigma members are orthogonal by symmetry). What the flush promises
+// for every member: the continuum is gone (Var < 1e-2), E within 3 mHa of
+// the converged grid state, overlap > 0.99 (k <= 1: 1 mHa, 0.999).
+TEST(AtlasFlush, EveryExposedMemberLandsOnItsGridState) {
+    const AtlasFlushRig rig;
+    const int top = 5;  // 1s sg, 1s su*, 2p pu, 2s sg, 2p su
+    const std::vector<Field3D> ref = flushed_reference_chain(rig, top);
+    std::vector<Field3D> synth;
+    for (int k = 0; k < top; ++k) {
+        synth.push_back(rig.synth(k));
+    }
+    const ses::ImaginaryTimePropagator3D itp{rig.g, rig.v, ses::kH2plusAtlasFlushDtau};
+    for (int k = 0; k < top; ++k) {
+        // Projectors = the raw synthesized lower members (what the scene does).
+        std::vector<const Field3D*> lower;
+        for (int j = 0; j < k; ++j) {
+            lower.push_back(&synth[static_cast<std::size_t>(j)]);
+        }
+        Field3D psi = synth[static_cast<std::size_t>(k)];
+        itp.relax_deflated(psi, lower, ses::kH2plusAtlasFlushSteps);
+        const double e = ses::mean_energy(psi, rig.v);
+        const double e_ref = ses::mean_energy(ref[static_cast<std::size_t>(k)], rig.v);
+        const double ov = std::norm(ses::inner_product(ref[static_cast<std::size_t>(k)], psi));
+        const double var = energy_variance3(psi, rig.v);
+        std::printf("  member %d: E %.5f (grid %.5f), overlap %.5f, Var %.2e\n", k, e,
+                    e_ref, ov, var);
+        EXPECT_LT(var, 1e-2) << "member " << k;
+        EXPECT_NEAR(e, e_ref, k <= 1 ? 1e-3 : 3e-3) << "member " << k;
+        EXPECT_GT(ov, k <= 1 ? 0.999 : 0.99) << "member " << k;
+    }
+}
+
+// A rotated ion flushes in its own V (relax_potential = the live axis).
+TEST(AtlasFlush, TiltedAxisSigmaGLandsOnItsOwnGridGround) {
+    const AtlasFlushRig rig;
+    const Vec3d n = ses::normalized(Vec3d{0.6, 0.1, 0.8});
+    const Vec3d e1 = ses::normalized(ses::cross(n, Vec3d{0.0, 1.0, 0.0}));
+    const std::vector<double> v = ses::regularized_coulomb_potential(
+        rig.g, 1.0, std::vector<Vec3d>{(0.5 * rig.R) * n, (-0.5 * rig.R) * n});
+    const ses::ImaginaryTimePropagator3D itp{rig.g, v, ses::kH2plusAtlasFlushDtau};
+    Field3D sg = ses::synthesize_h2plus(rig.g, rig.atlas[0], 0, n, e1);
+    ses::normalize(sg);
+    Field3D ground = sg;
+    itp.relax(ground, 400);
+    Field3D psi = sg;
+    itp.relax(psi, ses::kH2plusAtlasFlushSteps);
+    EXPECT_NEAR(ses::mean_energy(psi, v), ses::mean_energy(ground, v), 1e-3);
+    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.999);
+}
+
 }  // namespace
