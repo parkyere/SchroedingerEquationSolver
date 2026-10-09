@@ -1,14 +1,6 @@
 module;
 #include <volk.h>
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include <vk_mem_alloc.h>
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ses_vma.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -27,14 +19,10 @@ module;
 #pragma warning(pop)
 #endif
 #endif
-#include <complex>
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
+#include <complex>
 #include <numbers>
-#include <vector>
 export module ses.vk.engine;
 export import ses.vk.compute;
 import ses.mc.tables;
@@ -48,9 +36,11 @@ export import ses.decay;
 
 // ses_vk::Engine: split-operator Strang step + imaginary-time relaxation on
 // raw Vulkan (ses.vk.compute). SPIR-V blobs and the DeviceContext are
-// injected, so one engine serves headless (checks, clusters) and the GUI shell.
+// injected, so one engine serves headless (vkcheck) and the GUI shell.
 // Sync contract: compute-to-compute barrier before every psi-aliasing
-// dispatch, transfer barriers around uploads/readbacks, fence wait per submit.
+// dispatch, transfer barriers around uploads/readbacks, a fence wait per
+// blocking submit; step_async overlaps ONE batch with rendering and every
+// psi-touching entry point drains it first (wait_async).
 // GMF macro pre-claim (C++20 modules): volk.h supplies the VK_* macros (macros
 // don't cross module boundaries) and vk_mem_alloc.h keeps vma* calls compiling;
 // volk's VK_NO_PROTOTYPES lets header-only VkFFT link against volk dispatch.
@@ -58,7 +48,7 @@ export import ses.decay;
 
 export namespace ses_vk {
 
-// SPIR-V blobs; caller owns the storage (embedded C arrays in the harness).
+// SPIR-V blobs; caller owns the storage (the baked headers, via engine_blobs).
 struct EngineKernels {
     const unsigned char* mul = nullptr;    // phase_multiply.comp
     const unsigned char* half_mul = nullptr;  // half_mul.comp
@@ -213,7 +203,10 @@ public:
         mul_groups_ = group_count(cells_);
         field_bytes_ = 2 * cells_ * sizeof(float);
 
-        // Kick UBO slot stride: device min offset alignment, grown to a KickParams.
+        // Dynamic-UBO slot stride (kick AND two-center schedules share it):
+        // device min offset alignment, grown to hold the larger record. A
+        // KickParams-only stride overlapped TwoCenterParams slots wherever the
+        // alignment is <= 64 (AMD/Intel/lavapipe).
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx.phys_dev, &props);
         kick_stride_ = static_cast<std::uint32_t>(
@@ -221,7 +214,9 @@ public:
         if (kick_stride_ == 0) {
             kick_stride_ = 256;
         }
-        while (kick_stride_ < sizeof(KickParams)) {
+        constexpr std::size_t kSlotBytes =
+            std::max(sizeof(KickParams), sizeof(TwoCenterParams));
+        while (kick_stride_ < kSlotBytes) {
             kick_stride_ *= 2;
         }
 
@@ -627,13 +622,13 @@ public:
     // flags.absorb keeps the absorption rate independent of batch length;
     // flags.bridge rides the same submission (see StepFlags).
     void step(int nsteps, StepFlags flags = {}) {
+        wait_async();
         OneShot shot;
         if (!shot.begin_compute(*ctx_)) {
             return;
         }
         const bool bridged = record_step_batch(shot.cb(), nsteps, flags);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (bridged) {
             flip_volume();
         }
@@ -810,7 +805,6 @@ public:
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                              profile_pool_, 4);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
 
         std::uint64_t ts[kProfileStamps] = {};
         if (vkGetQueryPoolResults(
@@ -863,7 +857,6 @@ public:
         vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                              profile_pool_, 2);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
 
         std::uint64_t ts[3] = {};
         if (vkGetQueryPoolResults(ctx_->device, profile_pool_, 0, 3, sizeof(ts),
@@ -885,6 +878,7 @@ public:
     // whole batch records as a single submission.
     void driven_step(const ses::DipoleDrive& d, double t0, double dt,
                      int nsteps, StepFlags flags = {}) {
+        wait_async();
         const int kicks = 2 * nsteps;
         if (!ensure_kick_capacity(kicks)) {
             return;
@@ -919,7 +913,6 @@ public:
         }
         const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (bridged) {
             flip_volume();
         }
@@ -990,6 +983,7 @@ public:
     // Exact three-shear rotation of psi about coordinate `axis` by theta --
     // the GPU transcription of ses.rotation rotate_axis. One submission.
     void rotate_axis_shear(int axis, double theta) {
+        wait_async();
         const int b = (axis + 1) % 3;  // in-plane axes (b x c = axis)
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, theta);
@@ -1000,7 +994,6 @@ public:
         Recorder r{shot.cb(), true};
         record_rotation(r, b, c);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
     }
     void rotate_z_shear(double theta) { rotate_axis_shear(2, theta); }
 
@@ -1010,6 +1003,7 @@ public:
     // batch is one submission.
     void magnetic_step(int axis, double half_angle, int nsteps,
                        StepFlags flags = {}) {
+        wait_async();
         const int b = (axis + 1) % 3;
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, half_angle);
@@ -1026,7 +1020,6 @@ public:
         }
         const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (bridged) {
             flip_volume();
         }
@@ -1092,6 +1085,7 @@ public:
     // a host-double finish on THAT readback, then the 1/sqrt(norm) scale
     // submission. The pre-renorm norm decays as e^{-2 E dtau} -> free energy.
     RelaxStats relax_step(int nsteps) {
+        wait_async();
         RelaxStats stats;
         if (!relax_tables_ready()) {
             return stats;
@@ -1119,7 +1113,6 @@ public:
             }
             record_partials_readback(shot.cb());
             const bool ok = shot.submit_and_wait(*ctx_);
-            shot.destroy(*ctx_);
             if (!ok) {
                 return stats;  // stale partials would fake energy/peak
             }
@@ -1199,7 +1192,6 @@ public:
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
         record_partials_readback(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return {};
         }
@@ -1212,6 +1204,7 @@ public:
     // Deflated imaginary-time relax: imaginary Strang body, Gram-Schmidt
     // project-out of every `lower` state (psi -= <phi|psi> phi), renorm.
     RelaxStats relax_deflated_step(const std::vector<int>& lower, int nsteps) {
+        wait_async();
         RelaxStats stats;
         if (!relax_tables_ready()) {
             return stats;
@@ -1224,7 +1217,6 @@ public:
             Recorder r{shot.cb(), true};
             run_step_body(r, mul_, relax_half_set_, mul_, relax_kin_set_);
             shot.submit_and_wait(*ctx_);
-            shot.destroy(*ctx_);
             for (int h : lower) {
                 const std::complex<double> c = inner_with_psi(h);
                 if (device_lost()) {
@@ -1356,7 +1348,6 @@ public:
         mcwf_.bind(shot.cb(), mcwf_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         return ok;
     }
 
@@ -1580,7 +1571,6 @@ public:
         record_buffer_readback(shot.cb(), mc_indirect_,
                                6 * sizeof(std::uint32_t));
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return -1;
         }
@@ -1618,7 +1608,6 @@ public:
         }
         record_buffer_readback(shot.cb(), mc_vbuf_, bytes);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return false;
         }
@@ -1650,6 +1639,7 @@ public:
 
     // psi <- src (bitwise; the quantum-jump collapse path). fp32 states only.
     void copy_into_psi(int handle) {
+        wait_async();
         State* st = state_at(handle);
         if (st == nullptr || st->is_half) {
             return;
@@ -1661,7 +1651,6 @@ public:
         copy_.bind(shot.cb(), st->copy_set);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
     }
 
 private:
@@ -1701,6 +1690,7 @@ public:
     }
 
     void apply_mask(int handle) {
+        wait_async();
         State* st = state_at(handle);
         if (st == nullptr || st->is_half) {
             return;
@@ -1712,7 +1702,6 @@ public:
         mul_.bind(shot.cb(), st->mul_set);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
     }
 
     NormPeak norm_and_peak() {
@@ -1729,7 +1718,6 @@ public:
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
         record_partials_readback(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return out;
         }
@@ -1778,7 +1766,6 @@ public:
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         record_flow_velocity(shot.cb());
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         flip_volume();
         return true;
     }
@@ -1820,7 +1807,6 @@ public:
         transition_volume(shot.cb(), vol_display_,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return false;
         }
@@ -1877,6 +1863,7 @@ public:
     // <grad V> = sum |psi|^2 grad V * dV -- the Ehrenfest dipole
     // acceleration. Zero if no gradient was uploaded.
     ses::Vec3d mean_force() {
+        wait_async();  // reads psi: never mid-batch
         if (force_set_ == VK_NULL_HANDLE) {
             return ses::Vec3d{};
         }
@@ -1889,7 +1876,6 @@ public:
         record_buffer_readback(shot.cb(), force_partials_,
                                4 * kGroups * sizeof(float));
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return ses::Vec3d{};
         }
@@ -1919,7 +1905,6 @@ public:
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         barrier_compute_to_compute(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         return ok;
     }
 
@@ -1975,7 +1960,6 @@ public:
         record_buffer_readback(shot.cb(), tc_partials_,
                                8 * kGroups * sizeof(float));
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return out;
         }
@@ -1992,6 +1976,7 @@ public:
     // radial table u_nl(r). h_radial = rmax/(n_radial+1).
     bool synthesize_into_psi(const std::vector<double>& u, int l, int m,
                              double h_radial, double rmax, int n_radial) {
+        wait_async();
         return synthesize_into_buffer(psi_, u, l, m, h_radial, rmax, n_radial);
     }
 
@@ -2055,7 +2040,6 @@ public:
         pack_.bind(shot.cb(), pack_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         ctx_->destroy_buffer(&tmp);
         states_.push_back(st);
         res.handle = static_cast<int>(states_.size()) - 1;
@@ -2103,7 +2087,6 @@ public:
         record_buffer_readback(shot.cb(), dipole_partials_,
                                6 * kGroups * sizeof(float));
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return {};
         }
@@ -2202,7 +2185,6 @@ public:
         vkCmdDispatch(shot.cb(), static_cast<std::uint32_t>(proj_nr_), 1, 1);
         record_buffer_readback(shot.cb(), glm_buf_, glm_bytes);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return;
         }
@@ -2258,7 +2240,6 @@ public:
         scale_.bind(shot.cb(), scale_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
     }
 
     // Interleaved RG floats, 2 per cell.
@@ -2272,7 +2253,6 @@ public:
         vkCmdCopyBuffer(shot.cb(), psi_.buf, staging_.buf, 1, &down);
         barrier_transfer_to_host(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return false;
         }
@@ -2291,7 +2271,6 @@ public:
         }
         record_buffer_readback(shot.cb(), v_buf_, cells_ * sizeof(float));
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return false;
         }
@@ -2629,6 +2608,7 @@ private:
     }
 
     bool upload_raw(Buffer& dst, const void* data, VkDeviceSize bytes) {
+        wait_async();  // the batch may still read/write dst
         if (!ensure_staging(bytes)) {
             return false;
         }
@@ -2642,7 +2622,6 @@ private:
         vkCmdCopyBuffer(shot.cb(), staging_.buf, dst.buf, 1, &up);
         barrier_transfer_to_compute(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         return ok;
     }
 
@@ -2719,8 +2698,8 @@ private:
         return true;
     }
 
-    // Grow the dynamic-offset schedule UBO to `n` slots (kick_stride_ each,
-    // >= sizeof(TwoCenterParams)) and (re)point its descriptor set.
+    // Grow the dynamic-offset schedule UBO to `n` slots (kick_stride_ each;
+    // initialize() sizes it for TwoCenterParams) and (re)point its set.
     bool ensure_two_center_slots(int n) {
         if (tc_sched_ubo_.buf != VK_NULL_HANDLE && tc_slots_ >= n) {
             return true;
@@ -2935,7 +2914,6 @@ private:
         synth_.bind(shot.cb(), synth_any_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return false;  // unsynthesized buffer: do not report fake stats
         }
@@ -2968,7 +2946,6 @@ private:
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
         record_partials_readback(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return np;
         }
@@ -3114,7 +3091,6 @@ private:
             }
         }
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return fail_volume();  // device is lost anyway; leave no memo
         }
@@ -3264,7 +3240,6 @@ private:
         unpack_.bind(shot.cb(), unpack_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return VK_NULL_HANDLE;  // scratch holds stale content
         }
@@ -3314,6 +3289,7 @@ private:
 
     // psi -= (cre + i cim) * state (Gram-Schmidt subtract). fp32 states only.
     void subtract_projection(int handle, double cre, double cim) {
+        wait_async();
         State* st = state_at(handle);
         if (st == nullptr || st->is_half) {
             return;
@@ -3329,7 +3305,6 @@ private:
         axpy_.bind(shot.cb(), st->axpy_set);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
         shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
     }
 
     // Norm reduction + readback -> host finish -> 1/sqrt(norm) scale.
@@ -3342,7 +3317,6 @@ private:
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
         record_partials_readback(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         if (!ok) {
             return {};
         }

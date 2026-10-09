@@ -279,8 +279,9 @@ private:
 };
 
 // Record/submit/wait over the context's persistent pool/cb/fence (lazy, reset
-// per use). One-in-flight invariant: each OneShot fence-waits before the next
-// begin resets the pool. WARNING: never begin one OneShot while another records.
+// per use; nothing per-shot to free). One-in-flight invariant: each OneShot
+// fence-waits before the next begin resets the pool. WARNING: never begin one
+// OneShot while another records.
 class OneShot {
 public:
     OneShot() = default;
@@ -359,15 +360,18 @@ public:
         return true;
     }
 
-    // Pool/cb/fence live in the context; nothing per-shot to free.
-    void destroy(DeviceContext&) { cb_ = VK_NULL_HANDLE; }
-
 private:
     [[nodiscard]] bool begin_on(DeviceContext& ctx, VkCommandPool& pool,
                   VkCommandBuffer& cb, VkFence& fence, std::uint32_t family,
                   VkQueue queue) {
         if (ctx.fault.take(ctx.fault.begin)) {
             std::fprintf(stderr, "vk: INJECTED one-shot begin failure\n");
+            return false;
+        }
+        // After a loss (or a fence timeout) the pool's cb may still be
+        // pending: resetting it would be illegal, and the submit would be
+        // refused anyway.
+        if (ctx.device_lost) {
             return false;
         }
         if (pool == VK_NULL_HANDLE) {
@@ -380,6 +384,14 @@ private:
                 std::fprintf(stderr, "vk: command pool create failed\n");
                 return false;
             }
+            // Unwind on partial failure: a pool with a null cb/fence would
+            // take the reset branch next time and begin a null cb.
+            const auto unwind = [&] {
+                vkDestroyCommandPool(ctx.device, pool, nullptr);
+                pool = VK_NULL_HANDLE;
+                cb = VK_NULL_HANDLE;
+                fence = VK_NULL_HANDLE;
+            };
             VkCommandBufferAllocateInfo cbai{};
             cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             cbai.commandPool = pool;
@@ -388,6 +400,7 @@ private:
             if (vkAllocateCommandBuffers(ctx.device, &cbai, &cb) !=
                 VK_SUCCESS) {
                 std::fprintf(stderr, "vk: command buffer alloc failed\n");
+                unwind();
                 return false;
             }
             VkFenceCreateInfo fci{};
@@ -395,6 +408,7 @@ private:
             if (vkCreateFence(ctx.device, &fci, nullptr, &fence) !=
                 VK_SUCCESS) {
                 std::fprintf(stderr, "vk: fence create failed\n");
+                unwind();
                 return false;
             }
         } else {

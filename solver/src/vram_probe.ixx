@@ -9,7 +9,7 @@ export module ses.vk.vram_probe;
 export import ses.vram_budget;
 
 
-// Ordering: call AFTER DeviceContext create()/adopt() has run volkLoadInstance.
+// Ordering: call AFTER DeviceContext create() has run volkLoadInstance.
 // Property queries need the extension SUPPORTED, not enabled.
 // volk.h + std headers textual in GMF: VK_* macros never cross module
 // boundaries; textual std inoculates the TU against GMF std redefinitions.

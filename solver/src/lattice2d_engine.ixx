@@ -65,7 +65,7 @@ public:
                             ssb_ssb_ubo)) {
             return false;
         }
-        // 15 sets (RT: phase+2sx+2sy; IT: phase+2sx+2sy; 3 norm); headroom.
+        // 16 sets (RT: phase+2sx+2sy; IT: phase+2sx+2sy; 3 norm; damp); headroom.
         if (!arena_.create(ctx, 24, 64, 32)) {
             return false;
         }
@@ -101,7 +101,7 @@ public:
         if (static_cast<int>(potential.size()) != g.x.n * g.y.n) {
             return;
         }
-        g_ = &g;
+        g_ = g;
         nx_ = g.x.n;
         ny_ = g.y.n;
         const int cells = nx_ * ny_;
@@ -166,10 +166,10 @@ public:
         if (n_cells_ == 0) {
             return;
         }
-        const double bh = b * g_->x.spacing();
+        const double bh = b * g_.x.spacing();
         std::vector<std::complex<double>> lx(static_cast<std::size_t>(n_cells_));
         for (int j = 0; j < ny_; ++j) {
-            const double th = -bh * g_->y.coord(j);
+            const double th = -bh * g_.y.coord(j);
             const std::complex<double> u{std::cos(th), std::sin(th)};
             for (int i = 0; i < nx_; ++i) {
                 lx[static_cast<std::size_t>(j * nx_ + i)] = u;
@@ -188,13 +188,13 @@ public:
                                              std::complex<double>{1.0, 0.0});
         int is = -1;
         for (int i = 0; i + 1 < nx_; ++i) {
-            if (g_->x.coord(i) <= xs && xs < g_->x.coord(i + 1)) {
+            if (g_.x.coord(i) <= xs && xs < g_.x.coord(i + 1)) {
                 is = i;
             }
         }
         int js = -1;
         for (int j = 0; j + 1 < ny_; ++j) {
-            if (g_->y.coord(j) <= ys && ys < g_->y.coord(j + 1)) {
+            if (g_.y.coord(j) <= ys && ys < g_.y.coord(j + 1)) {
                 js = j;
             }
         }
@@ -475,7 +475,7 @@ private:
     }
 
     DeviceContext* ctx_ = nullptr;
-    const ses::Grid3D* g_ = nullptr;
+    ses::Grid3D g_ {};
     bool ready_ = false;
     int nx_ = 0;
     int ny_ = 0;

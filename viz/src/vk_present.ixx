@@ -141,9 +141,10 @@ public:
         const std::uint32_t idx = acquired_idx_;
         acquired_ = false;
 
-        if (scene_view != last_view_) {
-            update_descriptor(scene_view);
-        }
+        // Every frame, not memoized: the renderer recreates its target on
+        // resize/scene switch and a reused handle VALUE would alias a
+        // destroyed view. One descriptor write per frame is negligible.
+        update_descriptor(scene_view);
 
         vkResetCommandPool(ctx_->device, pool_, 0);
         VkCommandBufferBeginInfo bi{};
@@ -427,7 +428,6 @@ private:
         w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         w.pImageInfo = &ii;
         vkUpdateDescriptorSets(ctx_->device, 1, &w, 0, nullptr);
-        last_view_ = view;
     }
 
     bool create_sync() {
@@ -559,7 +559,6 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool desc_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet desc_set_ = VK_NULL_HANDLE;
-    VkImageView last_view_ = VK_NULL_HANDLE;
     VkSemaphore acquire_sem_ = VK_NULL_HANDLE;
     std::vector<VkSemaphore> render_done_;
     VkFence fence_ = VK_NULL_HANDLE;
