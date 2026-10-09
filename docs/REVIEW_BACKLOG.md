@@ -175,3 +175,117 @@ for any testable logic.
   J=35·배율 1: 1.5°/s); ③ 실행 exe가 b2·b3 이후 빌드본인지; ④ 뷰 모드와 "정지"
   vs "퍼짐"(후자는 H의 후광).
 - **가능한 개선(지시 시)**: 축 방향 표시선, 기본 궤도를 π로 안내, H의 플러시.
+
+## 2026-10-09 전수 검수 — 미해결 항목 (수정분은 git log 참조)
+
+전 소스(core/solver/viz/scenario/app/tests/shaders/build)를 검수한 결과 중 **이번
+사이클에서 고치지 않은** 항목만 적는다. 확정 수정(코어 풀 예외 안전성·1D twiddle
+캐시·UBO 슬롯 stride·비동기 배치 드레인·전역 변수 제거·core-only 빌드 복구 등)은
+커밋 메시지에 있다. 우선순위순.
+
+### A. 이식성·정합성 버그 (NVIDIA 밖에서 드러남)
+- **[solver] 1D 디스패치 수가 Vulkan 보장 한계(65 535)를 넘는다.** `mul_groups_ =
+  group_count(cells_)`는 256³에서 65 536, `fft_lines_[0]`도 65 536. MC 경로는
+  `mc_nblocks_ > 65535`를 거르지만 핫패스는 안 거른다(NVIDIA 2³¹−1이 숨김).
+  `maxComputeWorkGroupCount`를 조회하고 2D 디스패치 또는 grid-stride로.
+- **[solver] 제출 간 가시성 규칙이 두 가지.** `Recorder{cb, true}`(배치 첫
+  디스패치 무배리어)는 "이전 제출은 펜스 완료"를 전제하나 `norm_and_peak`·
+  `project_psi`·`scale` 등은 선행 배리어를 둔다. `upload_raw`는 compute→transfer
+  WAR 배리어가 없고 `relax_deflated_step` 체인(inner→subtract→renorm)도 무배리어.
+  규칙 하나: psi/V를 만지는 모든 OneShot은 적절한 선행 배리어로 시작(스핀 엔진
+  `measure_exact`·`chebyshev_step` 동일).
+- **[solver] 실패 경로 정합성.** `synthesize_state_half`·`normalize_buffer`는
+  제출 실패 후에도 성공을 보고; `step/driven_step/magnetic_step/write_psi_to_volume`은
+  실패한 배치에도 `flip_volume()`; `transition_volume`은 기록 시점에 레이아웃
+  메모를 갱신해 미제출 배치가 메모를 어긋나게 함. `vkWaitForFences` TIMEOUT을
+  device-lost와 동일 취급(느린 GPU에서 10 s 배치는 손실이 아님).
+- **[viz] 엔진→렌더러 교차 큐 읽기에 가시성 연산이 없다**(컴퓨트 전용 큐는
+  FRAGMENT/VERTEX_INPUT 스테이지를 이름할 수 없음) → `render()` cb 첫머리에 전역
+  `VkMemoryBarrier2` 하나. `dump_scene_bmp`는 transfer→host 배리어·invalidate 없이
+  매핑 메모리를 읽음. `currentExtent == 0xFFFFFFFF`(Wayland)·`compositeAlpha`
+  미확인; 스왑체인 재생성 시 `oldSwapchain` 미전달.
+- **[solver] `project_deposit` groupshared 46 KB·`mc_scan` 1024 레인·subgroup
+  arithmetic 요구**를 부팅 시 확인하지 않음(보장 최소 16 KB/128 레인).
+  `check_device_features`에 바닥값 단언 추가.
+
+### B. vkcheck 오라클 강도
+- 스핀 검사 허용 오차가 **절대값**(2e-3, 2e-4, ~6e-5)인데 정규화 2¹⁶ 상태의
+  진폭은 ≤5.4e-3 → 피크의 37 %/4 %/1 % 오차가 PASS. `ErrStats::tol(0, rel)`로.
+- 마칭큐브 knife-edge 가드 `1e-9·peak`는 fp32 1 ulp(≈1.5e-8·peak)보다 작아
+  정확-개수 단언이 잠재적 flaky → ≥1e-7·peak.
+- fp16 왕복 허용 오차 5e-3(실제 반 ulp 2.4e-4); 파일에 이미 있는 `f16_quantize`
+  비트 정확 오라클을 쓰면 됨. `flow_velocity` 커널은 오라클이 전혀 없음.
+- `spin_fused_gate`/`spin_permute`는 베이크·검증되지만 소비자가 없고 주석은
+  존재하지 않는 "Stage 2/3"을 설명. `check_lattice2d_size_guard`는 거부를 단언할
+  수 없음(`set_lattice`가 void) → `[[nodiscard]] bool`.
+- 13개 raw-kernel 검사가 같은 ~40줄 픽스처를 반복(~600줄) → `KernelFixture`.
+
+### C. 성능 (측정 근거 있음)
+- **[viz] 마커 VBO 매 프레임 재구축 + `vkDeviceWaitIdle`** — 회전자 씬은 핵
+  마커가 매 프레임 움직이므로 구 메시 테셀레이션·버퍼 재생성·디바이스 idle이
+  매 프레임. 인스턴스드 단위 구로. 나머지 5곳의 `vkDeviceWaitIdle`(resize/
+  overlay/staging/mesh 성장)은 정확성에 불필요하며 엔진 비동기 큐를 세움.
+- **[viz] 프레임당 직렬 펜스 대기 3회**(render submit_and_wait → presenter 펜스
+  → 엔진 배치). scene+post+blit을 한 제출로, 펜스 대기는 다음 프레임 첫머리로.
+- **[scenario] 스텝마다 전체 상태 왕복**: doubleslit은 화면 열 512개를 읽으려고
+  매 스텝 4 MB 다운로드(x16에서 ~1 GB/프레임); qpc는 스텝마다 readback→CPU CAP→
+  업로드. GPU 쪽 열 판독/마스크 reduction으로.
+- **[core] 스레드 핫패스 안의 직렬 16.7M 패스**: `norm_sq/normalize/inner_product`
+  (relax_deflated 스텝마다 디플레이션 벡터당 1회, `multi_quantum_jump` 채널당 1회),
+  3D 관측량, `project_radial_angular`(36 Y_lm × 셀, vkcheck 오라클), `synthesize_h2plus`,
+  `marching_cubes`, `apply_dipole_halfkick`(분리 가능·인접 킥 병합 가능),
+  `build_half_potential_table/build_kinetic_table`. 전부 슬랩 순서 `parallel_for/
+  parallel_sum`으로 비트 동일 가능.
+- **[core] `rotation.ixx axis_shear`**: 라인마다 twiddle 재할당 + 셀마다 sincos
+  (256³·3 shear·2회/스텝 ≈ 39만 회 twiddle 재구축). `magnetic.ixx`의 인접 반회전도
+  병합 안 함(주석은 이번에 정정). `kick()`은 호출마다 268 MB 테이블 생성.
+- **[solver] relax 테이블을 complex로 저장**(`damp_mul`로 R32 가능 → VRAM·대역폭
+  절반); `relax_deflated_step`은 스텝당 (2L+3)회 펜스 제출; Chebyshev 루프는
+  반복마다 버퍼 2개 복사(디스크립터 순환으로 0회).
+- **[core] `ho1d_spectrum` O(n²·N)**(`ladder_fock`의 단일 체인 패턴 재사용);
+  풀은 n이 작아도 모든 워커를 깨움(직렬 임계값 없음), 영역마다 `std::function` 할당.
+
+### D. 설계·구조 (결단 필요)
+- **[scenario] spins 정확 모드 틱당 8스텝 vs 평균장 20스텝** — "다이얼이 유일한
+  배율" 계약 위반. baseline은 이번에 정직하게 고쳤으나 틱 자체는 그대로: 스텝 수를
+  통일하고 CPU 정확 경로는 틱을 드롭할지 결정.
+- **[scenario] corral `10.1734681`은 j₁,₃(J0 영점 아님)** — 펜스가 antinode에
+  놓임; 주석 4곳이 각각 다른 말(j0_10, 3rd zero of J0 …). 의도한 k_F R을 정하고
+  상수·주석 정렬.
+- **[scenario] 셀프테스트**: 벽시계 데드라인 15곳 이상(`after(2000/30000/180000)`)
+  이 "never wall-clock" 계약과 모순; `--selftest-qdot` 무제한 폴링(행 가능);
+  `kArcSpecs`/`kArcs` 두 테이블이 강제되지 않음 → 한 테이블 + `static_assert`.
+  프롤로그/에필로그 반복(~20/~38회).
+- **[scenario] HydrogenDirector**: 40개 가상함수 API, `stepping_ = RealTime` 직접
+  대입 13곳(NVI "모든 복귀 경로가 다이얼을 지운다"는 문서 주장과 불일치),
+  base 본문 5개 중복. `FieldState/LaserDrive/AtlasBuilder` 추출 + `enter_real_time()`.
+  `AtomModel`의 resident-cache API ~70줄과 hydrogen의 fp16 "atlas precision"
+  로그는 orbital-free 리팩터 이후 데드 코드.
+- **[scenario] 7개 디렉터 패밀리가 pacing/time_scale/stub 블록을 복제**(~50줄×6);
+  `steps_per_tick` vs `steps_per_tick_x1` 이름 두 벌; `ses::Rung`/`ses_shell::Rung`
+  중복; `ho_ladder(bool)`/`ladder(bool)`/`set_solenoid(bool cut_up)`/`Recorder{cb,true}`
+  bool-trap; 2D 디렉터 3곳의 `{Engine, ok, dirty, rb}` 번들과 seed→normalize→
+  dirty→peak 관용구 → `PlanarEngineSync`/`seed_plane`.
+- **[solver] Engine 3.9k줄 god class**(OneShot 블록 34회, 디스크립터 쓰기 115회,
+  수동 UBO flush 18회; `ses_vk::write_ubo`와 이름만 같은 멤버 `write_ubo`) →
+  `submit_compute/update_ubo/wire` 헬퍼, 서브시스템 분리, `Kernel/DescriptorArena`
+  RAII 래퍼(create/destroy 2단계 + 36줄 수동 teardown).
+- **[core] 삼중대각 고유해법 3벌**(`radial`/`spheroidal`/`bloch`, 피벗 nudge·
+  반복 횟수·시프트가 이미 드리프트) → `tridiag` 네임스페이스 하나.
+- **[core/arch] `soft_coulomb_potential`이 export되어 vkcheck 픽스처 14곳·bench·
+  단위 테스트에서 쓰임** — "No soft-Coulomb anywhere" 규칙과 코드가 모순.
+  테스트 전용 모듈로 이동하거나 주석으로 한정.
+- **[app] 패널 슬라이더 13개가 디렉터 진실을 읽지 않음**(+ 부팅 상수 12개 수동
+  미러); 2-글자 capability 포워더 20개; `refresh_status()` 매 프레임(타이틀
+  dirty 플래그 무력화); CLI 파싱 2벌(Boost + raw `starts_with`); 창 제목 수소 고정.
+- **[build]** `ses_slang.cmake`의 slangc 다운로드에 `URL_HASH` 없음; `.clang-format`
+  (ColumnLimit 100, BinPack false)이 실제 코드(80열 bin-packed) 174/190 파일과
+  불일치 — 설정을 코드에 맞추거나 삭제; 기본 `CMAKE_BUILD_TYPE=Debug`는 README의
+  "Debug 피하라"와 충돌; clang-scan-deps가 여전히 `-fcx-limited-range` 경고 출력.
+
+### E. 작은 정확성 가드
+- `absorbing_mask`: 주기 격자에서 `d_hi = xmax − x`라 셀 0과 셀 n−1이 한 셀
+  비대칭. `quadratic_cap_mask`: k=0 평면만 채움(전제조건이 주석뿐). `vec normalized()`
+  /`look_at` 퇴화 입력에서 NaN. `gen_h2plus_atlas` n==1 clamp UB. `sphere_mesh`
+  rings<2 0으로 나눔. `photon_flight_frames` 0 → `progress` NaN.
+- 벤치/테스트의 `soft_coulomb`, `bench_main`의 "per-frame hot path" 주석(CPU 경로).
