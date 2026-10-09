@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -55,7 +57,6 @@ TEST(ParallelFor, NestedCallDoesNotDeadlockAndStaysCorrect) {
     }
 }
 
-// Adversarial magnitudes (e^+-30, alt signs): order shows in low bits; bitwise-equal repeats prove fixed combine order.
 TEST(ParallelFor, BodyExceptionPropagatesAndPoolStaysParallel) {
     // A throwing body must surface on the caller, after EVERY worker has
     // left the region (the Job lives on the caller's stack), and must not
@@ -83,16 +84,30 @@ TEST(ParallelFor, BodyExceptionPropagatesAndPoolStaysParallel) {
     }
 }
 
-TEST(ParallelSum, BitwiseDeterministicAcrossRuns) {
+// Adversarial magnitudes (e^+-30, alt signs): order shows in low bits.
+// CONTRACT: the result is the chunk-ordered sum with chunk size ceil(n/64),
+// a function of n alone -- so it is bitwise the same at ANY pool width
+// (tests/CMakeLists.txt reruns this suite at SES_PARALLEL_WORKERS=1 and 3).
+TEST(ParallelSum, BitwiseTheChunkOrderedContractAtAnyWidth) {
     const int n = 4001;
     auto term = [](int i) {
         const double m = std::exp(30.0 * std::sin(0.7 * i));
         return (i % 2 == 0) ? m : -m;
     };
+    const int chunk = (n + 63) / 64;
+    double contract = 0.0;
+    for (int begin = 0; begin < n; begin += chunk) {
+        double partial = 0.0;
+        for (int i = begin; i < std::min(begin + chunk, n); ++i) {
+            partial += term(i);
+        }
+        contract += partial;
+    }
     const double first = ses::parallel_sum(n, 0.0, term);
+    EXPECT_EQ(first, contract);  // bitwise, not approx
     for (int rep = 0; rep < 50; ++rep) {
         const double again = ses::parallel_sum(n, 0.0, term);
-        ASSERT_EQ(first, again) << "rep=" << rep;  // bitwise, not approx
+        ASSERT_EQ(first, again) << "rep=" << rep;
     }
     double serial = 0.0;
     for (int i = 0; i < n; ++i) {
@@ -116,24 +131,34 @@ TEST(ParallelSum, ComplexAccumulatorAndEmptyRange) {
     EXPECT_EQ(ses::parallel_sum(0, 42.0, [](int) { return 1.0; }), 42.0);
 }
 
+// gtest assertions are not thread-safe on every platform (Windows), so the
+// bodies only RECORD; every check runs on the main thread afterwards.
 TEST(ParallelRanges, DisjointCoverageAndWorkerIndexBounds) {
     const int n = 12345;
     const int workers = ses::parallel_workers();
     std::vector<int> hits(static_cast<std::size_t>(n), 0);
-    std::vector<int> used(static_cast<std::size_t>(workers), 0);
+    std::atomic<int> bad_worker{0};
+    std::atomic<int> empty_range{0};
     ses::parallel_ranges(n, [&](int worker, int begin, int end) {
-        ASSERT_GE(worker, 0);
-        ASSERT_LT(worker, workers);
-        ASSERT_LT(begin, end);
-        used[static_cast<std::size_t>(worker)] = 1;
+        if (worker < 0 || worker >= workers) {
+            ++bad_worker;
+            return;
+        }
+        if (begin >= end) {
+            ++empty_range;
+        }
         for (int i = begin; i < end; ++i) {
             ++hits[static_cast<std::size_t>(i)];
         }
     });
+    EXPECT_EQ(bad_worker.load(), 0);
+    EXPECT_EQ(empty_range.load(), 0);
     for (int i = 0; i < n; ++i) {
         ASSERT_EQ(hits[static_cast<std::size_t>(i)], 1) << "i=" << i;
     }
-    ses::parallel_ranges(0, [&](int, int, int) { FAIL() << "n=0 must not call body"; });
+    std::atomic<int> calls{0};
+    ses::parallel_ranges(0, [&](int, int, int) { ++calls; });
+    EXPECT_EQ(calls.load(), 0) << "n=0 must not call body";
 }
 
 }  // namespace
