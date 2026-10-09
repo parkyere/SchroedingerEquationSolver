@@ -107,6 +107,23 @@ TEST(Fft, InverseRestoresInput) {
     }
 }
 
+TEST(Fft, InverseWithCallerHeldTwiddlesIsBitwiseTheVectorInverse) {
+    // Hot 1D steps keep one twiddle table across calls; it must reproduce the
+    // allocate-per-call overload exactly (propagator tables are bitwise-pinned).
+    CVec a(64);
+    for (std::size_t n = 0; n < a.size(); ++n) {
+        a[n] = Cd{std::cos(0.37 * n), std::sin(0.11 * n * n)};
+    }
+    CVec b = a;
+    ses::ifft(a);
+    const CVec w = ses::fft_twiddles(b.size());
+    ses::ifft(b.data(), b.size(), w.data());
+    for (std::size_t n = 0; n < a.size(); ++n) {
+        EXPECT_EQ(a[n].real(), b[n].real());
+        EXPECT_EQ(a[n].imag(), b[n].imag());
+    }
+}
+
 TEST(Fft, IsLinear) {
     const std::size_t n = 8;
     CVec x = deterministic_signal(n);

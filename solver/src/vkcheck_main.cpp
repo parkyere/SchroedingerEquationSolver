@@ -13,46 +13,18 @@
 // volk + VMA textually first: VK_*/VMA macros never cross module boundaries,
 // and the early claim inoculates against GMF/textual redefinitions.
 #include <volk.h>
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include <vk_mem_alloc.h>
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ses_vma.h"
 #include <complex>
 
 #include <phase_multiply_spv.h>
-#include <half_mul_spv.h>
-#include <kin_mul_spv.h>
-#include <damp_mul_spv.h>
-#include <phase_damp_mul_spv.h>
-#include <mcwf_axpy_spv.h>
-#include <mc_density_spv.h>
-#include <mc_classify_spv.h>
-#include <mc_scan_spv.h>
-#include <mc_emit_spv.h>
-#include <conj_scale_spv.h>
 #include <scale_spv.h>
-#include <scale_buf_spv.h>
 #include <norm_peak_spv.h>
-#include <norm_finalize_spv.h>
 #include <inner_product_spv.h>
 #include <dipole_kick_spv.h>
 #include <mean_force_spv.h>
 #include <dipole_spv.h>
 #include <pack_half_spv.h>
 #include <unpack_half_spv.h>
-#include <shear_spv.h>
-#include <axpy_spv.h>
-#include <copy_state_spv.h>
-#include <synth_spv.h>
-#include <project_deposit_spv.h>
-#include <bridge_store_spv.h>
-#include <bridge_load_spv.h>
-#include <flow_velocity_spv.h>
 #include <fft_line8_spv.h>
 #include <fft_line64_spv.h>
 #include <fft_line128_spv.h>
@@ -147,7 +119,6 @@ public:
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
     ~Scope() {
-        shot.destroy(ctx_);
         arena.destroy(ctx_);
         for (auto it = kernels.rbegin(); it != kernels.rend(); ++it) {
             (*it)->destroy(ctx_);
@@ -2432,7 +2403,7 @@ bool check_native_vkfft_perf(ses_vk::DeviceContext& ctx) {
     const double ms_vkfft = time_steps(true);
     std::printf(
         "native vkfft perf 64^3: line FFT %.2f ms/step, VkFFT %.2f ms/step "
-        "(x%.2f)  [PASS]\n",
+        "(x%.2f)  [INFO]\n",
         ms_line, ms_vkfft, ms_vkfft > 0.0 ? ms_line / ms_vkfft : 0.0);
     return true;
 }
@@ -3288,8 +3259,8 @@ bool check_engine_mcwf_axpy(ses_vk::DeviceContext& ctx) {
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
     const ses::RadialState p0 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 1), 0);
-    // A high-l tesseral term too: the Y_lm table duplicated into
-    // mcwf_axpy.comp is otherwise only exercised at l = 0..1.
+    // A high-l tesseral term too: the shared ylm.slang table is otherwise
+    // only exercised at l = 0..1 here.
     const ses::RadialState h0 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 5), 0);
     const ses_vk::Engine::SynthResult rs =
@@ -3609,7 +3580,7 @@ bool check_fault_vkfft_batch(ses_vk::DeviceContext& ctx) {
     }
     e.step(1);  // materializes the lazy plan
     if (!e.vkfft_active()) {
-        std::printf("%s (raw Vulkan): no native VkFFT plan -- SKIP  [PASS]\n",
+        std::printf("%s (raw Vulkan): no native VkFFT plan  [SKIP]\n",
                     name);
         e.destroy();
         return true;
@@ -4158,7 +4129,7 @@ int main() {
         }
     }
 
-    const int verrs = ses_vk::g_validation_errors.load();
+    const int verrs = ctx.validation_errors.load();
     if (ctx.validation_active && verrs != 0) {
         std::fprintf(stderr, "vkcheck: %d validation error(s)  [FAIL]\n", verrs);
         ++failures;

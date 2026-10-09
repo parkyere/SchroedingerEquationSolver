@@ -58,7 +58,10 @@ class TiltedSplitOperator1D {
 public:
     TiltedSplitOperator1D(const Grid1D& g, const std::vector<double>& potential,
                           double dt, double force)
-        : dt_(dt), force_(force), k_(wavenumbers(g)) {
+        : dt_(dt),
+          force_(force),
+          k_(wavenumbers(g)),
+          twiddles_(fft_twiddles(static_cast<std::size_t>(g.n))) {
         assert(static_cast<int>(potential.size()) == g.n);
         half_v_ = build_half_potential_table(potential, dt, unit_phase);
         kinetic_.resize(k_.size());
@@ -78,9 +81,9 @@ public:
                 kinetic_[j] = unit_phase(-0.5 * km * km * dt_);
             }
             apply_phase(half_v_, psi.data());
-            fft(psi.data());
+            fft(psi.data().data(), psi.data().size(), twiddles_.data());
             apply_phase(kinetic_, psi.data());
-            ifft(psi.data());
+            ifft(psi.data().data(), psi.data().size(), twiddles_.data());
             apply_phase(half_v_, psi.data());
             t_ += dt_;
         }
@@ -93,6 +96,7 @@ private:
     std::vector<double> k_;
     std::vector<std::complex<double>> half_v_;
     std::vector<std::complex<double>> kinetic_;
+    std::vector<std::complex<double>> twiddles_;  // one table for every step
 };
 
 }  // namespace ses

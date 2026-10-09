@@ -1,6 +1,5 @@
 module;
 #include <complex>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -85,16 +84,23 @@ inline void fft(std::complex<double>* a, std::size_t n) {
 
 inline void fft(std::vector<std::complex<double>>& a) { fft(a.data(), a.size()); }
 
-// Conjugation identity: ifft(X) = conj(fft(conj(X))) / N
+// Conjugation identity: ifft(X) = conj(fft(conj(X))) / N. Caller-held
+// twiddle table: the hot 1D propagators keep one across steps instead of
+// recomputing n/2 sin/cos pairs per call.
+inline void ifft(std::complex<double>* a, std::size_t n, const std::complex<double>* w) {
+    for (std::size_t i = 0; i < n; ++i) {
+        a[i] = conj(a[i]);
+    }
+    fft(a, n, w);
+    const double inv = 1.0 / static_cast<double>(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        a[i] = inv * conj(a[i]);
+    }
+}
+
 inline void ifft(std::vector<std::complex<double>>& a) {
-    for (std::complex<double>& z : a) {
-        z = conj(z);
-    }
-    fft(a);
-    const double inv = 1.0 / static_cast<double>(a.size());
-    for (std::complex<double>& z : a) {
-        z = inv * conj(z);
-    }
+    const std::vector<std::complex<double>> w = fft_twiddles(a.size());
+    ifft(a.data(), a.size(), w.data());
 }
 
 namespace fft_detail {

@@ -4,9 +4,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <random>
 #include <string>
 #include <utility>
@@ -200,8 +198,7 @@ public:
         }
     }
     void tick() override {
-        const int base = exact_mode_ ? kSlExactSteps : kSlStepsPerTick;
-        const int per_tick = base * time_scale_;
+        const int per_tick = steps_per_tick_x1() * time_scale_;
         pending_steps_ = pending_after_tick(pending_steps_, per_tick);
     }
 
@@ -278,7 +275,11 @@ public:
     int time_scale() const override { return time_scale_; }
     double sim_time() const override { return sim_time_; }
     double sim_dt() const override { return kSlDt; }
-    int steps_per_tick_x1() const override { return kSlStepsPerTick; }
+    // Exact mode supplies fewer steps per tick (CPU fallback cost); the
+    // baseline must say so or the perf readout lies by 2.5x.
+    int steps_per_tick_x1() const override {
+        return exact_mode_ ? kSlExactSteps : kSlStepsPerTick;
+    }
 
     // ---- display (overlay-only) ----
     bool cloud() const override { return false; }

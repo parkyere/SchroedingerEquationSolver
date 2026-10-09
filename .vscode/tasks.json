@@ -9,7 +9,7 @@
             // Linux-only by design -- Windows uses Visual Studio directly.
             "label": "cmake-build-app",
             "type": "shell",
-            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22; cmake --build --preset linux-clang22 --target sesolver_app",
+            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22 && cmake --build --preset linux-clang22 --target sesolver_app",
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": ["$gcc"],
             "detail": "configure-if-needed + build sesolver_app (linux-clang22)"
@@ -18,7 +18,7 @@
             // Ctrl+Shift+B: everything (tests + vkcheck + app), same pin.
             "label": "cmake-build-all",
             "type": "shell",
-            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22; cmake --build --preset linux-clang22",
+            "command": "[ -f out/build/linux-clang22/CMakeCache.txt ] || cmake --preset linux-clang22 && cmake --build --preset linux-clang22",
             "options": { "cwd": "${workspaceFolder}" },
             "group": { "kind": "build", "isDefault": true },
             "problemMatcher": ["$gcc"],

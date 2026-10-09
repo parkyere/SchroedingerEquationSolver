@@ -47,7 +47,7 @@ public:
 
 private:
     static void apply_weight(const std::vector<double>& weight,
-                             std::vector<std::complex<double>>& a) noexcept {
+                             std::vector<std::complex<double>>& a) {
         for (std::size_t i = 0; i < a.size(); ++i) {
             a[i] = weight[i] * a[i];
         }
@@ -98,7 +98,7 @@ public:
 private:
     // Elementwise (disjoint) scale: threaded result is bitwise identical.
     static void apply_weight(const std::vector<double>& weight,
-                             std::vector<std::complex<double>>& a) noexcept {
+                             std::vector<std::complex<double>>& a) {
         parallel_for(static_cast<int>(a.size()), [&](int i) {
             a[static_cast<std::size_t>(i)] =
                 weight[static_cast<std::size_t>(i)] * a[static_cast<std::size_t>(i)];

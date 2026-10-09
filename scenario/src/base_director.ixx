@@ -6,7 +6,6 @@ module;
 #include <utility>
 #include <algorithm>
 #include <cmath>
-#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <random>
@@ -220,7 +219,9 @@ public:
     }
 
     void measure_now() override {
-        ensure_cpu_current();
+        if (!ensure_cpu_current()) {
+            return;  // a stale CPU psi must not be collapsed and re-uploaded
+        }
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         sim_.measure(uniform(rng_), kBaseMeasureSigma);
         stepping_ = BaseStepping::RealTime;
@@ -690,18 +691,36 @@ protected:
     // Trotter artifact, not the grid-H eigenstate.
     virtual double relax_dtau() const { return kBaseRelaxDtau; }
 
-    void ensure_cpu_current() {
+    // false = the readback failed and sim_ still holds a STALE psi.
+    bool ensure_cpu_current() {
         pending_gpu_steps_ = 0;  // uncredited steps must not fire later
         if (cpu_is_truth_ || !gpu_ok_) {
-            return;
+            return true;
         }
         if (!engine_.readback(readback_buf_)) {
             std::fprintf(stderr,
                          "engine: readback failed -- keeping the CPU state\n");
-            return;
+            return false;
         }
         sim_.set_psi(field_from_readback());
         cpu_is_truth_ = true;
+        return true;
+    }
+
+    // Push sim_'s potential (+ gradient) to the engine. On failure the GPU
+    // path is abandoned and the CPU becomes the truth -- never a silently
+    // stale potential on the device.
+    bool upload_potential_tables() {
+        if (engine_.set_potential(sim_.potential()) &&
+            engine_.set_potential_gradient(sim_.potential())) {
+            return true;
+        }
+        std::fprintf(stderr, "engine: potential upload failed -- falling "
+                             "back to CPU stepping\n");
+        ensure_cpu_current();
+        gpu_ok_ = false;
+        cpu_is_truth_ = true;
+        return false;
     }
 
     // Gated density probe over the full field (kBaseProbeStride title-tick
@@ -817,7 +836,9 @@ protected:
     long long ticks_ = 0;
 
     bool absorber_on_ = false;
-    std::mt19937 rng_{std::random_device{}()};
+    // Fixed seed, like every other director: a headless arc replays the same
+    // jump/measurement sequence run to run (the demo still looks random).
+    std::mt19937 rng_{20260719u};
     PhotonStreakDisplay photon_streaks_;
 
     // Shared decay/flash/measure scene state (hydrogen + trap).

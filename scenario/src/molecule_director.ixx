@@ -182,8 +182,7 @@ protected:
         stepping_ = BaseStepping::RealTime;
         if (gpu_ok_) {
             engine_.release_relax_tables();  // tables bake the OLD potential
-            engine_.set_potential(sim_.potential());
-            engine_.set_potential_gradient(sim_.potential());
+            upload_potential_tables();
         }
         geometry_changed();
         title_dirty_ = true;

@@ -1,12 +1,29 @@
-add_library(ses_scenario STATIC)
-target_sources(ses_scenario
+# Vulkan-free orchestration pieces (scheduler, field state, the manifold table
+# and the seeds): built in every configuration so their tests join the
+# core-only TDD loop.
+add_library(ses_scenario_core STATIC)
+target_sources(ses_scenario_core
     PUBLIC FILE_SET CXX_MODULES FILES
-        src/scenario.ixx
         src/scheduler.ixx
         src/manifold_spec.ixx
         src/field_control.ixx
         src/kepler_seed.ixx
-        src/molecular_seed.ixx
+        src/molecular_seed.ixx)
+target_compile_features(ses_scenario_core PUBLIC cxx_std_20)
+target_link_libraries(ses_scenario_core
+    PUBLIC
+        sesolver_core
+    PRIVATE
+        ses_warnings)
+
+if(NOT SES_BUILD_GPU)
+    return()
+endif()
+
+add_library(ses_scenario STATIC)
+target_sources(ses_scenario
+    PUBLIC FILE_SET CXX_MODULES FILES
+        src/scenario.ixx
         src/atom_model.ixx
         src/base_director.ixx
         src/hydrogen_director.ixx
@@ -37,6 +54,7 @@ target_sources(ses_scenario
 target_compile_features(ses_scenario PUBLIC cxx_std_20)
 target_link_libraries(ses_scenario
     PUBLIC
+        ses_scenario_core
         ses_solver
     PRIVATE
         ses_warnings)

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
 #include <cstdint>
 #include <map>
 #include <numbers>

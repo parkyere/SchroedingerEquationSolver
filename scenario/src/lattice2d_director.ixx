@@ -3,9 +3,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -21,11 +19,12 @@ import ses.parallel;
 import ses.vk.lattice2d_engine;
 
 
-// 2D lattice base (corral/qdot/billiard/qpc/carpet). Physics on one z-plane (nz=1), replicated
-// into the display slab. Time evolution runs on the GPU (ses_vk::Lattice2DEngine,
-// a port of the CPU PeierlsLattice2D) when a device is present, else on the CPU
-// prop_. gpu_ok()=false stays: the RENDER path is the CPU-built heightfield/slab,
-// not the 3D volume; only the propagator moved to the GPU.
+// 2D lattice base (corral/qdot/billiard/qpc/carpet). Physics on one z-plane
+// (nz=1), replicated into the display slab. Stepping is per scene: qdot drives
+// this base's ses_vk::Lattice2DEngine (a port of the CPU PeierlsLattice2D)
+// when a device is present; corral/billiard/qpc own a ses_vk::Engine; carpet
+// steps on the CPU. gpu_ok()=false stays: the RENDER path is the CPU-built
+// heightfield/slab, not the 3D volume; only the propagator moved to the GPU.
 // volk.h textually first: VK_* macros never cross module boundaries.
 
 

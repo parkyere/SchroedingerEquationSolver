@@ -27,7 +27,7 @@ if(CMAKE_HOST_UNIX AND SES_AUTODETECT_COMPILER
     endforeach()
 endif()
 
-project(ShoeridingerEquationSolver
+project(SchroedingerEquationSolver
     VERSION 0.0.1
     DESCRIPTION "From-scratch FDM/TDSE single-electron Schrodinger solver with framework-free Vulkan compute and rendering in an SDL3 window shell"
     LANGUAGES CXX)
@@ -78,22 +78,35 @@ endif()
 add_library(ses_arch INTERFACE)
 if(NOT MSVC)
     # Disable C99 Annex G NaN/inf fixups on std::complex * and / -- keeps the
-    # naive formulas bitwise identical to the oracles. Older Clang lacks the flag;
-    # safe to omit (same formula for finite values). MSVC never emits the fixups.
+    # naive formulas bitwise identical to the oracles. Clang >= 19 spells it
+    # -fcomplex-arithmetic=basic; GCC and Clang 18 take -fcx-limited-range
+    # (Clang 18 then emits a spurious "overriding '' option" warning on every
+    # TU, muted below). Older Clang has neither; safe to omit (same formula
+    # for finite values). MSVC never emits the fixups.
     include(CheckCXXCompilerFlag)
-    check_cxx_compiler_flag("-fcx-limited-range" SES_HAS_FCX_LIMITED_RANGE)
-    if(SES_HAS_FCX_LIMITED_RANGE)
-        target_compile_options(ses_arch INTERFACE -fcx-limited-range)
+    check_cxx_compiler_flag("-fcomplex-arithmetic=basic"
+                            SES_HAS_FCOMPLEX_ARITH_BASIC)
+    if(SES_HAS_FCOMPLEX_ARITH_BASIC)
+        target_compile_options(ses_arch INTERFACE -fcomplex-arithmetic=basic)
     else()
-        check_cxx_compiler_flag("-fcomplex-arithmetic=basic"
-                                SES_HAS_FCOMPLEX_ARITH_BASIC)
-        if(SES_HAS_FCOMPLEX_ARITH_BASIC)
-            target_compile_options(ses_arch INTERFACE -fcomplex-arithmetic=basic)
+        check_cxx_compiler_flag("-fcx-limited-range" SES_HAS_FCX_LIMITED_RANGE)
+        if(SES_HAS_FCX_LIMITED_RANGE)
+            target_compile_options(ses_arch INTERFACE -fcx-limited-range
+                $<$<CXX_COMPILER_ID:Clang>:-Wno-overriding-option>)
         else()
             message(STATUS "complex limited-range flag unsupported -- "
                 "std::complex keeps Annex G (finite results identical).")
         endif()
     endif()
+endif()
+# FMA contraction is off in EVERY configuration, not only the AVX2/native
+# branches: Clang contracts by default wherever the ISA has FMA (all of
+# AArch64), and the bitwise oracles (coord(50) == 0.0, the pinned tables)
+# hold only without it. MSVC: /fp:precise never contracts.
+if(MSVC)
+    target_compile_options(ses_arch INTERFACE /fp:precise)
+else()
+    target_compile_options(ses_arch INTERFACE -ffp-contract=off)
 endif()
 if(MSVC)
     if(SES_ENABLE_AVX2 OR SES_NATIVE)
@@ -104,11 +117,13 @@ elseif(SES_NATIVE)
     # Pin vector width to 256 (4-wide double) so AVX-512 hosts keep the same
     # reduction order/rounding as the AVX2 build (oracles stay valid).
     target_compile_options(ses_arch INTERFACE
-        -march=native -mprefer-vector-width=256 -ffp-contract=off)
+        -march=native -mprefer-vector-width=256)
     message(STATUS "Native CPU tuning (-march=native, 256-bit vectors).")
-elseif(SES_ENABLE_AVX2)
-    target_compile_options(ses_arch INTERFACE -mavx2 -mfma -ffp-contract=off)
+elseif(SES_ENABLE_AVX2 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+    target_compile_options(ses_arch INTERFACE -mavx2 -mfma)
     message(STATUS "AVX2 enabled (SES_ENABLE_AVX2=ON).")
+elseif(SES_ENABLE_AVX2)
+    message(STATUS "SES_ENABLE_AVX2 ignored: not an x86-64 host (${CMAKE_SYSTEM_PROCESSOR}).")
 endif()
 
 add_subdirectory(core)
@@ -118,17 +133,19 @@ if(SES_BUILD_TESTS)
     enable_testing()
 endif()
 
-# Gated so the core-only TDD loop configures without vcpkg -- solver
-# hard-REQUIREs the vcpkg Vulkan packages.
+# Gated so the core-only TDD loop configures AND builds without vcpkg --
+# solver hard-REQUIREs the vcpkg Vulkan packages. scenario/ is entered in
+# both modes: its Vulkan-free ses_scenario_core is always built, the
+# director library only with the GPU layers.
 if(SES_BUILD_GPU)
     include(tools/cmake/ses_slang.cmake)
     include(tools/cmake/ses_vkfft.cmake)
     add_subdirectory(solver)
     add_subdirectory(viz)
-    add_subdirectory(scenario)
 else()
-    message(STATUS "SES_BUILD_GPU=OFF - core-only loop (no solver/viz/scenario/app).")
+    message(STATUS "SES_BUILD_GPU=OFF - core-only loop (no solver/viz/directors/app).")
 endif()
+add_subdirectory(scenario)
 
 if(SES_BUILD_TESTS)
     add_subdirectory(tests)

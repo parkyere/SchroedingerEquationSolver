@@ -59,7 +59,8 @@ inline ses::Field3D harmonic_state(const ses::Grid3D& g, double w0, int axis) {
 
 // Radial solve box shared with the app: mirrors ses_shell::kTrapBox = 20.0 and
 // ses_shell::kTrapRadialSamples = 3999 (scenario/src/harmonic_director.ixx).
-// Tests must not import scenario, so keep these in sync by hand.
+// The core-only test binary cannot import the director modules, so these
+// are kept in sync by hand (the director tests pin the originals).
 inline constexpr double kRadialBoxRMax = 20.0;
 inline constexpr int kRadialBoxSamples = 3999;
 

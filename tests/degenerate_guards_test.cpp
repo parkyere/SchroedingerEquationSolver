@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
 #include <stdexcept>
 #include <vector>
 import ses.observables;
@@ -13,6 +14,7 @@ import ses.vec;
 import ses.fft;
 import ses.marching_cubes;
 import ses.field;
+import ses.sampling;
 
 namespace {
 
@@ -95,6 +97,22 @@ TEST(DegenerateGuards, FftNonPowerOfTwoThrows) {
     EXPECT_THROW(ses::fft(v3), std::invalid_argument);
     std::vector<std::complex<double>> v16(16);
     EXPECT_NO_THROW(ses::fft(v16));
+}
+
+// A collapsed axis (n = 1) must not clamp to [0, -1] (UB) or read the
+// neighbour cell: trilinear degrades to bilinear on the live plane.
+TEST(DegenerateGuards, TrilinearSampleOnCollapsedAxisStaysOnPlane) {
+    const ses::Grid1D ax{-1.0, 1.0, 4};
+    const ses::Grid1D az{0.0, 1.0, 1};
+    ses::Field3D f{ses::Grid3D{ax, ax, az}};
+    for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < 4; ++i) {
+            f(i, j, 0) = std::complex<double>{1.0 * i, 10.0 * j};
+        }
+    }
+    const std::complex<double> s = ses::sample_trilinear(f, ses::Vec3d{-0.75, -0.25, 0.3});
+    EXPECT_DOUBLE_EQ(s.real(), 0.5);   // halfway between i = 0 and i = 1
+    EXPECT_DOUBLE_EQ(s.imag(), 15.0);  // halfway between j = 1 and j = 2
 }
 
 }  // namespace

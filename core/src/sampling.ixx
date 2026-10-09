@@ -3,7 +3,6 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <utility>
 #include <vector>
 export module ses.sampling;
 export import ses.grid;
@@ -21,30 +20,39 @@ export namespace ses {
 
 namespace sampling_detail {
 
-// clamp i to n-2 so i+1 stays in range; t=1 covers the last cell.
-inline std::pair<int, double> cell_and_t(double u, const Grid1D& axis) noexcept {
+struct Cell {
+    int i;     // lower cell
+    int next;  // upper cell (== i on a collapsed axis: no neighbour to read)
+    double t;  // lerp weight; t=1 covers the last cell
+};
+
+// clamp i to n-2 so next stays in range (n = 1: the single cell, weight 0).
+inline Cell cell_and_t(double u, const Grid1D& axis) noexcept {
+    if (axis.n < 2) {
+        return {0, 0, 0.0};
+    }
     const double s = (u - axis.xmin) / axis.spacing();
     int i = static_cast<int>(std::floor(s));
     i = std::clamp(i, 0, axis.n - 2);
-    return {i, s - i};
+    return {i, i + 1, s - i};
 }
 
 }  // namespace sampling_detail
 
 inline std::complex<double> sample_trilinear(const Field3D& f, Vec3d p) noexcept {
     const Grid3D& g = f.grid();
-    const auto [i, tx] = sampling_detail::cell_and_t(p.x, g.x);
-    const auto [j, ty] = sampling_detail::cell_and_t(p.y, g.y);
-    const auto [k, tz] = sampling_detail::cell_and_t(p.z, g.z);
+    const auto [i, i1, tx] = sampling_detail::cell_and_t(p.x, g.x);
+    const auto [j, j1, ty] = sampling_detail::cell_and_t(p.y, g.y);
+    const auto [k, k1, tz] = sampling_detail::cell_and_t(p.z, g.z);
 
     auto lerp = [](std::complex<double> a, std::complex<double> b, double t) {
         return a + t * (b - a);
     };
 
-    const std::complex<double> c00 = lerp(f(i, j, k), f(i + 1, j, k), tx);
-    const std::complex<double> c10 = lerp(f(i, j + 1, k), f(i + 1, j + 1, k), tx);
-    const std::complex<double> c01 = lerp(f(i, j, k + 1), f(i + 1, j, k + 1), tx);
-    const std::complex<double> c11 = lerp(f(i, j + 1, k + 1), f(i + 1, j + 1, k + 1), tx);
+    const std::complex<double> c00 = lerp(f(i, j, k), f(i1, j, k), tx);
+    const std::complex<double> c10 = lerp(f(i, j1, k), f(i1, j1, k), tx);
+    const std::complex<double> c01 = lerp(f(i, j, k1), f(i1, j, k1), tx);
+    const std::complex<double> c11 = lerp(f(i, j1, k1), f(i1, j1, k1), tx);
     return lerp(lerp(c00, c10, ty), lerp(c01, c11, ty), tz);
 }
 

@@ -26,15 +26,6 @@ _deps/
 *.pdb
 *.ilk
 
-# Qt / moc / uic / rcc generated
-*.moc
-moc_*.cpp
-moc_*.h
-qrc_*.cpp
-ui_*.h
-*.qmlc
-*.jsc
-
 # IDE / editor
 /.vs/
 /.idea/

@@ -119,7 +119,7 @@ struct Ladder1dApi {
     virtual void toggle_loss() = 0;
     virtual bool loss_on() const = 0;
     virtual long long jump_count() const = 0;
-    // Linear-combination spectrum strip (0..100 eV). Weights change only on
+    // Linear-combination spectrum strip (0..200 eV). Weights change only on
     // mutations (unitary evolution preserves |c_n|^2), so recompute is lazy.
     virtual int spectrum_count() = 0;
     virtual double spectrum_ev(int i) = 0;
@@ -153,7 +153,7 @@ struct MoleculeApi {
     virtual bool prepared(int k) const = 0;  // state k solved and cached
     virtual double energy(int k) const = 0;  // captured E_k (Ha); 0 = none
     virtual void prepare(int k) = 0;         // relax the chain up to k
-    virtual double nuclear_repulsion() const = 0;  // sum_{i<j} Z^2 / r_ij
+    virtual double nuclear_repulsion() const = 0;  // sum_{i<j} Z_i Z_j / r_ij
     virtual void set_geometry(int variant) = 0;    // scene-defined presets
     virtual int geometry() const = 0;
     virtual void set_parameter(double p) = 0;  // scene knob (R / delta)
@@ -285,7 +285,7 @@ struct QdotApi {
     virtual void update_grab(double strength) = 0;
     virtual void end_grab() = 0;
     virtual bool grabbing() const = 0;
-    // Fock-Darwin linear-combination spectrum (0..100 eV), lazy.
+    // Fock-Darwin linear-combination spectrum (0..200 eV), lazy.
     virtual int spectrum_count() = 0;
     virtual double spectrum_ev(int i) = 0;
     virtual double spectrum_weight(int i) = 0;

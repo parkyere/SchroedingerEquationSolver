@@ -17,12 +17,7 @@ export module ses.vk.device;
 
 export namespace ses_vk {
 
-// Harnesses check nonzero after GPU work: catches a barrier/usage bug even when
-// the numbers came out right. Non-inline: module-attached single definition
-// (MSVC duplicates inline module statics per TU). Reaches the callback via
-// pUserData, not name lookup.
-std::atomic<int> g_validation_errors{0};
-
+// pUserData is the owning DeviceContext's validation_errors counter.
 inline VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -78,6 +73,9 @@ struct DeviceContext {
     VkQueue compute_queue = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;
     bool validation_active = false;
+    // Validation-layer ERROR count; harnesses check it is still zero after GPU
+    // work (catches a barrier/usage bug even when the numbers came out right).
+    std::atomic<int> validation_errors{0};
     // Set on first engine submit/fence failure; further submits skip and the
     // director falls back to the CPU path.
     bool device_lost = false;
@@ -109,7 +107,6 @@ struct DeviceContext {
         }
     } fault;
     // create_device enables ONLY the supported subset; fast paths gate on these.
-    // adopt() leaves them false (owner enabled its own).
     bool feat_timeline_semaphore = false;
     bool feat_synchronization2 = false;
     bool feat_dynamic_rendering = false;
@@ -124,42 +121,6 @@ struct DeviceContext {
     DeviceContext(const DeviceContext&) = delete;
     DeviceContext& operator=(const DeviceContext&) = delete;
     ~DeviceContext() { destroy(); }
-
-    // Creates its OWN VmaAllocator on the shared device, destroys only what it
-    // made. One device per process (volkLoadDevice global table; multi-device
-    // would need volkLoadDeviceTable).
-    Boot adopt(VkInstance inst, VkPhysicalDevice pd, VkDevice dev,
-               std::uint32_t family, VkQueue q) {
-        if (volkInitialize() != VK_SUCCESS) {
-            return Boot::no_driver;
-        }
-        instance = inst;
-        phys_dev = pd;
-        device = dev;
-        queue_family = family;
-        queue = q;
-        compute_family = family;  // adopted device: single shared queue
-        compute_queue = q;
-        owns_device_ = false;
-        volkLoadInstance(instance);
-        volkLoadDevice(device);
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(phys_dev, &props);
-        std::memcpy(device_name, props.deviceName, sizeof(device_name));
-        VmaVulkanFunctions fns{};
-        fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-        fns.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-        VmaAllocatorCreateInfo aci{};
-        aci.physicalDevice = phys_dev;
-        aci.device = device;
-        aci.instance = instance;
-        aci.pVulkanFunctions = &fns;
-        aci.vulkanApiVersion = props.apiVersion;  // device's real version (VMA must not exceed it)
-        if (vmaCreateAllocator(&aci, &allocator) != VK_SUCCESS) {
-            return Boot::error;
-        }
-        return Boot::ok;
-    }
 
     Boot create(bool want_validation) {
         const Boot inst = create_instance(want_validation, {});
@@ -229,7 +190,7 @@ struct DeviceContext {
                 VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                 VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
             mi.pfnUserCallback = debug_utils_callback;
-            mi.pUserData = &g_validation_errors;
+            mi.pUserData = &validation_errors;
             if (vkCreateDebugUtilsMessengerEXT(instance, &mi, nullptr,
                                                &messenger) != VK_SUCCESS) {
                 messenger = VK_NULL_HANDLE;  // non-fatal: layer still logs
@@ -542,13 +503,6 @@ struct DeviceContext {
             vmaDestroyAllocator(allocator);
             allocator = VK_NULL_HANDLE;
         }
-        if (!owns_device_) {  // adopted handles belong to their owner
-            device = VK_NULL_HANDLE;
-            instance = VK_NULL_HANDLE;
-            phys_dev = VK_NULL_HANDLE;
-            queue = VK_NULL_HANDLE;
-            return;
-        }
         if (device != VK_NULL_HANDLE) {
             vkDestroyDevice(device, nullptr);
             device = VK_NULL_HANDLE;
@@ -572,9 +526,6 @@ struct DeviceContext {
     VkCommandPool compute_oneshot_pool = VK_NULL_HANDLE;
     VkCommandBuffer compute_oneshot_cb = VK_NULL_HANDLE;
     VkFence compute_oneshot_fence = VK_NULL_HANDLE;
-
-private:
-    bool owns_device_ = true;
 };
 
 // Host-visible UBO write: memcpy into the persistent mapping + flush. The one

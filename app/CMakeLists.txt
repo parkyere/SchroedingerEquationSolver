@@ -52,9 +52,9 @@ option(SES_ARC_TESTS "Register the --selftest-* arcs as ctest entries (slow, GPU
 if(SES_ARC_TESTS)
     foreach(_arc IN ITEMS anderson benzene billiard bloch bouncer carpet
             cascade cat corral decay doubleslit2d
-            dw1d efield energy h2p kepler ladder1d landau magnetic manifold
-            morse1d partial pt1d qdot qpc2d rabi scene spin spins
-            trapdecay tunnel tunnel1d)
+            dw1d efield energy h2p h2p-orbitals kepler ladder1d landau magnetic
+            manifold morse1d partial pt1d qdot qpc2d rabi rotate rotor
+            rutherford scene spin spins trapdecay tunnel tunnel1d)
         add_test(NAME Arc.${_arc}
                  COMMAND sesolver_app --selftest-${_arc})
         set_tests_properties(Arc.${_arc} PROPERTIES

@@ -62,8 +62,8 @@ public:
         return center;
     }
 
-    constexpr double time() const noexcept { return steps_ * dt_; }
-    constexpr double dt() const noexcept { return dt_; }
+    double time() const noexcept { return steps_ * dt_; }
+    double dt() const noexcept { return dt_; }
     const Grid3D& grid() const noexcept { return grid_; }
     const Field3D& psi() const noexcept { return psi_; }
     const std::vector<double>& potential() const noexcept { return potential_; }

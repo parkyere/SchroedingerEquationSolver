@@ -4,9 +4,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <random>
 #include <string>
 #include <utility>
@@ -35,7 +33,9 @@ constexpr double kSpRfB1 = 0.05;      // Omega_R
 constexpr int kSpEcho = 64;           // echo ensemble size
 constexpr double kSpEchoDet = 0.25;   // fractional detuning spread
 constexpr double kSpEchoTau = 30.0;   // pulse spacing (au)
-constexpr int kSpFlux = 30;           // tracer count per field
+// 8 fixed curves + 2 fields x kSpFlux streaks must fit the renderer's 64
+// overlay-curve cap, or the last streaks silently vanish.
+constexpr int kSpFlux = 28;           // tracer count per field
 constexpr double kSpFluxR = 16.0;     // tracer shell radius
 constexpr double kSpFluxSpeed = 0.12; // Bohr per frame
 
@@ -426,7 +426,7 @@ private:
         if (pos.size() != 3 * kSpFlux) {
             pos.resize(3 * kSpFlux);
             for (std::size_t i = 0; i < pos.size(); ++i) {
-                pos[i] = uni(rng_);
+                pos[i] = uni(fx_rng_);
             }
         }
         const double sp = kSpFluxSpeed * std::min(1.0, f);
@@ -438,9 +438,9 @@ private:
             y += dy * sp;
             z += dz * sp;
             if (x * x + y * y + z * z > kSpFluxR * kSpFluxR * 1.4) {
-                x = uni(rng_) * 0.8 - dx * kSpFluxR;
-                y = uni(rng_) * 0.8 - dy * kSpFluxR;
-                z = uni(rng_) * 0.8 - dz * kSpFluxR;
+                x = uni(fx_rng_) * 0.8 - dx * kSpFluxR;
+                y = uni(fx_rng_) * 0.8 - dy * kSpFluxR;
+                z = uni(fx_rng_) * 0.8 - dz * kSpFluxR;
             }
             // separate 2-point streak per tracer (chaining would smear)
             const double tl = 1.6 * std::min(1.0, f);
@@ -477,7 +477,10 @@ private:
     bool title_dirty_ = true;
     bool compute_attempted_ = false;
     std::string note_;
-    std::mt19937 rng_{20260721u};
+    std::mt19937 rng_{20260721u};     // physics draws (measurement, echo)
+    std::mt19937 fx_rng_{20260724u};  // display tracers: never touches the
+                                      // physics stream (outcomes would depend
+                                      // on how many frames were rendered)
     std::vector<float> circle_[3];
     std::vector<float> axis_[3];
     std::vector<float> fan_;

@@ -568,7 +568,6 @@ public:
         record_post(cb, use_accum);
 
         const bool ok = shot.submit_and_wait(*ctx_);
-        shot.destroy(*ctx_);
         return ok;
     }
 
@@ -895,7 +894,6 @@ private:
         }
         record(shot.cb());
         const bool ok = shot.submit_and_wait(*ctx_, loc);
-        shot.destroy(*ctx_);
         return ok;
     }
 

@@ -146,7 +146,7 @@ inline double real_spherical_harmonic(int l, int m, double x, double y, double z
 // psi = (u(r)/r) Y_lm, u linearly interpolated (u/r -> u[0]/h as r -> 0).
 // CONTRACT: ses.projection deposit (core/src/projection.ixx) mirrors this interpolation.
 inline void fill_orbital(Field3D& psi, const Grid3D& g, const RadialGrid& rg,
-                         const std::vector<double>& u, int l, int m) noexcept {
+                         const std::vector<double>& u, int l, int m) {
     const double h = rg.h();
     // z-slabs via ses.parallel (bitwise-deterministic). NOT OpenMP: MSVC
     // miscompiles #pragma omp in an exported module fn (zero field).
