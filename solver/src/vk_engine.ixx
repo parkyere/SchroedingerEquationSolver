@@ -2970,7 +2970,6 @@ private:
         scale_.bind(s2.cb(), scale_any_set_);
         vkCmdDispatch(s2.cb(), mul_groups_, 1, 1);
         s2.submit_and_wait(*ctx_);
-        s2.destroy(*ctx_);
         return np;
     }
 

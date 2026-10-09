@@ -885,7 +885,7 @@ private:
         return true;
     }
 
-    // OneShot scaffold: begin -> record(cb) -> submit_and_wait -> destroy.
+    // OneShot scaffold: begin -> record(cb) -> submit_and_wait.
     bool one_shot(auto&& record,
                   std::source_location loc = std::source_location::current()) {
         OneShot shot;
