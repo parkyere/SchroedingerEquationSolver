@@ -141,10 +141,12 @@ ctest --preset msvc-release
 Linux: the same flow with the `linux-release` preset (SDL3 wants the X11 /
 Wayland dev stacks). The routinely exercised configuration is Windows/MSVC.
 
-Lightweight core-only loop (no vcpkg, no GUI, no GPU):
+Lightweight core-only loop (no vcpkg, no GUI, no GPU): the core modules,
+the Vulkan-free scenario pieces and their tests. Ask for Release -- the
+default is Debug, and the 3D physics tests crawl unoptimized.
 
 ```sh
-cmake -S . -B build -DSES_BUILD_GPU=OFF
+cmake -S . -B build -DSES_BUILD_GPU=OFF -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
@@ -210,8 +212,11 @@ in their own panel and title bar):
   term — a p_x cloud genuinely precesses, the cloud visibly squeezes toward
   the field axis at high B. Crossed E-B works; an absorbing mask stops
   ionized flux wrapping the periodic box;
+- **K** seed a circular-state Rydberg (Kepler) packet / **X/Y/Z** rotate
+  the live state about that axis (exact three-shear; the camera snap on Z
+  belongs to scenes that leave Z unhandled);
 - **F** probability-current flow streaklines (v = j/ρ) / **Tab**
-  cloud ↔ isosurface / **Z** face the z axis / drag orbits, wheel zooms,
+  cloud ↔ isosurface / drag orbits, wheel zooms,
   **Space** pauses, **[ ]** tunes cloud density.
 
 The cloud renders through an HDR pipeline: phase-tinted front-to-back

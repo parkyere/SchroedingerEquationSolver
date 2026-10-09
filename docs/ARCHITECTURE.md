@@ -260,10 +260,13 @@ analytic oracle as its red test:
 
 ## Build topology
 
-`CMakeLists.txt` (root) → `core/` (always) → slangc/VkFFT CMake helpers →
-`solver/` → `viz/` → `scenario/` (all windowing-free, always built) →
-`tests/` (if `SES_BUILD_TESTS`; links core + scenario) → `bench/` (if
-`SES_BUILD_BENCH`) → `app/` (if `SES_BUILD_APP` **and** SDL3 found). The app
-is optional so the TDD loop never requires a GUI toolchain. Shaders are
+`CMakeLists.txt` (root) → `core/` (always) → [if `SES_BUILD_GPU`:
+slangc/VkFFT CMake helpers → `solver/` → `viz/`] → `scenario/`
+(`ses_scenario_core`, Vulkan-free, always; the director library
+`ses_scenario` only with the GPU layers) → `tests/` (if `SES_BUILD_TESTS`;
+core + scenario-core tests always, director-contract tests with the GPU
+layers) → `bench/` (if `SES_BUILD_BENCH`) → `app/` (if `SES_BUILD_APP`
+**and** SDL3 found). `-DSES_BUILD_GPU=OFF` is the core-only TDD loop: no
+vcpkg, no Vulkan, no GUI toolchain. Shaders are
 authored in Slang and offline-baked to SPIR-V headers by `slangc` at build
 time.

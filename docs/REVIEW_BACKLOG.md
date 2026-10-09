@@ -37,7 +37,7 @@ for any testable logic.
   `synthesize_state` (`vk_engine.ixx`) records the synth dispatch, then in a
   SEPARATE fenced submit `normalize_buffer` reads the same buffer with no
   device-side RAW `barrier_compute_to_compute`; likewise the norm-read → scale-write
-  WAR (2689). Visibility rides on the host fence, whereas the codebase's OWN idiom
+  WAR. Visibility rides on the host fence, whereas the codebase's OWN idiom
   carries such an edge in-band (`barrier_transfer_to_compute` after the staging upload in `vk_engine.ixx`).
   Benign at 1.3 (a WRONG-DATA risk, not the hang), but a real spec gap -- fix it to
   match the idiom; it also doubles as a driver-exoneration test at 1.4.
