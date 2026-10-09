@@ -289,3 +289,33 @@ for any testable logic.
   /`look_at` 퇴화 입력에서 NaN. `gen_h2plus_atlas` n==1 clamp UB. `sphere_mesh`
   rings<2 0으로 나눔. `photon_flight_frames` 0 → `progress` NaN.
 - 벤치/테스트의 `soft_coulomb`, `bench_main`의 "per-frame hot path" 주석(CPU 경로).
+
+### F. 테스트 스위트 (툴링 검수분, 미해결)
+- **`ladder_test.cpp` `LadderCap.MatchesTheIndependentlyMeasuredCleanCap`은 동어반복**:
+  `measure_clean_cap`이 `ladder_cap`과 같은 시드·같은 `ladder_raise`·같은 1e-6
+  기준을 다시 쓴 것이라 `|diff| <= 1`이 실패할 수 없음. `ladder_cap`에는 물리
+  오라클이 없음(측정 곡선 regression lock만) → 에너지 분산 기반 등 독립 오라클.
+- **느린 테스트 10개가 직렬 191 s 중 140 s**(RotorEhrenfest 50 s, AtlasFlush 26 s,
+  EggBox 16 s, RotorJMax 14 s …)인데 ctest `LABELS`/`TIMEOUT`이 없고, 같은 64³
+  relax를 테스트마다 반복(`SetUpTestSuite` 없음). 기본 `CMAKE_BUILD_TYPE=Debug`
+  강제는 README의 "Debug는 기어간다"와 충돌(`RelWithDebInfo` 또는 강제 해제).
+- **중복 헬퍼**: `cube()` 8벌(시그니처 3종), `max_abs_diff` 3벌, `node_count`/
+  `overlap_sq` 2~4벌, `expect_watertight` 2벌, 3D `energy_variance` 2벌(코어에는 1D만),
+  손으로 만든 2D CAP 3벌·2D 패킷 필러 4벌·corral 링 2벌, `axpy` 루프 14곳 →
+  `test_util.h`(매크로 게이트 대신 분리 헤더)로.
+- **stdout 잡음**: 10개 파일 22곳의 `printf`가 녹색 실행에서 33줄 출력 → `SCOPED_TRACE`/
+  `RecordProperty`. `spheroidal_test`/`projection_test`는 `<cstdio>` 없이 `printf`,
+  `magnetic_test`는 `<vector>/<algorithm>` 없이 사용(전이 include 의존, MSVC 위험).
+- **다중 관심사 테스트**(`potential_test` 412-458, `lattice2d_test` 208-262·376-446,
+  `molecule_test` 32-83 …)와 근거 없는 허용 오차(`lattice2d_test` 0.4/0.15/0.2,
+  `corral2d_test` 0.6×/2×, `rotor_test` 30..42)는 항목별 분리·유도.
+- **빠진 음성 테스트**: `Grid1D{n<=0}`, 빈 벡터 `fft`, `absorbing_mask(width > box)`,
+  `photon_flight_frames(de<=0)`, `bound_states_1d(count > n)`, `Scheduler::cancel(unknown)`,
+  `every(period<=0)`, `ho_eigenstate(n<0)`, `h2plus_atlas_baked(R 범위 밖)`.
+- `TEST_P` 후보: 디렉터 레지스트리 전체에 대한 pacing/`set_real_time`/`handle_key`
+  계약(현재 23개 중 2개만), 해석적 우물 스펙트럼, 구면조화함수 점값 표.
+- `radial_test.cpp` `SoftCoreAtomMatchesThe3DSolver`의 참조값은 이 프로젝트의 다른
+  실행에서 읽은 숫자(외부 유도 없음) → regression lock으로 명시.
+- `// RED:` 머리말 54개 파일, "bitwise"라 쓰고 `EXPECT_DOUBLE_EQ`(4 ULP)를 쓰는
+  `propagator_tables_test`/`imaginary_tables_test` 주석, `complex_test`의 플래그
+  이름 주석(계약이 아닌 플래그를 적음).
