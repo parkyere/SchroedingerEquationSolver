@@ -117,9 +117,10 @@ protected:
                     psi_(i, row_, 0) = psi1d_[i];
                 }
                 row_ = (row_ + 1) % kCp1dN;
-                // mid_max_/best_: the arc's revival oracle.
+                // mid_max_/best_: the arc's revival oracle, stamped with the
+                // time of THIS row (sim_time_ advances only after the batch).
                 const double t_rev = revival_time();
-                const double frac = sim_time_ / t_rev;
+                const double frac = (sim_time_ + (s + 1) * kCp1dDt) / t_rev;
                 const double ov = revival_overlap();
                 if (frac > kCp1dMidLo && frac < kCp1dMidHi) {
                     mid_max_ = std::max(mid_max_, ov);

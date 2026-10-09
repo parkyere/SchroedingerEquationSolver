@@ -6,7 +6,6 @@ module;
 #include <array>
 #include <cassert>
 #include <cmath>
-#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
@@ -319,7 +318,9 @@ public:
         if (solving()) {
             return;
         }
-        ensure_cpu_current();
+        if (!ensure_cpu_current()) {
+            return;  // a stale CPU psi must not be collapsed and re-uploaded
+        }
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         sim_.measure(uniform(rng_), kBaseMeasureSigma);
         reset_ionized_tally();  // the electron was FOUND: nothing escaped
@@ -754,8 +755,6 @@ public:
     }
 
 private:
-    // strf: BaseDirector's protected helper (the former private copy shadowed it).
-
     ses::Vec3d laser_axis() const {
         return laser_pol_ == LaserPol::X ? ses::Vec3d{1.0, 0.0, 0.0}
                                          : ses::Vec3d{0.0, 0.0, 1.0};
@@ -1239,7 +1238,9 @@ private:
         if (!engine_.set_potential(v) || !engine_.set_potential_gradient(v)) {
             std::fprintf(stderr, "engine: field-table upload failed -- "
                                  "falling back to CPU stepping\n");
+            ensure_cpu_current();  // pull the GPU psi down first
             gpu_ok_ = false;
+            cpu_is_truth_ = true;  // sim_ is now the only stepped state
             return;
         }
         uploaded_e0_ = fields_.e0;
@@ -1403,8 +1404,8 @@ private:
     // ensure_relax_tables: BaseDirector's (relax_dtau() hook == kBaseRelaxDtau).
     void drop_relax_tables() { engine_.release_relax_tables(); }
 
-    // BaseDirector pure-virtual hooks: never actually called (HydrogenDirector
-    // overrides both callers) -- present only to make the class concrete.
+    // BaseDirector hooks: remake_simulation() is never reached here (the
+    // base callers are overridden); scene_name() feeds the title.
     ses::WavepacketSimulation remake_simulation() const override {
         return make_simulation();
     }

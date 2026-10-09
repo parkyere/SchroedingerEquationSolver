@@ -78,9 +78,7 @@ public:
     void reset_simulation() override {
         BaseDirector::reset_simulation();
         if (gpu_ok_) {
-            engine_.wait_async();
-            engine_.set_potential(sim_.potential());
-            engine_.set_potential_gradient(sim_.potential());
+            upload_potential_tables();
         }
     }
 

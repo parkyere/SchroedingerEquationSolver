@@ -3,9 +3,7 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
@@ -177,6 +175,8 @@ protected:
     virtual const char* scene_name() const = 0;
     virtual std::string title_suffix() { return ""; }
     virtual int steps_per_tick() const { return 1; }
+    // The x1 baseline the perf readout derives au/s from.
+    int steps_per_tick_x1() const override { return steps_per_tick(); }
     virtual void after_batch() {}
     virtual void after_reset() {}
 

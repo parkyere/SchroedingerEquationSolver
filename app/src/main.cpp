@@ -5,28 +5,19 @@
 // Std headers first, in full: a FIRST textual include after the ses.* module
 // imports' GMFs would C2572 (MSVC C++20-modules ordering).
 #include <algorithm>
-#include <atomic>
-#include <cassert>
-#include <cfloat>
 #include <cmath>
 #include <numbers>
-#include <complex>
-#include <condition_variable>
-#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <iterator>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -144,9 +135,12 @@ public:
             if (!SDL_Init(SDL_INIT_EVENTS)) {  // SDL_GetTicks + event drain
                 fatal_shell_error("SDL init", SDL_GetError());
             }
-            if (vk_ctx_.create(want_validation) != ses_vk::Boot::ok) {
+            const ses_vk::Boot boot = vk_ctx_.create(want_validation);
+            if (boot != ses_vk::Boot::ok) {
                 fatal_shell_error("Vulkan device",
-                                  "no Vulkan runtime on this machine");
+                                  boot == ses_vk::Boot::no_driver
+                                      ? "no Vulkan runtime on this machine"
+                                      : "Vulkan device creation failed");
             }
             std::fprintf(stderr, "vk: device %s (headless)%s\n",
                          vk_ctx_.device_name,
@@ -158,6 +152,7 @@ public:
                                   "ses_vk renderer initialization failed");
             }
             refresh_status();
+            sched_.poll(SDL_GetTicks());  // epoch = end of init (see below)
             return;
         }
 
@@ -207,6 +202,10 @@ public:
         }
         init_imgui();
         refresh_status();
+        // Scheduler epoch = end of init: the arcs register right after this,
+        // and their after(ms) delays must not be eaten by the seconds spent
+        // here (SDL_GetTicks counts from SDL_Init).
+        sched_.poll(SDL_GetTicks());
         // Compute init is DEFERRED into the loop: VkFFT plan compile + radial
         // solve block for seconds, and the window must present a frame first,
         // not sit black behind them.
@@ -511,7 +510,7 @@ private:
         ImGui_ImplSDL3_InitForVulkan(window_);
 
         ImGui_ImplVulkan_InitInfo info{};
-        info.ApiVersion = VK_API_VERSION_1_4;
+        info.ApiVersion = VK_API_VERSION_1_3;  // the instance's version
         info.Instance = vk_ctx_.instance;
         info.PhysicalDevice = vk_ctx_.phys_dev;
         info.Device = vk_ctx_.device;
