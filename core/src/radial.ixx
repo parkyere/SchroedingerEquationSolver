@@ -4,7 +4,6 @@ module;
 #include <complex>
 #include <cstddef>
 #include <vector>
-#include <cstdint>
 export module ses.radial;
 export import ses.decay;
 

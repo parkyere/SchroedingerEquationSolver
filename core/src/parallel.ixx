@@ -4,6 +4,7 @@ module;
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -19,7 +20,9 @@ export module ses.parallel;
 namespace ses::par_detail {
 
 // One region at a time (region_mutex_); caller is worker 0, pool threads 1..W-1.
-// Region ends only after every participant leaves the Job -> no dangling stack reads.
+// Region ends only after every participant leaves the Job -> no dangling stack
+// reads. A throwing body aborts the region (remaining chunks are skipped) and
+// its first exception is rethrown on the caller once everyone has left.
 class Pool {
 public:
     Pool() {
@@ -93,6 +96,9 @@ public:
         }
         job_.store(nullptr, std::memory_order_release);
         coordinator_.store(std::thread::id{}, std::memory_order_release);
+        if (job.error) {
+            std::rethrow_exception(job.error);
+        }
     }
 
 private:
@@ -101,6 +107,8 @@ private:
         int chunks;
         std::atomic<int> next{0};
         std::atomic<int> exited{0};
+        std::atomic<bool> failed{false};
+        std::exception_ptr error{};  // first failure; written under m_
     };
 
     // Spin budget before kernel sleep: waking a deep-C-state core costs tens of us,
@@ -108,12 +116,20 @@ private:
     static constexpr int kSpin = 1 << 15;
 
     void work(Job& job, int worker) {
-        while (true) {
+        while (!job.failed.load(std::memory_order_acquire)) {
             const int c = job.next.fetch_add(1, std::memory_order_relaxed);
             if (c >= job.chunks) {
                 break;
             }
-            (*job.fn)(c, worker);
+            try {
+                (*job.fn)(c, worker);
+            } catch (...) {
+                std::lock_guard<std::mutex> lk(m_);
+                if (!job.error) {
+                    job.error = std::current_exception();
+                }
+                job.failed.store(true, std::memory_order_release);
+            }
         }
         if (job.exited.fetch_add(1) + 1 == workers_) {
             { std::lock_guard<std::mutex> lk(m_); }  // pair with cv_done_ waiter

@@ -25,11 +25,13 @@ public:
         : dt_(dt), half_angle_(0.5 * bfield * (0.5 * dt)), axis_(axis),
           veff_(build_veff(g, v, bfield, axis)), core_(g, veff_, dt) {}
 
-    constexpr double dt() const noexcept { return dt_; }
+    double dt() const noexcept { return dt_; }
 
     const std::vector<double>& effective_potential() const noexcept { return veff_; }
 
-    // Adjacent half-rotations across a step boundary merge to the full Larmor angle (B/2) dt.
+    // Strang: half-rotation, core step, half-rotation. Adjacent half-rotations
+    // across a step boundary are applied separately (a merged full rotation
+    // would halve the shear work; the tested oracle is this exact sequence).
     void step(Field3D& psi, int nsteps = 1) const {
         for (int s = 0; s < nsteps; ++s) {
             if (half_angle_ != 0.0) {

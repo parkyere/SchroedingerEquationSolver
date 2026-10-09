@@ -71,7 +71,7 @@ auto build_kinetic_table(const Grid3D& g, double mass, double scale, Elem&& elem
 
 // Elementwise (disjoint) multiply, threaded: bitwise identical to serial.
 inline void apply_phase(const std::vector<std::complex<double>>& phase,
-                        std::vector<std::complex<double>>& a) noexcept {
+                        std::vector<std::complex<double>>& a) {
     parallel_for(static_cast<int>(a.size()), [&](int i) {
         a[static_cast<std::size_t>(i)] =
             a[static_cast<std::size_t>(i)] * phase[static_cast<std::size_t>(i)];

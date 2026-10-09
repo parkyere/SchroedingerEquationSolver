@@ -47,7 +47,7 @@ class PeierlsLattice2D {
 public:
     PeierlsLattice2D(const Grid3D& g, const std::vector<double>& potential,
                      double dt)
-        : g_(&g), nx_(g.x.n), ny_(g.y.n), dt_(dt), v_(potential) {
+        : g_(g), nx_(g.x.n), ny_(g.y.n), dt_(dt), v_(potential) {
         assert(g.z.n == 1);
         assert(static_cast<int>(potential.size()) == g.size());
         tx_ = 0.5 / (g.x.spacing() * g.x.spacing());
@@ -84,8 +84,8 @@ public:
     // cut_down e^{+i phi} below -- gauge-equivalent (tested as such).
     void set_solenoid(double phi, double xs, double ys, bool cut_up = true) {
         link_x_.assign(link_x_.size(), 1.0);
-        const int is = lattice2d_detail::bracket_cell(g_->x, xs);
-        const int js = lattice2d_detail::bracket_cell(g_->y, ys);
+        const int is = lattice2d_detail::bracket_cell(g_.x, xs);
+        const int js = lattice2d_detail::bracket_cell(g_.y, ys);
         if (is < 0 || js < 0) {
             return;  // solenoid outside the lattice
         }
@@ -106,9 +106,9 @@ public:
     // row j carry e^{-i B hx y_j}. Anchor at y = 0, NOT ymin, or the packet
     // gets a spurious v_x = -B*ymin. Replaces any solenoid.
     void set_uniform_field(double b) {
-        const double bh = b * g_->x.spacing();
+        const double bh = b * g_.x.spacing();
         for (int j = 0; j < ny_; ++j) {
-            const double th = -bh * g_->y.coord(j);
+            const double th = -bh * g_.y.coord(j);
             const std::complex<double> u{std::cos(th), std::sin(th)};
             for (int i = 0; i < nx_; ++i) {
                 link_x_[static_cast<std::size_t>(j * nx_ + i)] = u;
@@ -156,7 +156,7 @@ private:
                     std::complex<double> my, double cy2,
                     std::complex<double> my2) const;
 
-    const Grid3D* g_;
+    Grid3D g_;  // by value: a caller's temporary grid must not dangle
     int nx_;
     int ny_;
     double dt_;
@@ -276,7 +276,7 @@ double PeierlsLattice2D::energy(const Field3D& psi) const {
             const std::complex<double> z = psi(i, j, 0);
             const double w = std::norm(z);
             den += w;
-            e += (v_[static_cast<std::size_t>(g_->flat(i, j, 0))] +
+            e += (v_[static_cast<std::size_t>(g_.flat(i, j, 0))] +
                   2.0 * tx_ + 2.0 * ty_) *
                  w;
             if (i + 1 < nx_) {

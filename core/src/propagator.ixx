@@ -3,7 +3,6 @@ module;
 #include <cassert>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <vector>
 export module ses.propagator;
 export import ses.grid;
@@ -23,7 +22,8 @@ public:
     SplitOperator1D(const Grid1D& g, const std::vector<double>& potential, double dt)
         : dt_(dt),
           half_v_(build_half_potential_table(potential, dt, unit_phase)),
-          kinetic_(build_kinetic_table(g, 1.0, dt, unit_phase)) {
+          kinetic_(build_kinetic_table(g, 1.0, dt, unit_phase)),
+          twiddles_(fft_twiddles(static_cast<std::size_t>(g.n))) {
         assert(static_cast<int>(potential.size()) == g.n);
     }
 
@@ -31,11 +31,13 @@ public:
 
     void step(Field1D& psi, int nsteps = 1) const {
         assert(psi.data().size() == half_v_.size());
+        std::complex<double>* a = psi.data().data();
+        const std::size_t n = psi.data().size();
         for (int s = 0; s < nsteps; ++s) {
             apply_phase(half_v_, psi.data());
-            fft(psi.data());
+            fft(a, n, twiddles_.data());
             apply_phase(kinetic_, psi.data());
-            ifft(psi.data());
+            ifft(a, n, twiddles_.data());
             apply_phase(half_v_, psi.data());
         }
     }
@@ -44,6 +46,7 @@ private:
     double dt_;
     std::vector<std::complex<double>> half_v_;
     std::vector<std::complex<double>> kinetic_;
+    std::vector<std::complex<double>> twiddles_;  // one table for every step
 };
 
 class SplitOperator3D {

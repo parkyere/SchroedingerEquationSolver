@@ -4,7 +4,6 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <vector>
-#include <cstdint>
 export module ses.observables;
 export import ses.spectral;
 export import ses.vec;
