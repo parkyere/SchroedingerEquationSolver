@@ -25,7 +25,7 @@ Path classification (also enforced by the hook):
 | Class | Paths |
 |---|---|
 | TEST | `tests/**` |
-| PRODUCTION | `core/include/**`, `core/src/**`, `app/**` |
+| PRODUCTION | `core/**`, `solver/**`, `viz/**`, `scenario/**`, `app/**` |
 | NEUTRAL | everything else (build, docs, config, tooling) |
 
 Neutral files may ride along with either a test or a production commit.

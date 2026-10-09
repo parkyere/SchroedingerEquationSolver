@@ -15,7 +15,7 @@ for any testable logic.
   workaround.** At `apiVersion = VK_API_VERSION_1_4` the app device-losts on NVIDIA
   580.139.03 / Blackwell / Linux; at 1.3 it works (confirmed by 1-line A/B). Root-
   caused (3 independent audits): the `source_location` diagnostic pins the FIRST
-  fault to the COMPUTE-side `normalize_buffer` (norm reduction, vk_engine.hpp:2659)
+  fault to the COMPUTE-side `normalize_buffer` (norm reduction, `vk_engine.ixx` `normalize_buffer`)
   during the startup atlas build -- **NOT the render path** (the earlier "render/
   present" hypothesis is REFUTED). ONLY the instance apiVersion enum differs
   (identical enabled features + SPIR-V, no 1.4-exclusive feature; VMA/ImGui pinned
@@ -34,11 +34,11 @@ for any testable logic.
   confirmed. 1.4 lives isolated in commit `649826b` for easy A/B.
 
 - **[correctness] Missing compute→compute barrier between atlas synth and norm.**
-  `synthesize_state` records the synth dispatch (vk_engine.hpp:2628), then in a
-  SEPARATE fenced submit `normalize_buffer` reads the same buffer (2657) with no
+  `synthesize_state` (`vk_engine.ixx`) records the synth dispatch, then in a
+  SEPARATE fenced submit `normalize_buffer` reads the same buffer with no
   device-side RAW `barrier_compute_to_compute`; likewise the norm-read → scale-write
   WAR (2689). Visibility rides on the host fence, whereas the codebase's OWN idiom
-  carries such an edge in-band (`barrier_transfer_to_compute`, vk_engine.hpp:2476).
+  carries such an edge in-band (`barrier_transfer_to_compute` after the staging upload in `vk_engine.ixx`).
   Benign at 1.3 (a WRONG-DATA risk, not the hang), but a real spec gap -- fix it to
   match the idiom; it also doubles as a driver-exoneration test at 1.4.
 

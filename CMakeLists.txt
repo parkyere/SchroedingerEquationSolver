@@ -78,17 +78,21 @@ endif()
 add_library(ses_arch INTERFACE)
 if(NOT MSVC)
     # Disable C99 Annex G NaN/inf fixups on std::complex * and / -- keeps the
-    # naive formulas bitwise identical to the oracles. Older Clang lacks the flag;
-    # safe to omit (same formula for finite values). MSVC never emits the fixups.
+    # naive formulas bitwise identical to the oracles. Clang >= 19 spells it
+    # -fcomplex-arithmetic=basic; GCC and Clang 18 take -fcx-limited-range
+    # (Clang 18 then emits a spurious "overriding '' option" warning on every
+    # TU, muted below). Older Clang has neither; safe to omit (same formula
+    # for finite values). MSVC never emits the fixups.
     include(CheckCXXCompilerFlag)
-    check_cxx_compiler_flag("-fcx-limited-range" SES_HAS_FCX_LIMITED_RANGE)
-    if(SES_HAS_FCX_LIMITED_RANGE)
-        target_compile_options(ses_arch INTERFACE -fcx-limited-range)
+    check_cxx_compiler_flag("-fcomplex-arithmetic=basic"
+                            SES_HAS_FCOMPLEX_ARITH_BASIC)
+    if(SES_HAS_FCOMPLEX_ARITH_BASIC)
+        target_compile_options(ses_arch INTERFACE -fcomplex-arithmetic=basic)
     else()
-        check_cxx_compiler_flag("-fcomplex-arithmetic=basic"
-                                SES_HAS_FCOMPLEX_ARITH_BASIC)
-        if(SES_HAS_FCOMPLEX_ARITH_BASIC)
-            target_compile_options(ses_arch INTERFACE -fcomplex-arithmetic=basic)
+        check_cxx_compiler_flag("-fcx-limited-range" SES_HAS_FCX_LIMITED_RANGE)
+        if(SES_HAS_FCX_LIMITED_RANGE)
+            target_compile_options(ses_arch INTERFACE -fcx-limited-range
+                $<$<CXX_COMPILER_ID:Clang>:-Wno-overriding-option>)
         else()
             message(STATUS "complex limited-range flag unsupported -- "
                 "std::complex keeps Annex G (finite results identical).")

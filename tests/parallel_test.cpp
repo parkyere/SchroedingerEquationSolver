@@ -8,9 +8,14 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <thread>
 #include <vector>
 
 import ses.parallel;
@@ -51,6 +56,33 @@ TEST(ParallelFor, NestedCallDoesNotDeadlockAndStaysCorrect) {
 }
 
 // Adversarial magnitudes (e^+-30, alt signs): order shows in low bits; bitwise-equal repeats prove fixed combine order.
+TEST(ParallelFor, BodyExceptionPropagatesAndPoolStaysParallel) {
+    // A throwing body must surface on the caller, after EVERY worker has
+    // left the region (the Job lives on the caller's stack), and must not
+    // leave the pool believing a region is still open (which would run
+    // every later region serially on the caller).
+    EXPECT_THROW(ses::parallel_for(4096, [](int) { throw std::runtime_error("boom"); }),
+                 std::runtime_error);
+
+    std::vector<int> hits(10007, 0);
+    ses::parallel_for(10007, [&](int i) { ++hits[static_cast<std::size_t>(i)]; });
+    for (int i = 0; i < 10007; ++i) {
+        ASSERT_EQ(hits[static_cast<std::size_t>(i)], 1) << "i=" << i;
+    }
+    EXPECT_EQ(ses::parallel_sum(100, 0, [](int i) { return i; }), 4950);
+
+    if (ses::parallel_workers() > 1) {
+        std::mutex m;
+        std::set<int> seen;
+        ses::parallel_ranges(64 * 8, [&](int worker, int, int) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            const std::lock_guard<std::mutex> lk(m);
+            seen.insert(worker);
+        });
+        EXPECT_GT(seen.size(), 1u) << "pool stuck in serial mode after a throw";
+    }
+}
+
 TEST(ParallelSum, BitwiseDeterministicAcrossRuns) {
     const int n = 4001;
     auto term = [](int i) {

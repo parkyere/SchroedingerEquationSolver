@@ -17,7 +17,8 @@
 # Bypass for a genuine infra/bootstrap commit:   git commit --no-verify
 # ---------------------------------------------------------------------------
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
+# D included: deleting a test alongside production code is still a mix.
+staged=$(git diff --cached --name-only --diff-filter=ACDMR)
 
 has_test=0
 has_prod=0

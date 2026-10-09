@@ -11,10 +11,12 @@ i ∂ψ/∂t = H ψ,    H = ½(-i∇ - A)² + V(r, t)
 
 The app renders `|ψ(r,t)|²` in real time — as a volume-raymarched **electron
 cloud** for the 3D scenes, as a phasor curve + phase-hued shadow band for the
-1D scenes, and as a face-on plane for the 2D lattice scenes. Fifteen scenes
-(see [README](../README.md#scenes)) cover the hydrogen atom, traps, tunneling,
-molecules, interference (double slit / Aharonov–Bohm), and solid-state physics
-(Landau levels, Bloch oscillations, the quantum corral, a quantum dot).
+1D scenes, and as a face-on plane for the 2D lattice scenes, and as Bloch spheres for the
+spin scenes. Twenty-three scenes (see [README](../README.md#scenes)) cover the
+hydrogen atom, traps, tunneling, molecules, interference (double slit /
+Aharonov–Bohm), solid-state physics (Landau levels, Bloch oscillations, the
+quantum corral, a quantum dot, Anderson localization, a point contact),
+spin dynamics, and scattering.
 
 **Out of scope (by design):** multiple electrons, Hartree/HF/DFT, the many-body
 wavefunction. The exact `N`-electron wavefunction lives in `3N` dimensions, so a
@@ -86,9 +88,10 @@ Three director families implement the seam:
 
 | Family | Scenes | Compute |
 |---|---|---|
-| `BaseDirector` | hydrogen, 3D trap, 3D tunnel, H₂⁺, benzene | GPU engine, 256³, CPU double truth + fp32 GPU mirror under one sync invariant (`cpu_is_truth_`) |
-| `Line1DDirector` | six 1D scenes (HO, tunnel, double well, Pöschl–Teller, Morse, Bloch) | CPU double, 64k-point grids (Bloch 4096), overlay-polyline display |
-| `Lattice2DDirectorBase` (+ two standalone directors) | corral, qdot (base); double slit, Landau (standalone) | CPU Peierls lattice on one z-plane, displayed by replicating into a thin volume slab |
+| `BaseDirector` | hydrogen, 3D trap, 3D tunnel, H₂⁺, benzene, Rutherford | GPU engine, 256³, CPU double truth + fp32 GPU mirror under one sync invariant (`cpu_is_truth_`) |
+| `Line1DDirector` | eight 1D scenes (HO, tunnel, double well, Pöschl–Teller, Morse, Bloch, Anderson, bouncer) | CPU double, 64k-point grids (Bloch 4096), overlay-polyline display |
+| `Lattice2DDirectorBase` (+ two standalone directors) | corral, qdot, billiard, qpc, carpet (base); double slit, Landau (standalone) | Peierls lattice on one z-plane (CPU, or the 2D/3D GPU engines per scene), displayed by replicating into a thin volume slab |
+| `SpinDirector` / `SpinsDirector` | spin, spins | Pauli two-level CPU stage; 2¹⁶ exact state vector on the GPU spin engine vs CPU mean field |
 
 Contracts every family obeys:
 
