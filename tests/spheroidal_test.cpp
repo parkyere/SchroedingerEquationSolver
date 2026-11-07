@@ -219,8 +219,21 @@ TEST(Spheroidal, BakedGroundIsTheLiveGroundOnTheGrid) {
     EXPECT_NEAR(eb, el, 1e-3) << "baked " << eb << " live " << el;
 }
 
+// The table holds one R: any other R must come back EMPTY, never the
+// 1.875 orbitals relabelled (their nuclei would sit at +-0.9375 inside a
+// potential whose wells are at +-R/2).
+TEST(Spheroidal, BakedAtlasRefusesAnROffItsGrid) {
+    const std::vector<ses::H2plusOrbital> on = ses::h2plus_atlas_baked(1.875);
+    ASSERT_FALSE(on.empty());
+    for (const ses::H2plusOrbital& o : on) {
+        EXPECT_EQ(o.R, 1.875);
+    }
+    EXPECT_TRUE(ses::h2plus_atlas_baked(2.0).empty());
+    EXPECT_TRUE(ses::h2plus_atlas_baked(6.25).empty());  // "stretched" preset
+}
+
 TEST(Spheroidal, BakedGroundSynthesizesLikeTheLiveSolve) {
-    const double R = 2.0;
+    const double R = 1.875;  // the baked grid point
     const Grid1D ax{-16.0, 16.0, 128};
     const Grid3D g{ax, ax, ax};
     const ses::H2plusOrbital b0 = ses::h2plus_atlas_baked(R).front();
