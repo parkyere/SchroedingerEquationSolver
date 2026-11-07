@@ -54,6 +54,10 @@ public:
         }
         showing_random_ = false;
         want_ = k;
+        if (prepared_[k]) {
+            show_cached(k);  // computed before: show it, no re-relax
+            return;
+        }
         advance_chain();
     }
     // P(|r| < radius) on the CPU truth.
@@ -195,6 +199,26 @@ protected:
 
     // Gaussian seed is not an eigenstate; relax into the ground state on boot.
     void on_gpu_ready() override { prepare(0); }
+
+    // A cached eigenstate goes straight back into psi (advance_chain alone
+    // returned at once, so a computed state could not be shown again without
+    // Reset); a relax still running for a later state is cancelled, as in
+    // seed_random -- psi is no longer its seed.
+    void show_cached(int k) {
+        fine_polish_ = false;
+        fine_left_ = 0;
+        engine_.release_relax_tables();
+        stepping_ = BaseStepping::RealTime;
+        engine_.copy_into_psi(buf_[k]);
+        const ses_vk::Engine::NormPeak np = engine_.norm_and_peak();
+        if (np.sum > 0.0) {
+            peak_ = np.peak / np.sum;
+        }
+        norm_display_ = 1.0;
+        cpu_is_truth_ = false;
+        write_display_texture();
+        title_dirty_ = true;
+    }
 
     void advance_chain() {
         int next = -1;
