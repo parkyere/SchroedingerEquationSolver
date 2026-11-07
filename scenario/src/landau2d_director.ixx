@@ -172,13 +172,16 @@ public:
                     // GPU norm stays ~1; normalize the display/measure copy only.
                     ses::normalize(psi_);
                 } else {
-                    prop_->step(psi_, chunk);
-                    ses::parallel_for(static_cast<int>(mask_.size()),
-                                      [&](int c) {
-                                          psi_.data()[static_cast<std::size_t>(
-                                              c)] *=
-                                              mask_[static_cast<std::size_t>(c)];
-                                      });
+                    // Mask after EVERY step, like the GPU path (once per
+                    // chunk absorbed 8x less at the edges).
+                    for (int s = 0; s < chunk; ++s) {
+                        prop_->step(psi_, 1);
+                        ses::parallel_for(
+                            static_cast<int>(mask_.size()), [&](int c) {
+                                psi_.data()[static_cast<std::size_t>(c)] *=
+                                    mask_[static_cast<std::size_t>(c)];
+                            });
+                    }
                     ses::normalize(psi_);
                 }
                 sim_time_ += chunk * kLd2dDt;

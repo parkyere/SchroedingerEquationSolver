@@ -320,7 +320,15 @@ private:
             }
         }
         ++shots_;
-        peak_ = 1.0;
+        // The cloud normalizer snaps to the new packet (max |psi|^2 = 2.5e-3
+        // at sigma = 8), as Landau2DDirector::fire does: a reset to 1.0 sat
+        // ~400x high and kept the packet near-invisible for ~300 frames while
+        // kPeakDecay caught up.
+        double pk = 0.0;
+        for (const std::complex<double>& c : psi_.data()) {
+            pk = std::max(pk, std::norm(c));
+        }
+        peak_ = pk;
         eng_dirty_ = true;  // new packet on the CPU: re-upload before stepping
         dirt_.mark_all_dirty();
     }
