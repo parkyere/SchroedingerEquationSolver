@@ -253,7 +253,10 @@ public:
             }
             while (now - last_tick_ >= kTickMs) {
                 last_tick_ += kTickMs;
-                if (!paused_) {
+                // No ticks before init_compute: a fresh 3D director would
+                // take a 256^3 CPU-fallback step on this thread that its GPU
+                // path discards a moment later (ticks are dropped, not owed).
+                if (!paused_ && compute_init_done_) {
                     director_->tick();
                 }
             }
@@ -294,8 +297,12 @@ public:
             // Achieved sim rate over a ~1 s rolling window (panel readout).
             if (now - perf_last_ms_ >= 1000) {
                 const double st = director_->sim_time();
-                perf_sim_rate_ = (st - perf_last_sim_t_) * 1000.0 /
-                                 static_cast<double>(now - perf_last_ms_);
+                // A scene switch or Reset restarts the director clock: keep
+                // the last rate for that window instead of a negative one.
+                if (st >= perf_last_sim_t_) {
+                    perf_sim_rate_ = (st - perf_last_sim_t_) * 1000.0 /
+                                     static_cast<double>(now - perf_last_ms_);
+                }
                 perf_last_sim_t_ = st;
                 perf_last_ms_ = now;
             }

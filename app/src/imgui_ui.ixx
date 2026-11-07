@@ -1076,6 +1076,12 @@ void draw_qdot_panel(ShellT& shell, UiState& ui, ses_shell::QdotApi& qd) {
     if (ImGui::Button("Relax ground (2)")) shell.press('2');
     ImGui::SameLine();
     if (ImGui::Button("Displace (F)")) shell.press('F');
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Shift the relaxed ground sideways: a coherent "
+                          "state. At B = 0 it\nswings at w0; with B it "
+                          "traces the two-frequency Fock-Darwin\nrosette "
+                          "(omega_pm = Omega -+ B/2), breadcrumbed white.");
+    }
     ImGui::SameLine();
     if (ImGui::Button("Random packet (S)")) shell.press('S');
     if (ImGui::Button("Ladder +w (3)")) shell.press('3');
@@ -1087,10 +1093,8 @@ void draw_qdot_panel(ShellT& shell, UiState& ui, ses_shell::QdotApi& qd) {
     ImGui::SameLine();
     if (ImGui::Button("Ladder -w (4)")) shell.press('4');
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Shift the relaxed ground sideways: a coherent "
-                          "state. At B = 0 it\nswings at w0; with B it "
-                          "traces the two-frequency Fock-Darwin\nrosette "
-                          "(omega_pm = Omega -+ B/2), breadcrumbed white.");
+        ImGui::SetTooltip("Circular a_R: -one w0 quantum, -1 L_z (refused on\n"
+                          "the ground, a|0> = 0). Needs B = 0, like +w.");
     }
     ImGui::SameLine();
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
