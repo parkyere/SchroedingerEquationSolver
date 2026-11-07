@@ -54,6 +54,21 @@ TEST(MagneticPropagator, EffectivePotentialCarriesTheDiamagneticTerm) {
     }
 }
 
+// The diamagnetic V is a free function of (V, grid, B, axis): a caller that
+// only needs the potential (the hydrogen scene's field upload) must not build
+// a propagator and its kinetic/half-potential phase tables to read it.
+TEST(MagneticPropagator, DiamagneticPotentialIsTheEffectivePotential) {
+    const Grid3D g = cube(12.0, 32);
+    const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
+    for (int axis = 0; axis < 3; ++axis) {
+        const ses::MagneticPropagator3D prop{g, v, 0.01, 0.4, axis};
+        EXPECT_EQ(ses::diamagnetic_potential(v, g, 0.4, axis),
+                  prop.effective_potential())
+            << "axis " << axis;
+    }
+    EXPECT_EQ(ses::diamagnetic_potential(v, g, 0.0, 2), v);  // B = 0: V itself
+}
+
 // Sign of B is physical: it sets the SENSE of the Larmor precession, so a
 // negative field must be a first-class input, not clamped or abs()'d away.
 TEST(MagneticPropagator, NegativeFieldReversesTheLarmorRotation) {
