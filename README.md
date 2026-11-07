@@ -30,7 +30,7 @@ dynamics, and scattering.
 | Potentials | **Bare regularized Coulomb** everywhere a nucleus appears — no soft-Coulomb stand-ins |
 | Parallelism | Project-owned deterministic thread pool (`ses.parallel`) — bitwise-reproducible reductions, no OpenMP |
 | Units | Atomic units (ℏ = mₑ = e = 1); energies displayed in eV where physical |
-| Testing | **Strict TDD** + Humble Object; a windowless GPU oracle binary (`sesolver_vkcheck`) verifies every kernel |
+| Testing | **Strict TDD** + Humble Object; a windowless GPU oracle binary (`sesolver_vkcheck`) verifies the solver kernels |
 
 ## Scenes
 
@@ -226,11 +226,14 @@ ACES tonemap.
 
 ## Verification
 
-All shader math is transcribed from the unit-tested CPU double core.
-`sesolver_vkcheck` (windowless) drives every GPU kernel and engine path
-against CPU oracles inside `ctest`. Every scene regresses headlessly through
-`--selftest-*` arcs, and `--dump-frame*` arcs verify the render path end to
-end — run `sesolver_app --help` for the full, current list.
+All solver shader math is transcribed from the unit-tested CPU double core.
+`sesolver_vkcheck` (windowless) drives the `ses_solver` kernels and engine
+paths against CPU oracles inside `ctest` (with the validation layer only when
+`SES_VK_VALIDATION=1` is set as above); `flow_velocity` and the `ses_viz`
+render kernels have no oracle yet. Every scene regresses headlessly through
+`--selftest-*` arcs; `--dump-frame*` arcs exercise the render path end to end
+and write the frame for inspection (any image passes) — run
+`sesolver_app --help` for the full, current list.
 
 ## License
 

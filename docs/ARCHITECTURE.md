@@ -56,8 +56,8 @@ research-grade mean-field (DFT) project. We stay single-electron on purpose.
   the Schrodinger GPGPU library: framework-free Vulkan 1.3 on top of `core`
   plus vendored infrastructure only (volk, VMA, VkFFT, offline-baked Slang
   kernels). It links no windowing at all — proven by `sesolver_vkcheck`,
-  which drives every kernel and engine path against the CPU double core
-  inside ctest, on machines with no SDL installed.
+  which drives its kernels and engine paths (`flow_velocity` aside) against
+  the CPU double core inside ctest, on machines with no SDL installed.
 - **`viz/`** (`ses_viz`, `ses.vk.render/present/...`) is the raw-Vulkan scene
   renderer (volume raymarch, HDR post chain, overlays, marker spheres) and
   the swapchain presenter. It rides the solver's device and knows nothing
@@ -248,15 +248,19 @@ analytic oracle as its red test:
   contracts.
 - Every discretization carries a **convergence-order** test (error ~ `h^p`).
 - **GPU kernels:** `sesolver_vkcheck` (windowless, ctest label `gpu`)
-  compares every kernel and engine path against the CPU double core with
-  fp32 tolerances, and fails on any validation-layer error. Every kernel
-  lands together with its vkcheck comparison — the GPU analogue of
-  red/green.
+  compares the `ses_solver` kernels and engine paths against the CPU double
+  core with fp32 tolerances. Run with `SES_VK_VALIDATION=1` and the layer on
+  the loader path (README, Build) it also fails on any validation-layer
+  error; the ctest entry sets neither. A solver kernel lands together with
+  its vkcheck comparison — the GPU analogue of red/green. Not covered yet:
+  `flow_velocity` and the `ses_viz` render kernels (accum, bloom, compose,
+  occupancy, shadow, particles).
 - **Scene behavior:** every scene regresses headlessly through the app's
   `--selftest-*` arcs (`--help` lists them). Arcs are condition-polled and
   scheduler-chained (manifold-ready probes, sim-time targets) rather than
   wall-clock-deadlined, so slower GPUs stretch runs instead of false-failing.
-  `--dump-frame*` arcs verify the render path end to end.
+  `--dump-frame*` arcs exercise the render path end to end and write the
+  frame for inspection (any image passes).
 
 ## Build topology
 
