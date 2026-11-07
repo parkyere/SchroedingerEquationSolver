@@ -17,13 +17,36 @@ export import ses.field;
 
 export namespace ses {
 
+// V + (B^2/8) rho_perp^2, rho_perp measured perpendicular to the field axis
+// (0=x, 1=y, 2=z): the diamagnetic term folded into the potential. Takes V by
+// value like tilted_potential, so a caller that owns V moves it in.
+inline std::vector<double> diamagnetic_potential(std::vector<double> v,
+                                                 const Grid3D& g, double bfield,
+                                                 int axis = 2) {
+    const double c = bfield * bfield / 8.0;
+    if (c == 0.0) {
+        return v;
+    }
+    for_each_cell(g, [&](int i, int j, int k, int flat) {
+        const double coord[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
+        double perp2 = 0.0;
+        for (int a = 0; a < 3; ++a) {
+            if (a != axis) {
+                perp2 += coord[a] * coord[a];
+            }
+        }
+        v[static_cast<std::size_t>(flat)] += c * perp2;
+    });
+    return v;
+}
+
 class MagneticPropagator3D {
 public:
     // axis: 0=x, 1=y, 2=z
     MagneticPropagator3D(const Grid3D& g, const std::vector<double>& v, double dt,
                          double bfield, int axis = 2)
         : dt_(dt), half_angle_(0.5 * bfield * (0.5 * dt)), axis_(axis),
-          veff_(build_veff(g, v, bfield, axis)), core_(g, veff_, dt) {}
+          veff_(diamagnetic_potential(v, g, bfield, axis)), core_(g, veff_, dt) {}
 
     double dt() const noexcept { return dt_; }
 
@@ -45,25 +68,6 @@ public:
     }
 
 private:
-    static std::vector<double> build_veff(const Grid3D& g, const std::vector<double>& v,
-                                          double bfield, int axis) {
-        std::vector<double> veff = v;
-        const double c = bfield * bfield / 8.0;
-        if (c != 0.0) {
-            for_each_cell(g, [&](int i, int j, int k, int flat) {
-                const double coord[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
-                double perp2 = 0.0;
-                for (int a = 0; a < 3; ++a) {
-                    if (a != axis) {
-                        perp2 += coord[a] * coord[a];
-                    }
-                }
-                veff[static_cast<std::size_t>(flat)] += c * perp2;
-            });
-        }
-        return veff;
-    }
-
     double dt_;
     double half_angle_;
     int axis_;

@@ -1226,10 +1226,9 @@ private:
                                       fields_.e_axis);
         }
         if (fields_.b_active()) {
-            // Reuse the core diamagnetic (perpendicular to the field axis).
-            const ses::MagneticPropagator3D mprop{sim_.grid(), v, sim_.dt(),
-                                                  fields_.b, fields_.b_axis};
-            v = mprop.effective_potential();
+            // The core diamagnetic term (perpendicular to the field axis).
+            v = ses::diamagnetic_potential(std::move(v), sim_.grid(), fields_.b,
+                                           fields_.b_axis);
         }
         // The half-potential AND the Ehrenfest gradient must stay in sync (a
         // stationary state reads <grad V>=0 -- no fake Larmor power with fields
