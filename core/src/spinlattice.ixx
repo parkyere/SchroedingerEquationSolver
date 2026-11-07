@@ -55,10 +55,12 @@ inline void spinlattice_step(SpinLattice& l, double bx, double by,
                     ey -= 2.0 * j * n[q].y;
                     ez -= 2.0 * j * n[q].z;
                 }
-                // Project out the n-parallel field: no torque but would tilt the axis.
-                const double nb = n[i].x * ex + n[i].y * ey + n[i].z * ez;
-                spin_step(l.s[i], ex - nb * n[i].x, ey - nb * n[i].y,
-                          ez - nb * n[i].z, h);
+                // The FULL effective field: exp(-i h B.sigma/2) precesses n on
+                // its Larmor cone about B_eff, which keeps n.B_eff (and so the
+                // mean-field energy) exact. Projecting B_eff perpendicular to n
+                // first would rotate n along a great circle instead, shrinking
+                // the cone every step -- a first-order energy drift.
+                spin_step(l.s[i], ex, ey, ez, h);
                 Vec3d p = bloch_vector(l.s[i]);
                 if (alpha > 0.0) {
                     // Gilbert drift off the post-rotation vector: n(n.B) - B = -B_perp.

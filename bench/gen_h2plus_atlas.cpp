@@ -11,28 +11,49 @@ import ses.spheroidal;
 
 namespace {
 
-constexpr int kProf = 48;
+// Samples per profile: the loader (ses.h2plus_atlas_loader) reconstructs the
+// sample coordinates as END-INCLUSIVE NODES over [-1, 1] (eta) and
+// [1, xi_max] (xi, xi_max = the live grid's EDGE), so the generator
+// interpolates the live profile at exactly those nodes. Nodes, not cell
+// centres: xi = 1 is the internuclear segment, and a centred grid would
+// clamp the cusp value over its first half-cell.
+constexpr int kProf = 256;
 constexpr int kMaxOrb = 60;  // candidate cap; representability filters at load
 // snap_r(2.0 bohr H2+ equilibrium) at kH2pBox=40/256^3 -> 1.875.
 constexpr double kFixedR = 1.875;
 
-std::vector<double> resample(const std::vector<double>& y, int n_out) {
+// Live profile y sampled at the uniform cell centres xs (spacing dx) ->
+// its value at the loader's n_out end-inclusive nodes over [lo_edge,
+// hi_edge]: linear between live centres, linearly extrapolated over the
+// half-cell between the outermost centre and the edge.
+std::vector<double> resample(const std::vector<double>& xs,
+                             const std::vector<double>& y, double lo_edge,
+                             double hi_edge, int n_out) {
     std::vector<double> out(static_cast<std::size_t>(n_out), 0.0);
-    const int n = static_cast<int>(y.size());
-    if (n == 0) {
+    const int n = static_cast<int>(xs.size());
+    if (n < 2 || n_out < 2) {
         return out;
     }
+    const double dx = xs[1] - xs[0];
+    const double d_out = (hi_edge - lo_edge) / (n_out - 1);
     for (int i = 0; i < n_out; ++i) {
-        const double t = (n_out == 1) ? 0.0
-                                      : static_cast<double>(i) * (n - 1) /
-                                            (n_out - 1);
-        const int lo = std::clamp(static_cast<int>(t), 0, n - 2);
-        const double f = t - lo;
+        const double x = lo_edge + i * d_out;
+        const double t = (x - xs[0]) / dx;
+        const int lo = std::clamp(static_cast<int>(std::floor(t)), 0, n - 2);
+        const double f = t - lo;  // outside [0, 1] only in the edge half-cells
         out[static_cast<std::size_t>(i)] =
             y[static_cast<std::size_t>(lo)] * (1.0 - f) +
             y[static_cast<std::size_t>(lo + 1)] * f;
     }
     return out;
+}
+
+// The live xi grid's EDGE (cell centres sit at 1 + (i + 0.5) dxi).
+double xi_edge(const ses::H2plusOrbital& o) {
+    if (o.xi.size() < 2) {
+        return 1.0;
+    }
+    return o.xi.back() + 0.5 * (o.xi[1] - o.xi[0]);
 }
 
 }  // namespace
@@ -98,7 +119,7 @@ int main(int argc, char** argv) {
                 k < counts[static_cast<std::size_t>(i)]
                     ? &perR[static_cast<std::size_t>(i)][static_cast<std::size_t>(k)]
                     : nullptr;
-            const double xi_max = o && !o->xi.empty() ? o->xi.back() : 1.0;
+            const double xi_max = o ? xi_edge(*o) : 1.0;  // grid EDGE
             std::fprintf(f, "%s{%d,%d,%d,%d,%.8e,%.8e}", k ? "," : "",
                          o ? o->m : 0, o ? o->n_eta : 0, o ? o->n_xi : 0,
                          o ? o->parity : 1, o ? o->energy : 0.0, xi_max);
@@ -117,7 +138,8 @@ int main(int argc, char** argv) {
                 if (k < counts[static_cast<std::size_t>(i)]) {
                     const ses::H2plusOrbital& o =
                         perR[static_cast<std::size_t>(i)][static_cast<std::size_t>(k)];
-                    prof = resample(radial ? o.lambda : o.M, kProf);
+                    prof = radial ? resample(o.xi, o.lambda, 1.0, xi_edge(o), kProf)
+                                  : resample(o.eta, o.M, -1.0, 1.0, kProf);
                 }
                 for (int p = 0; p < kProf; ++p) {
                     std::fprintf(f, "%s%.8e", p ? "," : "",

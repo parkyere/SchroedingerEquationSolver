@@ -12,7 +12,11 @@ export import ses.h2plus_atlas_data;
 
 export namespace ses {
 
-// The baked exact-atlas for the R nearest to the requested one.
+// The baked exact-atlas for the R nearest to the requested one. Sample
+// coordinates are END-INCLUSIVE NODES over [-1, 1] (eta) and [1, xi_max]
+// (xi, xi_max = the live grid's edge); the generator
+// (bench/gen_h2plus_atlas.cpp) interpolates the live profiles at exactly
+// these points -- the two conventions MUST stay identical.
 inline std::vector<H2plusOrbital> h2plus_atlas_baked(double R) {
     using namespace h2p_baked;
     int best = 0;
@@ -28,11 +32,11 @@ inline std::vector<H2plusOrbital> h2plus_atlas_baked(double R) {
         o.p = std::sqrt(std::max(0.0, -0.5 * b.energy * o.R * o.R));
         o.eta.resize(kProf); o.M.resize(kProf);
         o.xi.resize(kProf); o.lambda.resize(kProf);
-        const double deta = 2.0 / kProf;
-        const double dxi = (b.xi_max - 1.0) / kProf;
+        const double deta = 2.0 / (kProf - 1);
+        const double dxi = (b.xi_max - 1.0) / (kProf - 1);
         for (int p = 0; p < kProf; ++p) {
-            o.eta[static_cast<std::size_t>(p)] = -1.0 + (p + 0.5) * deta;
-            o.xi[static_cast<std::size_t>(p)] = 1.0 + (p + 0.5) * dxi;
+            o.eta[static_cast<std::size_t>(p)] = -1.0 + p * deta;
+            o.xi[static_cast<std::size_t>(p)] = 1.0 + p * dxi;
             o.M[static_cast<std::size_t>(p)] = kM[best][k][p];
             o.lambda[static_cast<std::size_t>(p)] = kLam[best][k][p];
         }
