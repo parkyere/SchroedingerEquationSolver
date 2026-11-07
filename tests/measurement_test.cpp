@@ -200,6 +200,33 @@ TEST(PovmOutcomeDensity, IsRawDensityBlurredByTheKrausWidth) {
     EXPECT_NEAR(total, 1.0, 1e-12);
 }
 
+// sigma_m is a LENGTH (bohr), not a cell count: on h = 0.25 with sigma_m =
+// 0.5 the kernel spans ceil(4 sigma / h) = 8 taps and a neighbour sits at
+// e^{-(h/sigma)^2/2}. The h = 1 case above cannot tell bohr from cells (the
+// scenes run at h = 0.625).
+TEST(PovmOutcomeDensity, KrausWidthIsInBohrNotCells) {
+    const Grid1D axis{-4.0, 4.0, 32};  // h = 0.25
+    const Grid3D g{axis, axis, axis};
+    Field3D psi{g};
+    psi(16, 16, 16) = std::complex<double>{1.0, 0.0};
+    const double sigma = 0.5;
+    const std::vector<double> d = ses::povm_outcome_density(psi, sigma);
+
+    const double h = axis.spacing();
+    double s = 0.0;
+    for (int t = -8; t <= 8; ++t) {
+        const double x = t * h / sigma;
+        s += std::exp(-0.5 * x * x);
+    }
+    const auto at = [&](int i, int j, int k) {
+        return d[static_cast<std::size_t>(g.flat(i, j, k))];
+    };
+    EXPECT_NEAR(at(16, 16, 16), 1.0 / (s * s * s), 1e-12);
+    EXPECT_NEAR(at(17, 16, 16) / at(16, 16, 16), std::exp(-0.125), 1e-12);
+    EXPECT_NEAR(at(16, 18, 16) / at(16, 16, 16), std::exp(-0.5), 1e-12);
+    EXPECT_EQ(at(16, 16, 25), 0.0);  // 9 cells out: past the 8-tap radius
+}
+
 TEST(SamplePovmIndex, CanLandWhereRawDensityHasANode) {
     // Two occupied cells straddle an empty node: raw |psi|^2 sampling can never
     // hit it; a POVM detector of width sigma_m ~ h can (density there > 0).
