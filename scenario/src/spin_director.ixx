@@ -59,16 +59,22 @@ public:
         title_dirty_ = true;
     }
     double e(int axis) const override { return e_[axis]; }
+    // The drive is tuned to the field present at switch-on (frequency AND
+    // plane, like a fixed coil): changing B later detunes it.
     void toggle_rf() override {
         rf_on_ = !rf_on_;
         rf_w_ = bmag();      // resonance omega = |B|
-        rf_t0_ = sim_time_;  // drive phase origin -> starts on +x
+        rf_t0_ = sim_time_;  // drive phase origin -> starts on rf_frame_.e1
+        rf_frame_ = transverse_frame();
         title_dirty_ = true;
     }
     bool rf_on() const override { return rf_on_; }
+    // Hard pulse about the transverse e1 (lab x for B along z), so it tips
+    // and refocuses whatever way B points.
     void pulse(Pulse p) override {
+        const ses::Vec3d ax = transverse_frame().e1;
         for (ses::Spinor& s : ens_) {
-            ses::spin_rotate(s, 1.0, 0.0, 0.0,
+            ses::spin_rotate(s, ax.x, ax.y, ax.z,
                              p == Pulse::Half ? 0.5 * kPi : kPi);
         }
         note_ = p == Pulse::Half ? "pi/2 pulse" : "pi pulse";
@@ -262,6 +268,26 @@ private:
         return std::sqrt(b_[0] * b_[0] + b_[1] * b_[1] + b_[2] * b_[2]);
     }
 
+    // Transverse frame of the current B: e1 = lab x (lab y when B is nearly
+    // along x) minus its B component, e2 = B-hat x e1. Turning e1 -> e2 is
+    // counter-clockwise about +B, the Larmor sense (d<s>/dt = B x <s>), so a
+    // drive along it co-rotates; B along +z gives exactly (x, y), B = 0 too.
+    struct Transverse {
+        ses::Vec3d e1{1.0, 0.0, 0.0};
+        ses::Vec3d e2{0.0, 1.0, 0.0};
+    };
+    Transverse transverse_frame() const {
+        const double m = bmag();
+        if (m == 0.0) {
+            return {};
+        }
+        const ses::Vec3d bh{b_[0] / m, b_[1] / m, b_[2] / m};
+        const ses::Vec3d a = std::abs(bh.x) < 0.9 ? ses::Vec3d{1.0, 0.0, 0.0}
+                                                   : ses::Vec3d{0.0, 1.0, 0.0};
+        const ses::Vec3d e1 = ses::normalized(a - ses::dot(a, bh) * bh);
+        return {e1, ses::cross(bh, e1)};
+    }
+
     void reset_state() {
         ens_.assign(1, ses::Spinor{});
         // Boot on +x: the precession is visible immediately.
@@ -284,8 +310,11 @@ private:
             double by = b_[1];
             double bz = b_[2];
             if (rf_on_) {
-                bx += kSpRfB1 * std::cos(rf_w_ * (t - rf_t0_));
-                by += kSpRfB1 * std::sin(rf_w_ * (t - rf_t0_));
+                const double c = std::cos(rf_w_ * (t - rf_t0_));
+                const double sn = std::sin(rf_w_ * (t - rf_t0_));
+                bx += kSpRfB1 * (c * rf_frame_.e1.x + sn * rf_frame_.e2.x);
+                by += kSpRfB1 * (c * rf_frame_.e1.y + sn * rf_frame_.e2.y);
+                bz += kSpRfB1 * (c * rf_frame_.e1.z + sn * rf_frame_.e2.z);
             }
             for (std::size_t i = 0; i < ens_.size(); ++i) {
                 const double d = det_[i];
@@ -465,6 +494,7 @@ private:
     bool rf_on_ = false;
     double rf_w_ = kSpB0;
     double rf_t0_ = 0.0;
+    Transverse rf_frame_;  // drive plane, fixed at switch-on
     int echo_stage_ = 0;
     int echo_left_ = 0;
     double echo_peak_ = 0.0;
