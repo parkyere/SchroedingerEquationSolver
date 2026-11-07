@@ -117,6 +117,7 @@ target_link_libraries(sesolver_tests
         sesolver_core
         ses_scenario_core
         GTest::gtest_main
+        ses_warnings
 )
 if(TARGET ses_scenario)
     target_sources(sesolver_tests PRIVATE ${SES_SCENARIO_TESTS})
