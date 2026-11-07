@@ -8,7 +8,7 @@ namespace {
 
 // kappa > 0 no-jump damping mutates psi every step; the strip must track it
 // BETWEEN jumps, not only on parity flips (stale-cache regression).
-TEST(HoSpectrum, StripTracksMcwfDampingBetweenJumps) {
+TEST(Harmonic1DDirector, StripTracksMcwfDampingBetweenJumps) {
     ses_shell::Harmonic1DDirector d;
     ses_shell::Ladder1dApi* ld = d.ladder1d();
     ASSERT_NE(ld, nullptr);

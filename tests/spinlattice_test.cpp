@@ -55,23 +55,18 @@ TEST(SpinLattice, DampedFerroOrdersDampedNeelStaggers) {
     EXPECT_GT(ses::lattice_staggered(a), 0.95);
 }
 
-TEST(SpinLattice, UndampedEnergyDriftConvergesFirstOrder) {
-    // FIRST-order energy drift, measured 0.419/0.193/0.086/0.045 at dt .01/.005/.002/.001.
-    auto drift = [](double dt, int steps) {
-        ses::SpinLattice l = random_lattice(5, 13);
-        const double e0 = ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4);
-        for (int k = 0; k < steps; ++k) {
-            ses::spinlattice_step(l, 0.1, -0.2, 0.3, 0.4, 0.0, dt);
-        }
-        return std::abs(ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4) -
-                        e0);
-    };
-    const double coarse = drift(0.01, 2000);
-    const double fine = drift(0.002, 10000);   // same horizon
-    std::printf("spinlattice drift: dt .01 %.4f / .002 %.4f\n", coarse,
-                fine);
-    EXPECT_GT(coarse, 3.5 * fine);
-    EXPECT_LT(fine, 0.15);
+// Undamped: every site rotates about ITS OWN effective field while all of its
+// neighbours (the other sublattice) are frozen, so n_i . B_eff,i -- and with
+// it the mean-field energy -- is an EXACT invariant of each sweep. Any
+// first-order drift means the rotation axis is not B_eff (a projected field
+// walks the spin along a great circle instead of its Larmor cone).
+TEST(SpinLattice, UndampedStepConservesTheMeanFieldEnergy) {
+    ses::SpinLattice l = random_lattice(5, 13);
+    const double e0 = ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4);
+    for (int k = 0; k < 2000; ++k) {
+        ses::spinlattice_step(l, 0.1, -0.2, 0.3, 0.4, 0.0, 0.01);
+    }
+    EXPECT_NEAR(ses::lattice_energy(l, 0.1, -0.2, 0.3, 0.4), e0, 1e-9);
 }
 
 TEST(SpinLattice, AlignedLatticePrecessesRigidly) {

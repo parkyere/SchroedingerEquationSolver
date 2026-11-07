@@ -7,8 +7,8 @@ import ses.scenario.landau2d_director;
 namespace {
 
 // The central-difference ladder explodes near the lattice band top, so the
-// scene guards each jump with a measurement-based rung check (the 1D ladder_cap
-// rule): <H> must move by omega_c = B within 15%, else REFUSED.
+// scene refuses an up-jump once <H> would exceed the band top 0.30/h^2 and a
+// down-jump that removes no clean quantum (see Landau2DDirector::ladder).
 TEST(Landau2DDirector, LadderRefusesPastTheLatticeBand) {
     ses_shell::Landau2DDirector d;
     ses_shell::LandauApi* api = d.landau();

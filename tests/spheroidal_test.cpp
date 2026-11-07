@@ -196,6 +196,29 @@ TEST(Spheroidal, BakedAtlasMatchesTheLiveSolve) {
     EXPECT_LT(baked[0].energy, -1.0);
 }
 
+// The baked member must BE the live member on the grid: the generator's
+// resampling convention has to match the loader's reconstruction (cell
+// centres over [1, xi_max] with xi_max the grid EDGE), and the sample count
+// has to resolve the exponential cusp decay.
+TEST(Spheroidal, BakedGroundIsTheLiveGroundOnTheGrid) {
+    const double R = 1.875;  // the baked grid point
+    const Grid1D ax{-16.0, 16.0, 64};
+    const Grid3D g{ax, ax, ax};
+    const std::vector<ses::H2plusOrbital> baked = ses::h2plus_atlas_baked(R);
+    ASSERT_FALSE(baked.empty());
+    const ses::H2plusOrbital live = ses::h2plus_orbital(R, 0, 0, 0);
+    ASSERT_TRUE(live.valid);
+    const Field3D pb = ses::synthesize_h2plus(g, baked.front(), 0);
+    const Field3D pl = ses::synthesize_h2plus(g, live, 0);
+    const double overlap = std::norm(ses::inner_product(pb, pl));
+    EXPECT_GT(overlap, 0.9999) << "baked vs live 1s sigma_g overlap";
+    const std::vector<double> v = ses::regularized_coulomb_potential(
+        g, 1.0, {{-R / 2, 0.0, 0.0}, {R / 2, 0.0, 0.0}});
+    const double eb = ses::mean_energy(pb, v);
+    const double el = ses::mean_energy(pl, v);
+    EXPECT_NEAR(eb, el, 1e-3) << "baked " << eb << " live " << el;
+}
+
 TEST(Spheroidal, BakedGroundSynthesizesLikeTheLiveSolve) {
     const double R = 2.0;
     const Grid1D ax{-16.0, 16.0, 128};
@@ -210,11 +233,11 @@ TEST(Spheroidal, BakedGroundSynthesizesLikeTheLiveSolve) {
 
 // ---- atlas flush (CONTRACT for the H2+ scene's prepare(k)) ----
 // A spheroidal orbital SAMPLED on h = 0.3125 is not a grid eigenstate: the
-// cusp's high-k content puts 1sigma_g 145 mHa above the grid ground (Var 1.8
-// Ha^2, 3.7% continuum that disperses over the box in ~40 au). The scene's
-// flush -- ITP kH2plusAtlasFlushSteps x kH2plusAtlasFlushDtau, deflated
-// against the lower SYNTHESIZED members -- must land each member on its grid
-// state: |E - E_grid| < 1 mHa, overlap > 0.999, Var < 1e-2.
+// cusp's high-k content puts 1sigma_g ~11 mHa above the grid ground with
+// Var ~0.7 Ha^2 (continuum that disperses over the box). The scene's flush --
+// ITP kH2plusAtlasFlushSteps x kH2plusAtlasFlushDtau, deflated against the
+// lower SYNTHESIZED members -- must land each member on its grid state:
+// |E - E_grid| < 1 mHa, overlap > 0.9999, Var < 1e-2.
 
 double energy_variance3(const Field3D& psi, const std::vector<double>& v) {
     const Grid3D& g = psi.grid();
@@ -259,9 +282,10 @@ TEST(AtlasFlush, SynthesizedSigmaGLandsOnTheGridGround) {
     Field3D ground = sg;
     itp.relax(ground, 400);  // converged reference (tau = 20)
     const double e_grid = ses::mean_energy(ground, rig.v);
-    // Before: not a grid eigenstate (the defect the flush exists for).
-    EXPECT_GT(ses::mean_energy(sg, rig.v) - e_grid, 0.1);
-    EXPECT_LT(std::norm(ses::inner_product(ground, sg)), 0.97);
+    // Before: not a grid eigenstate (the defect the flush exists for) -- a
+    // gap several times the 1 mHa tolerance and a continuum-sized variance.
+    EXPECT_GT(ses::mean_energy(sg, rig.v) - e_grid, 5e-3);
+    EXPECT_GT(energy_variance3(sg, rig.v), 0.1);
     Field3D psi = sg;
     itp.relax(psi, ses::kH2plusAtlasFlushSteps);
     const double e = ses::mean_energy(psi, rig.v);
@@ -269,7 +293,7 @@ TEST(AtlasFlush, SynthesizedSigmaGLandsOnTheGridGround) {
                 ses::mean_energy(sg, rig.v), e, e_grid, energy_variance3(psi, rig.v),
                 std::norm(ses::inner_product(ground, psi)));
     EXPECT_NEAR(e, e_grid, 1e-3);
-    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.999);
+    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.9999);
     EXPECT_LT(energy_variance3(psi, rig.v), 1e-2);
 }
 
@@ -283,7 +307,8 @@ TEST(AtlasFlush, ExcitedMemberDeflatedAgainstTheSynthesizedLowerOnes) {
     Field3D excited = su;
     itp.relax_deflated(excited, {&ground}, 400);  // converged 1sigma_u* reference
     const double e_grid = ses::mean_energy(excited, rig.v);
-    EXPECT_GT(ses::mean_energy(su, rig.v) - e_grid, 0.02);
+    EXPECT_GT(ses::mean_energy(su, rig.v) - e_grid, 5e-3);
+    EXPECT_GT(energy_variance3(su, rig.v), 0.1);
     // The scene deflates against the synthesized (not flushed) lower members.
     Field3D psi = su;
     itp.relax_deflated(psi, {&sg}, ses::kH2plusAtlasFlushSteps);
@@ -292,7 +317,7 @@ TEST(AtlasFlush, ExcitedMemberDeflatedAgainstTheSynthesizedLowerOnes) {
                 ses::mean_energy(su, rig.v), e, e_grid,
                 std::norm(ses::inner_product(excited, psi)));
     EXPECT_NEAR(e, e_grid, 1e-3);
-    EXPECT_GT(std::norm(ses::inner_product(excited, psi)), 0.999);
+    EXPECT_GT(std::norm(ses::inner_product(excited, psi)), 0.9999);
     EXPECT_LT(energy_variance3(psi, rig.v), 1e-2);
 }
 
@@ -314,13 +339,12 @@ std::vector<Field3D> flushed_reference_chain(const AtlasFlushRig& rig, int top) 
     return ref;
 }
 
-// The scene exposes up to 24 members. For k >= 2 the flush cannot reach the
-// converged grid state at tau = 2: a sampled member carries ~0.5% of the
-// SAME-symmetry higher bound states (2p pi_u holds 3p pi_u, dE = 0.23 Ha ->
-// e^{-0.47} per flush; pre-flushing the projectors changes nothing, the
-// lower sigma members are orthogonal by symmetry). What the flush promises
-// for every member: the continuum is gone (Var < 1e-2), E within 3 mHa of
-// the converged grid state, overlap > 0.99 (k <= 1: 1 mHa, 0.999).
+// The scene exposes up to 24 members. For k >= 2 tau = 2 is not a converged
+// relaxation: a sampled member's admixture of SAME-symmetry higher bound
+// states decays only as e^{-dE tau} (measured 1 - overlap: 1e-5, 1.3e-4,
+// 1.4e-3 for k = 2..4). What the flush promises for every member: the
+// continuum is gone (Var < 1e-2), E within 3 mHa of the converged grid
+// state, overlap > 0.99 (k <= 1: 1 mHa, 0.999).
 TEST(AtlasFlush, EveryExposedMemberLandsOnItsGridState) {
     const AtlasFlushRig rig;
     const int top = 5;  // 1s sg, 1s su*, 2p pu, 2s sg, 2p su

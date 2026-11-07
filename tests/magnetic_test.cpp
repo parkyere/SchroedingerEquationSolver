@@ -83,10 +83,13 @@ TEST(MagneticPropagator, NegativeFieldReversesTheLarmorRotation) {
 TEST(MagneticPropagator, DiamagneticTermIsEvenInB) {
     const Grid3D g = cube(12.0, 32);
     const std::vector<double> v = ses::soft_coulomb_potential(g, 1.0, 1.0, ses::Vec3d{});
-    const std::vector<double>& vp =
-        ses::MagneticPropagator3D{g, v, 0.01, 0.4}.effective_potential();
-    const std::vector<double>& vn =
-        ses::MagneticPropagator3D{g, v, 0.01, -0.4}.effective_potential();
+    // Named objects: effective_potential() returns a reference to a MEMBER, so
+    // binding it to a temporary's result would dangle (lifetime extension only
+    // covers a reference bound directly to the temporary).
+    const ses::MagneticPropagator3D pos{g, v, 0.01, 0.4};
+    const ses::MagneticPropagator3D neg{g, v, 0.01, -0.4};
+    const std::vector<double>& vp = pos.effective_potential();
+    const std::vector<double>& vn = neg.effective_potential();
     ASSERT_EQ(vp.size(), vn.size());
     for (std::size_t i = 0; i < vp.size(); ++i) {
         EXPECT_NEAR(vp[i], vn[i], 1e-12);
