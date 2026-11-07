@@ -304,7 +304,11 @@ public:
         // by the line draw inside it). Dispatch only on the enable-edge (a reset
         // that collapses every trail to a fresh seed) and on animated frames; a
         // paused frame leaves the frozen trail as-is.
-        const bool flow_active = in.flow && in.cloud;
+        // A null velocity view would leave the seeded 1D LUT bound to the
+        // Sampler3D slot (2D cloud scenes, CPU fallback): no volume, no flow.
+        const bool flow_active = in.flow && in.cloud &&
+                                 in.flow_velocity != VK_NULL_HANDLE &&
+                                 volume_bound_view_ != VK_NULL_HANDLE;
         if (flow_active) {
             const bool enabling = !flow_was_on_;
             const bool advancing = in.flow_animate && !enabling;
@@ -424,7 +428,7 @@ public:
                                         nullptr);
                 vkCmdDraw(cb, 6, 1, 0, 0);
             }
-            if (in.flow) {  // streaklines over the cloud (one strip per streak)
+            if (flow_active) {  // streaklines over the cloud (one strip per streak)
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                   flow_pipe_);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1953,9 +1957,11 @@ private:
         const std::uint32_t nz = static_cast<std::uint32_t>(grid_.z.n);
         bool first = false;
         if (fallback_tex_.img == VK_NULL_HANDLE) {
+            // Filled by vkCmdCopyBufferToImage: TRANSFER_DST is required usage.
             if (!ctx_->create_storage_image_3d(nx, ny, nz,
                                                VK_FORMAT_R32G32_SFLOAT,
-                                               &fallback_tex_)) {
+                                               &fallback_tex_, false,
+                                               VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
                 return;
             }
             first = true;

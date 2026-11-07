@@ -2105,11 +2105,19 @@ public:
     bool set_projection_index(const std::vector<std::uint32_t>& sorted_cell,
                               const std::vector<std::uint32_t>& bin_off,
                               int n_radial, double h_radial, int l_max) {
+        // project_deposit.comp writes ALL kDepositComps (l = 0..5) components
+        // per bin whatever l_max the caller wants to read back, so the buffer
+        // is sized for the kernel, not the request (l_max = 3 on the trap
+        // scene would otherwise overflow it by 20 components x nr on device).
+        constexpr int kDepositComps = 36;
+        if (l_max < 0 || (l_max + 1) * (l_max + 1) > kDepositComps) {
+            return false;
+        }
         proj_nr_ = n_radial;
         proj_ncomp_ = (l_max + 1) * (l_max + 1);
         proj_h_radial_ = h_radial;
         const VkDeviceSize glm_bytes =
-            2ull * proj_ncomp_ * proj_nr_ * sizeof(float);
+            2ull * kDepositComps * proj_nr_ * sizeof(float);
         const ProjectParams pp0{};
         if (proj_sorted_buf_.buf != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(ctx_->device);

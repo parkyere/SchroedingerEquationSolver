@@ -106,7 +106,10 @@ struct DeviceContext {
             return armed;
         }
     } fault;
-    // create_device enables ONLY the supported subset; fast paths gate on these.
+    // create_device enables ONLY the supported subset. synchronization2 (and
+    // dynamicRendering for a presenting device) are hard requirements: every
+    // barrier is vkCmdPipelineBarrier2, which volk leaves NULL on a pre-1.3
+    // device; the rest are optional fast paths.
     bool feat_timeline_semaphore = false;
     bool feat_synchronization2 = false;
     bool feat_dynamic_rendering = false;
@@ -310,6 +313,18 @@ struct DeviceContext {
         // frag); declaring that capability needs this feature enabled.
         feat_demote_to_helper =
             probe13.shaderDemoteToHelperInvocation == VK_TRUE;
+        // A 1.3 instance happily creates a device on a 1.2 physical device
+        // (unknown pNext feature structs are ignored) and volk then resolves
+        // the 1.3 entry points to NULL: refuse here, not at the first barrier.
+        if (props.apiVersion < VK_API_VERSION_1_3 || !feat_synchronization2 ||
+            (present_surface != VK_NULL_HANDLE && !feat_dynamic_rendering)) {
+            std::fprintf(stderr,
+                         "vk: %s is Vulkan %u.%u without synchronization2/"
+                         "dynamicRendering -- 1.3 required\n",
+                         props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion),
+                         VK_API_VERSION_MINOR(props.apiVersion));
+            return Boot::error;
+        }
         timestamp_period = props.limits.timestampPeriod;
         timestamp_valid_bits = qf[compute_family].timestampValidBits;
 
@@ -420,10 +435,12 @@ struct DeviceContext {
         VmaAllocation alloc = VK_NULL_HANDLE;
     };
 
+    // `extra_usage`: e.g. TRANSFER_DST for an image filled by buffer copies.
     [[nodiscard]] bool create_storage_image_3d(std::uint32_t w, std::uint32_t h,
                                  std::uint32_t d, VkFormat format,
                                  Image* out,
-                                 bool share_across_queues = false) {
+                                 bool share_across_queues = false,
+                                 VkImageUsageFlags extra_usage = 0) {
         VkImageCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         ici.imageType = VK_IMAGE_TYPE_3D;
@@ -433,7 +450,8 @@ struct DeviceContext {
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                    extra_usage;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         // Cross-queue (compute writes, graphics samples): CONCURRENT skips
         // ownership barriers -- host fences already order the accesses.

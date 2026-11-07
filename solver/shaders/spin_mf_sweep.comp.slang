@@ -38,10 +38,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (y + 1u < params.ny) eff -= 2.0 * params.j * nbloch(i + params.nx);
     if (y >= 1u) eff -= 2.0 * params.j * nbloch(i - params.nx);
 
-    float3 ni = nbloch(i);
-    float3 tf = eff - dot(ni, eff) * ni;  // torque field (perp to n)
+    // Rotate about the FULL effective field (mirrors ses::spinlattice_step):
+    // the Larmor cone keeps n.B_eff exact; a field projected perpendicular to
+    // n would walk the spin along a great circle (first-order energy drift).
     Spinor s = load_spinor(spinors[i]);
-    s = spin_step(s, tf, params.h);
+    s = spin_step(s, eff, params.h);
     float3 p = bloch_of(s);
     if (params.alpha > 0.0) {
         float pb = dot(p, eff);
