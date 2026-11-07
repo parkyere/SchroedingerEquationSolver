@@ -109,15 +109,16 @@ public:
             return;
         }
         if (on) {
+            // The GPU mean-field state lives on the device (gpu_mf_ never
+            // writes lat_ back): pull it into lat_ before building the
+            // product, or the exact run restarts from the last seed.
+            if (gpu_ready_) {
+                lat_from_bloch();
+            }
             exact_ = ses::exact_from_product(lat_);
             push_exact_to_gpu();
         } else {
-            refresh_bloch();
-            for (int i = 0; i < kSlN * kSlN; ++i) {
-                const ses::Vec3d d = ses::unit_or_z(site_bloch(i));
-                lat_.s[static_cast<std::size_t>(i)] =
-                    ses::spinor_from_bloch(d.x, d.y, d.z);
-            }
+            lat_from_bloch();
             upload_mf_to_gpu();  // product state -> mean-field GPU engine
         }
         exact_mode_ = on;
@@ -394,6 +395,17 @@ private:
         note_ = what;
         display_changed_ = true;
         title_dirty_ = true;
+    }
+
+    // Current per-site Bloch vectors (either mode, CPU or GPU) -> product
+    // spinors in lat_: exact up to a per-site global phase.
+    void lat_from_bloch() {
+        refresh_bloch();
+        for (int i = 0; i < kSlN * kSlN; ++i) {
+            const ses::Vec3d d = ses::unit_or_z(site_bloch(i));
+            lat_.s[static_cast<std::size_t>(i)] =
+                ses::spinor_from_bloch(d.x, d.y, d.z);
+        }
     }
 
     void push_exact_to_gpu() {
