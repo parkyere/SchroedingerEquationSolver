@@ -161,13 +161,14 @@ public:
         const double ky = kk * std::sin(kth);
         const double om = energy_pred();
         ses::parallel_for(kQd2dN, [&](int j) {
-            const double y = phys_grid_.y.coord(j) - y0;
+            const double yy = phys_grid_.y.coord(j);
+            const double y = yy - y0;
             for (int i = 0; i < kQd2dN; ++i) {
-                const double x = phys_grid_.x.coord(i) - x0;
-                const double ph = kx * phys_grid_.x.coord(i) +
-                                  ky * phys_grid_.y.coord(j);
+                const double xx = phys_grid_.x.coord(i);
+                const double x = xx - x0;
+                const double ph = kx * xx + ky * yy;  // the drawn kick
                 psi_(i, j, 0) = std::exp(-0.5 * om * (x * x + y * y)) *
-                                std::polar(1.0, ph);
+                                std::polar(1.0, ph + rest_phase(xx, yy, x0, y0));
             }
         });
         ses::normalize(psi_);
@@ -187,6 +188,21 @@ public:
         grab_x_ = std::clamp(x, -kQd2dBox, kQd2dBox);
         grab_y_ = std::clamp(y, -kQd2dBox, kQd2dBox);
         grab_base_ = psi_;
+        // The gather target is fixed while held: built once here, not on
+        // every mouse-motion event.
+        const double om = energy_pred();
+        ses::parallel_for(kQd2dN, [&](int j) {
+            const double yy = phys_grid_.y.coord(j);
+            const double dy = yy - grab_y_;
+            for (int i = 0; i < kQd2dN; ++i) {
+                const double xx = phys_grid_.x.coord(i);
+                const double dx = xx - grab_x_;
+                grab_gath_(i, j, 0) =
+                    std::exp(-0.5 * om * (dx * dx + dy * dy)) *
+                    std::polar(1.0, rest_phase(xx, yy, grab_x_, grab_y_));
+            }
+        });
+        ses::normalize(grab_gath_);
         grabbing_ = true;
         note_ = "grabbed";
         title_dirty_ = true;
@@ -196,19 +212,9 @@ public:
             return;
         }
         const double s = std::clamp(strength, 0.0, 1.0);
-        const double om = energy_pred();
-        ses::Field3D gath{phys_grid_};
-        ses::parallel_for(kQd2dN, [&](int j) {
-            const double y = phys_grid_.y.coord(j) - grab_y_;
-            for (int i = 0; i < kQd2dN; ++i) {
-                const double x = phys_grid_.x.coord(i) - grab_x_;
-                gath(i, j, 0) = std::exp(-0.5 * om * (x * x + y * y));
-            }
-        });
-        ses::normalize(gath);
         for (std::size_t c = 0; c < psi_.data().size(); ++c) {
             psi_.data()[c] =
-                (1.0 - s) * grab_base_.data()[c] + s * gath.data()[c];
+                (1.0 - s) * grab_base_.data()[c] + s * grab_gath_.data()[c];
         }
         ses::normalize(psi_);
         track_peak();
@@ -353,6 +359,15 @@ protected:
     }
 
 private:
+    // Phase that puts a packet centred at (x0, y0) AT REST in this lattice's
+    // Landau gauge (A_x = +B y): (B/2)(x y + y0 x - x0 y). Its B y0 x part
+    // cancels A_x at the centre; the (B/2)(x - x0)(y - y0) part is the
+    // symmetric-gauge quadrupole that makes the Omega Gaussian the displaced
+    // Fock-Darwin ground state (no breathing).
+    double rest_phase(double x, double y, double x0, double y0) const {
+        return 0.5 * b_ * (x * y + y0 * x - x0 * y);
+    }
+
     void ensure_spectrum() {
         if (!spec_dirty_ || relaxing_ || grabbing_) {
             return;  // settle first: mid-relax/grab weights are noise
@@ -451,6 +466,7 @@ private:
     double grab_x_ = 0.0;
     double grab_y_ = 0.0;
     ses::Field3D grab_base_{phys_grid_};
+    ses::Field3D grab_gath_{phys_grid_};  // gather target, built in begin_grab
 };
 
 }  // namespace ses_shell
