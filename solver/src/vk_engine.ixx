@@ -1037,6 +1037,7 @@ public:
     bool set_relax_tables(const std::vector<double>& half_w,
                           const std::vector<double>& kin_w, double dtau,
                           double cell_volume) {
+        relax_ready_ = false;  // set again only once every piece is in place
         dtau_ = dtau;
         cell_volume_ = cell_volume;
         std::vector<float> hf(2 * cells_, 0.0f);
@@ -1045,45 +1046,49 @@ public:
             hf[2 * i] = static_cast<float>(half_w[i]);
             kf[2 * i] = static_cast<float>(kin_w[i]);
         }
-        if (relax_half_.buf == VK_NULL_HANDLE &&
-            (!ctx_->create_device_buffer(field_bytes_, &relax_half_) ||
-             !ctx_->create_device_buffer(field_bytes_, &relax_kin_))) {
-            return false;
+        if (relax_half_.buf == VK_NULL_HANDLE ||
+            relax_kin_.buf == VK_NULL_HANDLE) {
+            release_relax_tables();  // a half-made pair from a failed call
+            if (!ctx_->create_device_buffer(field_bytes_, &relax_half_) ||
+                !ctx_->create_device_buffer(field_bytes_, &relax_kin_)) {
+                release_relax_tables();
+                return false;
+            }
         }
         if (!upload_raw(relax_half_, hf.data(), field_bytes_) ||
             !upload_raw(relax_kin_, kf.data(), field_bytes_)) {
             return false;
         }
-        if (relax_half_set_ == VK_NULL_HANDLE) {
-            relax_half_set_ = make_mul_set(relax_half_.buf);
-            relax_kin_set_ = make_mul_set(relax_kin_.buf);
-        } else {
-            // Re-point the once-allocated sets at the fresh buffers (legal:
-            // every submission fence-waits).
-            arena_.write_buffer(*ctx_, relax_half_set_, 1,
-                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                relax_half_.buf);
-            arena_.write_buffer(*ctx_, relax_kin_set_, 1,
-                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                relax_kin_.buf);
-        }
-        return relax_half_set_ != VK_NULL_HANDLE &&
-               relax_kin_set_ != VK_NULL_HANDLE;
+        // Each set is allocated once, then re-pointed at the fresh buffer
+        // (legal: every submission fence-waits).
+        const auto point = [this](VkDescriptorSet& set, VkBuffer table) {
+            if (set == VK_NULL_HANDLE) {
+                set = make_mul_set(table);
+            } else {
+                arena_.write_buffer(*ctx_, set, 1,
+                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, table);
+            }
+            return set != VK_NULL_HANDLE;
+        };
+        relax_ready_ = point(relax_half_set_, relax_half_.buf) &&
+                       point(relax_kin_set_, relax_kin_.buf);
+        return relax_ready_;
     }
 
     // Free the transient imaginary-time tables (the sets stay, re-pointed by
     // the next set_relax_tables).
     void release_relax_tables() {
-        if (relax_half_.buf == VK_NULL_HANDLE) {
+        relax_ready_ = false;
+        if (relax_half_.buf == VK_NULL_HANDLE &&
+            relax_kin_.buf == VK_NULL_HANDLE) {
             return;
         }
         vkDeviceWaitIdle(ctx_->device);
         ctx_->destroy_buffer(&relax_half_);
         ctx_->destroy_buffer(&relax_kin_);
     }
-    bool relax_tables_ready() const {
-        return relax_half_.buf != VK_NULL_HANDLE;
-    }
+    // Both tables uploaded AND both sets wired by the last set_relax_tables.
+    bool relax_tables_ready() const { return relax_ready_; }
 
     // e^{-H dtau} Strang steps with per-step renormalization. Each step: one
     // submission for the imaginary body + norm reduction + partials readback,
@@ -2440,11 +2445,15 @@ private:
               &synth_any_set_, &norm_any_set_, &scale_any_set_, &load_set_[0],
               &load_set_[1], &store_set_[0], &store_set_[1],
               &flow_vel_set_[0], &flow_vel_set_[1], &fft_set_[0],
-              &fft_set_[1], &fft_set_[2], &shear_set_[0], &shear_set_[1]}) {
+              &fft_set_[1], &fft_set_[2], &shear_set_[0], &shear_set_[1],
+              &tc_pot_set_, &tc_force_set_, &tc_sched_set_}) {
             *s = VK_NULL_HANDLE;
         }
+        tc_slots_ = 0;
+        tc_sched_count_ = 0;
         pd_kernel_ok_ = false;
         fused_relax_ok_ = false;
+        relax_ready_ = false;
         flow_vel_ok_ = false;
         mcwf_kernel_ok_ = false;
         mc_kernel_ok_ = false;
@@ -3792,6 +3801,7 @@ private:
     VkDescriptorSet pd_half_set_ = VK_NULL_HANDLE;  // fused V+mask, coef -dt/2
     bool pd_kernel_ok_ = false;
     bool fused_relax_ok_ = false;  // finalize_ + scale_buf_ wired
+    bool relax_ready_ = false;     // relax tables + both sets (see set_relax_tables)
     bool flow_vel_ok_ = false;     // flow_velocity kernel wired
     Buffer mcwf_radial_{};  // kMcwfSlots x n_radial floats (slotted tables)
     VkDeviceSize mcwf_radial_bytes_ = 0;

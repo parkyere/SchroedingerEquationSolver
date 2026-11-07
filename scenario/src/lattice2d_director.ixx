@@ -133,7 +133,9 @@ protected:
     virtual void rebuild_display() { rebuild_staging(); }
 
     // ---- GPU propagator seam (derived route do_steps here when active) ----
-    bool gpu_active() const { return gpu_lattice_ok_; }
+    // set_lattice is void: an allocation failure leaves an engine with no
+    // buffers, so only a built lattice takes the propagation (else CPU).
+    bool gpu_active() const { return gpu_lattice_ok_ && gpu_.ready(); }
     virtual void on_gpu_ready() {}  // push potential + field once the device is up
     void gpu_set_lattice(const std::vector<double>& v, double dt) {
         if (gpu_lattice_ok_) {

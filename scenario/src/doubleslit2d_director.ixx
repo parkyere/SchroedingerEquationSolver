@@ -135,11 +135,15 @@ public:
         compute_attempted_ = true;
         if (device_ok && eng_.initialize(ctx)) {
             eng_.set_lattice(phys_grid_, wallv_, kDs2dDt);
-            eng_.set_solenoid(flux_, solenoid_x(), 0.0);
-            eng_.set_absorber(mask_);
-            eng_.upload(psi_.data());
-            eng_ok_ = true;
-            eng_dirty_ = false;
+            // set_lattice is void: on an allocation failure the engine has
+            // no buffers and the CPU propagator keeps the scene.
+            if (eng_.ready()) {
+                eng_.set_solenoid(flux_, solenoid_x(), 0.0);
+                eng_.set_absorber(mask_);
+                eng_.upload(psi_.data());
+                eng_ok_ = true;
+                eng_dirty_ = false;
+            }
         }
     }
     void release_gpu() override {
@@ -285,8 +289,12 @@ private:
         wallv_ = std::move(v);  // kept for the GPU engine
         if (eng_ok_) {
             eng_.set_lattice(phys_grid_, wallv_, kDs2dDt);
-            eng_.set_solenoid(flux_, solenoid_x(), 0.0);
-            eng_.set_absorber(mask_);  // set_lattice resets links/absorber
+            if (eng_.ready()) {
+                eng_.set_solenoid(flux_, solenoid_x(), 0.0);
+                eng_.set_absorber(mask_);  // set_lattice resets links/absorber
+            } else {
+                eng_ok_ = false;  // psi_ is read back every step: CPU resumes
+            }
         }
         rebuild_props_overlays();
     }

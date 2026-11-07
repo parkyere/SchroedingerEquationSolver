@@ -225,7 +225,12 @@ public:
     }
     void clear_absorber() { has_absorber_ = false; }
 
+    // Same size contract as set_absorber: a larger psi would write past the
+    // staging mapping and copy past state_.
     void upload(const std::vector<std::complex<double>>& psi) {
+        if (n_cells_ == 0 || static_cast<int>(psi.size()) != n_cells_) {
+            return;
+        }
         upload_complex(state_, psi);
     }
 

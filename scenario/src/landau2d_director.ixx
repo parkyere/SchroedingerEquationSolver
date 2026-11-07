@@ -132,11 +132,15 @@ public:
                 std::vector<double>(
                     static_cast<std::size_t>(phys_grid_.size()), 0.0),
                 kLd2dDt);
-            eng_.set_uniform_field(b_);
-            eng_.set_absorber(mask_);
-            eng_.upload(psi_.data());
-            eng_ok_ = true;
-            eng_dirty_ = false;
+            // set_lattice is void: on an allocation failure the engine has
+            // no buffers and the CPU propagator keeps the scene.
+            if (eng_.ready()) {
+                eng_.set_uniform_field(b_);
+                eng_.set_absorber(mask_);
+                eng_.upload(psi_.data());
+                eng_ok_ = true;
+                eng_dirty_ = false;
+            }
         }
     }
     void release_gpu() override {

@@ -343,6 +343,9 @@ public:
     }
 
     void upload(const std::vector<std::complex<double>>& c) {
+        if (c.size() != static_cast<std::size_t>(dim_)) {
+            return;  // a short vector would be read out of bounds below
+        }
         float* dst = static_cast<float*>(staging_.mapped);
         for (std::size_t m = 0; m < dim_; ++m) {
             dst[2 * m] = static_cast<float>(c[m].real());
