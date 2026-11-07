@@ -432,6 +432,13 @@ public:
         if (!use_gpu_path() || stepping_ != BaseStepping::RealTime) {
             return false;
         }
+        // The bound-well cap is still computing off-thread (~10 s after entry,
+        // the panel says so): refuse instead of join()ing the scan on the UI
+        // thread, which froze the whole app until it finished.
+        const int jm = jmax_.load();
+        if (jm <= 0) {
+            return false;
+        }
         ses::Vec3d a{};
         switch (axis) {
             case 0: a.x = 1.0; break;
@@ -439,8 +446,8 @@ public:
             case 2: a.z = 1.0; break;
             default: return false;
         }
-        const bool ok = ses::rotor_kick(rotor_, a, dJ,
-                                        static_cast<double>(j_max_blocking()));
+        const bool ok =
+            ses::rotor_kick(rotor_, a, dJ, static_cast<double>(jm));
         title_dirty_ = true;
         return ok;
     }
@@ -859,13 +866,6 @@ private:
             v.push_back(o.energy + 1.0 / R);
         }
         return ses::rotor_j_max(r, v, kH2pMu);
-    }
-
-    int j_max_blocking() {
-        if (jmax_.load() <= 0 && jmax_thread_.joinable()) {
-            jmax_thread_.join();
-        }
-        return jmax_.load();
     }
 
     mutable std::vector<Mo> atlas_;
