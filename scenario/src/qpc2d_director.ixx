@@ -226,8 +226,11 @@ private:
                            kQp2dWallV, kQp2dLip);
         prop_ = std::make_unique<ses::SplitOperator3D>(phys_grid_, v_,
                                                        kQp2dDt);
-        if (eng_ok_) {
-            eng_.set_potential(v_);  // gap changed: refresh the GPU potential
+        // Gap changed: refresh the GPU potential, or the GPU would keep
+        // stepping the old gap -- then the CPU propagator takes over (psi_ is
+        // read back every step), as billiard does.
+        if (eng_ok_ && !eng_.set_potential(v_)) {
+            eng_ok_ = false;
         }
         wall_curve_.clear();
         strip_wall_quad(wall_curve_, kQp2dWallLo, kQp2dWallHi, -kQp2dBox,

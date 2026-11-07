@@ -75,8 +75,9 @@ public:
         if (device_ok &&
             eng_.initialize(ctx, phys_grid_, ses_vk::engine_blobs(kCr2dN), v_,
                             kCr2dDt, psi_.data(), kCr2dMass)) {
-            eng_.set_absorber(damp_);  // real-time fence + open boundary
-            eng_ok_ = true;
+            // The absorber IS the fence leak + open boundary: without it the
+            // GPU would step a different H, so the CPU keeps the scene.
+            eng_ok_ = eng_.set_absorber(damp_);
             eng_dirty_ = false;
         }
     }
@@ -254,9 +255,7 @@ protected:
             // the leaky H, unprojected.
             const int chunk = fine_ ? 100 : 20;  // tau ~ 0.5 / 1.0 per cut
             int left = 4 * n;  // relax gets 4x the tick budget (the wait)
-            if (eng_ok_) {
-                ensure_gpu_relax_tables();
-                sync_gpu_deflation();
+            if (eng_ok_ && ensure_gpu_relax_tables() && sync_gpu_deflation()) {
                 if (eng_dirty_) {
                     eng_.upload_state(psi_.data());
                     eng_dirty_ = false;
@@ -335,25 +334,40 @@ protected:
 
 private:
     // Load the coarse or fine ITP weights (m* baked in) into the engine.
-    void ensure_gpu_relax_tables() {
+    // A failed upload drops the GPU path (relax_step would silently no-op and
+    // the plateau test capture the unrelaxed seed); psi_ is read back every
+    // chunk, so the CPU relax resumes from it.
+    bool ensure_gpu_relax_tables() {
         const int want = fine_ ? 1 : 0;
         if (relax_tables_stage_ == want) {
-            return;
+            return true;
         }
         const ses::ImaginaryTimePropagator3D& itp =
             fine_ ? *itp_fine_ : *itp_coarse_;
-        eng_.set_relax_tables(itp.half_potential_weight(),
-                              itp.kinetic_weight(),
-                              fine_ ? kCr2dFineDtau : kCr2dCoarseDtau,
-                              phys_grid_.cell_volume());
+        if (!eng_.set_relax_tables(itp.half_potential_weight(),
+                                   itp.kinetic_weight(),
+                                   fine_ ? kCr2dFineDtau : kCr2dCoarseDtau,
+                                   phys_grid_.cell_volume())) {
+            eng_ok_ = false;
+            return false;
+        }
         relax_tables_stage_ = want;
+        return true;
     }
     // GPU deflation buffers track captured_ (the Gram-Schmidt lower states).
-    void sync_gpu_deflation() {
+    // A failed buffer drops the GPU path (a -1 handle deflates nothing, so
+    // state k would re-converge onto a lower one).
+    bool sync_gpu_deflation() {
         while (defl_.size() < captured_.size()) {
-            defl_.push_back(
-                eng_.create_state_buffer(captured_[defl_.size()].data()));
+            const int h =
+                eng_.create_state_buffer(captured_[defl_.size()].data());
+            if (h < 0) {
+                eng_ok_ = false;
+                return false;
+            }
+            defl_.push_back(h);
         }
+        return true;
     }
     void release_gpu_deflation() {
         if (!eng_ok_) {
@@ -410,10 +424,13 @@ private:
         captured_.clear();
         energies_.clear();
         if (eng_ok_) {
-            eng_.set_potential(v_);       // real-time fence
-            eng_.set_absorber(damp_);     // real-time damp
             release_gpu_deflation();      // captured basis dropped
             relax_tables_stage_ = -1;     // itp weights changed with v_
+            // Either upload failing would leave the GPU on the OLD fence: the
+            // CPU propagator takes the scene instead.
+            if (!eng_.set_potential(v_) || !eng_.set_absorber(damp_)) {
+                eng_ok_ = false;
+            }
         }
     }
 
