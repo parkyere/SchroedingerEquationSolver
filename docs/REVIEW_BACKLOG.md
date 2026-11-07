@@ -93,7 +93,7 @@ for any testable logic.
 
 ### E. Larmor 방사 판독의 중심차분 스텐실 (대역제한 V에서 9% 저평가)
 - **위치**: `solver/shaders/mean_force.comp`(셰이더 내 주기 중심차분),
-  `vk_engine.ixx` `set_potential_gradient`/`mean_force`, 소비자 `base_director.ixx`
+  `vk_engine.ixx` `enable_mean_force`/`mean_force`(이제 `v_buf_`를 직접 읽음), 소비자 `base_director.ixx`
   `run_real_time_batch`(`radiated_power_`), `hydrogen_director.ixx` 동일; 타이틀
   "emit P".
 - **증거(리뷰 재현)**: 1s+p_z 중첩·단일 대역제한 핵·h=0.3125: 해석 ⟨∇V⟩_z 0.25942,
@@ -139,6 +139,13 @@ for any testable logic.
 - **추천**: (a)+(b). 비용: Vec3 누산 + 패널 한 줄 + 단위 계약(광자 1개 후 P = −ħk n̂).
 
 ### H. 아틀라스 합성 상태의 연속체 후광 — **완료 2026-09-26** (하위 결정 H2 미결)
+- **정정(2026-11-07)**: 아래의 145 mHa·Var 1.8 Ha²·연속체 3.7 %와 k≥2의 겹침 0.99·
+  E 3 mHa는 대부분 baked 아틀라스 **로더의 좌표 규약 버그**를 잰 값이다(생성기와 로더가
+  ξ/η 표본 위치를 다르게 해석해 프로파일이 ~0.43 ξ 밀리고 첨점에 0.4 bohr 평탄부;
+  `14702f8`에서 수정, `BakedGroundIsTheLiveGroundOnTheGrid`가 고정). 수정 후 합성
+  1sσg는 격자 바닥보다 **~11 mHa** 위(Var **~0.7 Ha²**), 플러시 후 겹침 > 0.9999·
+  |E − E_grid| < 1 mHa; k = 2..4 플러시 잔차(1 − 겹침)는 1e-5 / 1.3e-4 / 1.4e-3.
+  따라서 **H3(상위 멤버 τ 연장)은 사실상 불필요**하고, H2의 크기 근거도 이 값으로 다시 잴 것.
 - **결과**: 프로브가 크기를 정정 — 합성 1sσg는 격자 바닥보다 **145 mHa** 위(Var 1.8 Ha², 연속체 3.7%), σu* 30 mHa. GREEN: `prepare(k)` 후 GPU ITP τ=2(`ses::kH2plusAtlasFlushSteps` 40 × `kH2plusAtlasFlushDtau` 0.05), 하위 멤버(현재 축으로 합성) 딜플레이션, 테이블은 `current_potential()`; 겹침 0.9998, 격자 바닥 0.2 mHa; h2p 아크 격자 ⟨H_el⟩(σu*) −0.6555(Δ 2.9 mHa), 회전자 아크 ⟨H_el⟩ 드리프트 2.7e-4 → **2.0e-5 Ha**.
 - **커버리지 보완(2026-09-28)**: 노출 멤버 k=0..4·기울어진 축까지 계약 확장. k≥2는 τ=2로 수렴 격자 상태에 0.99 겹침·E 3 mHa(2pπu 0.9936/2.4 mHa, 2sσg 0.9951/1.4, 2pσu 0.9959/0.7) — 결손은 표본화된 궤도의 **같은 대칭 상위 속박 상태 혼입**(2pπu 안의 3pπu, ΔE 0.23 Ha → 플러시당 e^{−0.47}); 하위 멤버 사전 플러시(6~40스텝)는 무효(σ 하위는 대칭상 직교). 완전 수렴엔 τ≈15(≈300스텝, 256³에서 ~5 s/멤버; 최상위 멤버는 ΔE→0이라 불가) → **H3(미결)**: 상위 멤버 τ 연장 vs 현 τ=2 유지(추천: 유지 + 잔차 문서화).
 - **H2(미결)**: S 랜덤 중첩은 미플러시(타이틀 "(sampled, unflushed)"). 옵션: (a) 멤버별 플러시 상태 캐시(134 MB/멤버, 축 회전 시 무효화) 후 중첩 — VRAM 정책 확인 필요; (b) 짧은 τ=0.3 플러시(Var 96% 제거, 가중 ≤13% 변화, 라벨 필요); (c) 유지. 추천 (a).
@@ -311,7 +318,7 @@ for any testable logic.
   `corral2d_test` 0.6×/2×, `rotor_test` 30..42)는 항목별 분리·유도.
 - **빠진 음성 테스트**: `Grid1D{n<=0}`, 빈 벡터 `fft`, `absorbing_mask(width > box)`,
   `photon_flight_frames(de<=0)`, `bound_states_1d(count > n)`, `Scheduler::cancel(unknown)`,
-  `every(period<=0)`, `ho_eigenstate(n<0)`, `h2plus_atlas_baked(R 범위 밖)`.
+  `every(period<=0)`, `ho_eigenstate(n<0)`.
 - `TEST_P` 후보: 디렉터 레지스트리 전체에 대한 pacing/`set_real_time`/`handle_key`
   계약(현재 23개 중 2개만), 해석적 우물 스펙트럼, 구면조화함수 점값 표.
 - `radial_test.cpp` `SoftCoreAtomMatchesThe3DSolver`의 참조값은 이 프로젝트의 다른
@@ -319,3 +326,94 @@ for any testable logic.
 - `// RED:` 머리말 54개 파일, "bitwise"라 쓰고 `EXPECT_DOUBLE_EQ`(4 ULP)를 쓰는
   `propagator_tables_test`/`imaginary_tables_test` 주석, `complex_test`의 플래그
   이름 주석(계약이 아닌 플래그를 적음).
+
+## 2026-11-07 재검수 — 미해결 항목 (수정분은 git log 참조)
+
+이번 사이클은 GPU 계층(solver/viz/scenario + vkcheck + 디렉터 테스트)을 **clang-18로
+컴파일·테스트**할 수 있었다(시스템 Vulkan 헤더/volk/VMA/VkFFT + SPIR-V 헤더용 slangc
+스텁; SDL3 app과 Slang 셰이더 컴파일·vkcheck 실행은 제외). 아래는 확인했지만 고치지
+않은 항목이다. 우선순위순.
+
+### A. 정확성·견고성
+- **[scenario/solver] device-lost 뒤 2D·spins 디렉터가 동결 스냅샷을 재생.**
+  `Lattice2DEngine`/`SpinEngine`의 void API가 제출·복사 실패를 버리고(`submit_and_wait`,
+  `copy_sync` 결과 무시), 디렉터들은 `device_lost()`를 보지 않는다 → 매 프레임 마지막
+  다운로드가 psi_/tally에 다시 쓰이고 sim_time만 진행. 이번에는 "set_lattice 할당 실패 →
+  null `state()` 역참조" 경로만 막았다(`ready()` 게이트). 계약: hydrogen처럼 첫 실패에서
+  CPU로 강등, 엔진 API는 `[[nodiscard]] bool`.
+- **[scenario] `selftest_scene_wait_running`이 교체 전 디렉터의 시계로 앵커.**
+  `request_scene`은 다음 루프 머리에서야 교체하므로 0번째 폴링은 나가는 장면의
+  `sim_time`을 앵커로 잡는다(--selftest-scene에서 앵커가 홉마다 누적, 느린 GPU 장면이
+  STALLED 오판 가능, 교체가 지연되면 이전 장면의 진행으로 PASS). 셸에 "요청 장면이
+  적용됨" 접근자가 필요(app 수정) — 호출부 중 `"switch-target"`처럼 장면 이름이 아닌
+  레이블도 있으니 인자 의미부터 정리.
+- **[scenario] H2+ 아틀라스 플러시 중 key 1 / M이 `abort_flush` 없이 플러시를 버림**:
+  "(flushing...)" 태그와 `prepared()==false`가 남고 deflation 버퍼·134 MB `flush_v_`를
+  다음 선택까지 보유(물리 영향 없음).
+- **[scenario] Surface 진입 시 `mc_prepare` 실패(VRAM)면 메시지 없이 빈 화면**:
+  `stage_active_view`가 `mc_ready()` 대신 `gpu_ok_`를 본다. 강제 Cloud 전환 6곳
+  (hydrogen D/5/K/L/3-4, molecule `start_relax_for`)은 `release_mc`를 건너뛰어 ~175 MB가
+  Tab-Tab/장면 전환까지 잔류(가시 영향 없음).
+- **[core] `radial_eigenstate`의 부호 규칙이 u[0]을 본다** — 금지 영역이 깊은 상자에서
+  u[0]은 ~e^-270 깊이라 홀수 상태의 부호가 반올림 오차로 정해진다. doublewell은 이번에
+  소비자 쪽에서 방향을 고정했다(`DoubleWell1DDirector.PreparesTheLeftWellForEveryBarrier`).
+  부호에 의존하는 다른 소비자가 생기면 "최댓값의 1e-6을 처음 넘는 표본" 기준으로 바꿀 것.
+- **[app] Release의 WIN32 서브시스템이 `--help`·스펙트럼 표·selftest PASS/FAIL·종료
+  코드를 숨김**(cmd/PowerShell에서 실행 시 콘솔 없음, 대기 안 함). `_WIN32`에서
+  `AttachConsole(ATTACH_PARENT_PROCESS)` + stdout/stderr 재연결, 또는 headless/selftest용
+  콘솔 실행 파일 분리.
+- **[app] `init_compute(ctx, device_ok, ...)`의 `device_ok`는 유일한 호출부에서 리터럴
+  `true`**(bool trap, 흔적 매개변수) — 제거하거나 실제 값을 전달.
+
+### B. 성능
+- **[scenario/core/viz] 2D 표면 장면이 매 배치/프레임 전체를 다시 만든다**: carpet은
+  1024² heightfield 전체 재구축 + 직렬 1M 셀 max 스캔 2회(행은 프레임당 ~6줄만 바뀜,
+  `track_peak` 결과는 cloud가 꺼진 이 장면에서 안 쓰임); `heightfield_surface`는 셀당
+  6정점 비인덱스 soup(~113 MB double)을 매번 새로 할당; `upload_mesh`는 스텝 프레임마다
+  ~56 MB 임시 interleave 벡터. → 변경 행만 갱신, 인덱스 메시, 버퍼 재사용.
+- **[scenario] billiard/qdot/landau(와 corral relax)도 청크마다 512² 전체 GPU↔호스트
+  왕복** — 2026-10-09 C의 "스텝마다 전체 상태 왕복"(doubleslit/qpc)에 추가되는 위치.
+- **[core] `axis_shear`는 직렬** gather-FFT-phase-scatter로 `fft_detail::strided_line_pass`의
+  스레드 패턴을 재구현하지 않음 — 실사용 경로는 CPU fallback의 1회성 `rotate_state`(256³
+  ~1 s)뿐.
+
+### C. 테스트·오라클
+- **[tests] `mcwf1d_test`가 ω = 1에서만 돈다**: ω 곱셈/나눗셈 위치 오류가 전부 통과하고,
+  n-가중 점프율은 고정되지 않으며(u = 0/1 극단만), 코드가 EXACT라 부르는 감쇠 비율에
+  ±30 % 허용. 장면 값 ω = 0.25(또는 {0.25, 2})로, 문턱 양쪽 u로 점프 결정 반전을 단언,
+  허용 오차 ~1e-3 상대.
+- **[solver] ctest `VkCheck`는 validation layer를 켜지 않는다**(문서는 이번에 정정):
+  vcpkg `validation` feature가 있으면 `VkCheck.validation` 항목에
+  `SES_VK_VALIDATION=1`·`VK_LOADER_LAYERS_ENABLE=*validation*`·`VK_ADD_LAYER_PATH` 설정.
+- **[viz] 렌더 커널(accum/bloom/compose/occupancy/occ_dilate/shadow/particles)에 GPU
+  오라클이 없고 `--dump-frame*` 아크는 아무 이미지나 통과**(문서는 이번에 정정):
+  vkcheck에 viz 절, `dump_and_exit`에 장면별 이미지 통계(점등 비율·평균 휘도) 단언.
+- **[vkcheck] 회전 배치 리그가 주석보다 ~100배 느리게 돈다**(관성 1/dth → |ω|·dt =
+  2e-4 rad/step; lag-by-one 등 주석의 수치가 다른 리그를 설명); **MC 오라클의 1e-3 반올림
+  순위 키가 fp32/fp64 정점 오차에 불안정**("both sides round identically" 주석은 거짓).
+- **[tests] 계약 문구 불일치**: anderson1d 테스트 머리말·이름("SubEnergy")이 실제 지형과
+  다름; `test_util.h`가 존재하지 않는 디렉터 테스트(kTrapBox 고정)를 언급; `rotation_test`는
+  y축 회전 방향을 고정하지 않음(유일한 axis=1 테스트가 y 대칭 장).
+
+### D. 설계·작은 가드 (LOW)
+- **[core]** `measure(u, sigma_m)` ↔ `sample_povm_index(psi, sigma_m, u)` 인접 계층에서
+  같은 타입 double 두 개의 순서가 반대; `obs_ratio`가 NaN 분모를 정확히 0으로 바꿔 NaN psi가
+  E = 0 eV로 보임; `chunk_count`/`parallel_for`가 n ≈ INT_MAX에서 int 오버플로(int64 가드
+  불완전); `nearest_index`/`cell_and_t`의 double→int 캐스트가 clamp보다 먼저(NaN·거대값 UB);
+  `rotate_axis`/`MagneticPropagator3D`/`tilted_potential`/`diamagnetic_potential`의 axis
+  0..2 전제가 주석뿐; `fft`/`itp`/`rotation`/`sampling`/`measurement`의 `*_detail`이
+  export됨; `ifft`가 크기 검사 전에 conj(던지면 버퍼가 conj된 채 남음); nz = 1 평면 FFT의
+  무의미한 z 패스; `ImaginaryTimePropagator1D::relax`의 twiddle 재구축;
+  `collapse_wavepacket` 직렬 256³ exp 패스(Measure 클릭마다 ~0.3 s);
+  `gaussian_wavepacket`의 셀당 pow/exp(분리 가능한 축 테이블로).
+- **[solver]** `EngineKernels`의 32개 (ptr, size) 수동 쌍 + 62개 대입 + fft switch.
+- **[viz]** `SceneRenderer` 2.2k줄·~90 멤버, `destroy()`가 29개 메모를 손으로 리셋;
+  `create_aux_image`가 `create_storage_image_3d`를 실패 정리 없이 재구현;
+  `resize`/`ensure_marker_vbuf`/`ensure_staging`이 성공 전에 메모를 커밋;
+  `SwapchainPresenter`에 복사 금지·소멸자 release 없음; CPU fallback에서 볼륨 재업로드 시
+  occupancy/shadow 볼륨 미재구축; converged early-out이 flow 토글을 무시(정지·수렴 상태에서
+  F가 무반응); `kMaxMarkers`↔`SES_MAX_MARKERS`가 주석으로만 연결.
+
+미검증 후보: 스타일·주석·modern-C++·보일러플레이트 위주의 LOW/NIT 약 430건은 이번
+사이클에서 적대적 검증을 하지 못했다(이전 검증에서 이 부류의 대부분이 반박됨). 다음
+사이클에서 파일 단위 배치로 검증할 것.
