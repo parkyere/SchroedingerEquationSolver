@@ -623,6 +623,12 @@ protected:
         abort_flush();
         reset_rotor();
         rebuild_markers();
+        // Reset rebuilt only the CPU potential: the device V still holds the
+        // last rotated axis, so the first batch would run on it. Rebuild it
+        // for the boot axis now (the mean force reads the same buffer).
+        if (use_gpu_path()) {
+            engine_.set_two_center_potential(snap_r(param_), rotor_.n);
+        }
     }
 
     std::string title_suffix() override {
