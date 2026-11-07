@@ -55,4 +55,26 @@ TEST(Ho2dLadder, RaisesExactlyOneOmegaAndRoundTrips) {
     EXPECT_LT(ses::norm_sq(dead), 1e-3);  // a|0> = 0
 }
 
+// hx != hy: d/dy must use the y spacing. With the x spacing the y derivative
+// is off by hy/hx = 2 here and a|0> keeps |a|0>|^2 ~ 1/8 of the ground.
+TEST(Ho2dLadder, AnisotropicGridUsesEachAxisSpacing) {
+    const double omega = 0.5;
+    const ses::Grid3D g{ses::Grid1D{-14.0, 14.0, 256},
+                        ses::Grid1D{-14.0, 14.0, 128},
+                        ses::Grid1D{0.0, 2.0, 1}};
+    const std::vector<double> v =
+        ses::harmonic_potential(g, omega, ses::Vec3d{});
+    const ses::Field3D ground = ho_ground(g, omega);
+    for (const ses::Chirality chi :
+         {ses::Chirality::Right, ses::Chirality::Left}) {
+        const ses::Field3D dead =
+            ses::ho2d_ladder(ground, omega, ses::Rung::Lower, chi);
+        EXPECT_LT(ses::norm_sq(dead), 1e-3);  // a|0> = 0 on both chains
+        ses::Field3D up = ses::ho2d_ladder(ground, omega, ses::Rung::Raise, chi);
+        ses::normalize(up);
+        EXPECT_NEAR(ses::mean_energy(up, v) - ses::mean_energy(ground, v),
+                    omega, 0.02 * omega);
+    }
+}
+
 }  // namespace
