@@ -38,7 +38,10 @@ void main(uint3 gtid : SV_GroupThreadID) {
         }
         gtotal = acc;
     }
-    GroupMemoryBarrierWithGroupSync();
+    // ALL memory, not only groupshared: the default out_m[0] store above and
+    // the winning chunk's store below hit the same storage-buffer word from
+    // different invocations, so they must be ordered (else a data race).
+    AllMemoryBarrierWithGroupSync();
     float thr = params.u * gtotal;
     if (offs[t] <= thr && thr < offs[t] + parts[t]) {
         float acc = offs[t];

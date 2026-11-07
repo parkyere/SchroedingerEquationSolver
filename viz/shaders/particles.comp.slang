@@ -1,6 +1,8 @@
 // Probability-flow streaklines: head advects a Bohmian step v = j/rho,
 // j = Im(conj(psi) grad psi) (au, ses.flow::probability_current). Respawn =
-// rejection-sample |psi|^2 (equivariant: streaks stay |psi|^2-distributed).
+// up to 4 rejection tries against |psi|^2, so seeds are only APPROXIMATELY
+// |psi|^2-distributed: a seed that fails every try keeps its uniform draw and
+// is re-drawn next frame only if it sits below the 1e-4 peak-density gate.
 import viz_util;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<float4, Std430DataLayout> trail;
@@ -47,7 +49,7 @@ float rnd(inout uint state) {
     return float(w) / 4294967296.0;
 }
 
-// Rejection-sample respawn vs |psi|^2; on fail keep last draw (re-gated next frame).
+// Rejection-sample respawn vs |psi|^2; on fail keep the last (uniform) draw.
 float3 respawn_seed(inout uint rng) {
     float3 p = params.box_min.xyz;
     for (int t = 0; t < 4; ++t) {

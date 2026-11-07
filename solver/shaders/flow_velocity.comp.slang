@@ -32,11 +32,14 @@ void main(uint3 gid : SV_DispatchThreadID) {
     if (I.x >= params.m || I.y >= params.m || I.z >= params.m) {
         return;
     }
-    // full-res block centre
+    // Texel I holds the full-res grid point I*s: world_to_uvw (viz_util)
+    // maps that point to texel centre (I+0.5)/m for every block size s. A
+    // block-centre sample (I*s + s/2) made vel_at(x) return v(x + h) per
+    // axis on the 256^3 scenes (s = 2).
     int3 s = int3(params.nx / params.m, params.ny / params.m, params.nz / params.m);
-    int i = I.x * s.x + s.x / 2;
-    int j = I.y * s.y + s.y / 2;
-    int k = I.z * s.z + s.z / 2;
+    int i = I.x * s.x;
+    int j = I.y * s.y;
+    int k = I.z * s.z;
 
     Complex p = psi_at(i, j, k);
     float rho = norm2(p);
