@@ -175,7 +175,11 @@ ApiT* require_api(ShellT* shell, const char* name, ApiT* api, bool runs) {
 }
 
 // Bounded every()-poll: pred true -> on_ok once; else after timeout_ms ->
-// on_timeout (0 = uncapped). One helper for the shared_ptr self-id dances.
+// on_timeout (0 = uncapped). every() re-arms relative to each poll, so the
+// deadline can land between polls: it re-checks pred first, so on_timeout
+// runs only if pred never held (a handler that trusted otherwise could
+// return without request_exit and hang a headless run). One helper for the
+// shared_ptr self-id dances.
 template <typename ShellT, typename Pred, typename Ok, typename Timeout>
 void poll_until(ShellT* shell, std::uint64_t period_ms,
                 std::uint64_t timeout_ms, Pred pred, Ok on_ok,
@@ -191,11 +195,17 @@ void poll_until(ShellT* shell, std::uint64_t period_ms,
         on_ok();
     });
     if (timeout_ms > 0) {
-        shell->sched().after(timeout_ms, [shell, poll, done, on_timeout] {
+        shell->sched().after(timeout_ms,
+                             [shell, poll, done, pred, on_ok, on_timeout] {
             if (*done) {
                 return;
             }
             shell->sched().cancel(*poll);
+            *done = true;
+            if (pred()) {
+                on_ok();
+                return;
+            }
             on_timeout();
         });
     }
@@ -917,13 +927,17 @@ void register_verification_arcs(ShellT* the_shell) {
                 if (sp == nullptr) {
                     return;
                 }
-                shell->set_time_scale(kTimeScaleMax);
+                // The quarter turn is read at x1: catch-up ticks drop, so the
+                // 1 s poll lags T/4 by at most ~1 au (<y> >= sin(pi/2 + 0.5)
+                // = 0.88). At x16 the poll landed ~5 quarter turns late, at
+                // an arbitrary phase.
                 const double omega_l = sp->b(2);  // boot B is +z: omega_L = |B|
                 const double t_quarter =
                     0.25 * 2.0 * std::numbers::pi / omega_l;
                 selftest_wait_sim_time(shell, t_quarter, 0, [shell,
                                                              name](bool ok1) {
                     const double y_quarter = shell->sp()->bloch_y();
+                    shell->set_time_scale(kTimeScaleMax);  // long Rabi/echo legs
                     shell->sp()->toggle_rf();
                     auto min_z = std::make_shared<double>(1.0);
                     const int probe = shell->sched().every(120, [shell, min_z] {
@@ -1277,21 +1291,25 @@ void register_verification_arcs(ShellT* the_shell) {
                             *best = std::max(*best, shell->dw()->p_right());
                             return *best > 0.8;
                         },
-                        [shell, name, best] {
-                            std::fprintf(stderr,
-                                         "%s: transferred, "
-                                         "max P_R = %.3f  [PASS]\n",
-                                         name, *best);
-                            shell->request_exit(0);
-                        },
+                        // A transfer passes only with the splitting in band
+                        // and a LEFT start: a right-well start reads P_R ~ 1
+                        // on the first poll.
                         [shell, name, best, de, band_ok, left_ok] {
-                            const bool pass = band_ok && left_ok && *best > 0.8;
+                            const bool pass = band_ok && left_ok;
                             std::fprintf(stderr,
-                                         "%s: dE = %.2e (band %d), start "
-                                         "left %d, max P_R = %.3f  [%s]\n",
-                                         name, de, band_ok, left_ok, *best,
+                                         "%s: transferred, max P_R = %.3f, "
+                                         "dE = %.2e (band %d), start left "
+                                         "%d  [%s]\n",
+                                         name, *best, de, band_ok, left_ok,
                                          pass ? "PASS" : "FAIL");
                             shell->request_exit(pass ? 0 : 1);
+                        },
+                        [shell, name, best, de, band_ok, left_ok] {
+                            std::fprintf(stderr,
+                                         "%s: dE = %.2e (band %d), start "
+                                         "left %d, max P_R = %.3f  [FAIL]\n",
+                                         name, de, band_ok, left_ok, *best);
+                            shell->request_exit(1);
                         });
                 });
             });
