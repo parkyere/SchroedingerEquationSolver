@@ -135,9 +135,9 @@ public:
                                     : "  [WARNING: even fp16 is tight -- consider a "
                                       "smaller box or manifold]");
             // Relax tables are TRANSIENT (uploaded on Key-2/3/4, freed on
-            // completion); only the gradient upload is fallible-fatal here.
-            if (!engine_.set_potential_gradient(sim_.potential())) {
-                std::fprintf(stderr, "engine: gradient setup failed -- "
+            // completion); only the mean-force setup is fallible-fatal here.
+            if (!engine_.enable_mean_force()) {
+                std::fprintf(stderr, "engine: mean-force setup failed -- "
                                      "falling back to CPU stepping\n");
                 gpu_ok_ = false;
                 decay_on_ = false;
@@ -1212,7 +1212,7 @@ private:
         // transfer-vs-compute ordering against it -- drain first.
         engine_.wait_async();
         // Memo: sliders re-fire every drag frame and reset calls with 0/0 --
-        // skip the two 67 MB uploads when nothing changed.
+        // skip the 67 MB upload when nothing changed.
         if (fields_.e0 == uploaded_e0_ && fields_.b == uploaded_b_ &&
             fields_.e_axis == uploaded_e_axis_ &&
             fields_.b_axis == uploaded_b_axis_) {
@@ -1230,11 +1230,11 @@ private:
             v = ses::diamagnetic_potential(std::move(v), sim_.grid(), fields_.b,
                                            fields_.b_axis);
         }
-        // The half-potential AND the Ehrenfest gradient must stay in sync (a
-        // stationary state reads <grad V>=0 -- no fake Larmor power with fields
-        // on). On upload failure fall back to CPU; commit the memo only on
-        // success so a retry is not blocked.
-        if (!engine_.set_potential(v) || !engine_.set_potential_gradient(v)) {
+        // The Ehrenfest mean force reads this same buffer, so a stationary
+        // state keeps <grad V> = 0 with fields on (no fake Larmor power). On
+        // upload failure fall back to CPU; commit the memo only on success so
+        // a retry is not blocked.
+        if (!engine_.set_potential(v)) {
             std::fprintf(stderr, "engine: field-table upload failed -- "
                                  "falling back to CPU stepping\n");
             ensure_cpu_current();  // pull the GPU psi down first

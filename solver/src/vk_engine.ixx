@@ -1823,11 +1823,13 @@ public:
     }
 
     // ---- semiclassical radiation (Ehrenfest mean force) -----------------
-    // Upload the scalar potential (R32) for mean_force: the kernel takes the
-    // periodic central differences IN-SHADER, so no gradient field is stored
-    // (computed at read time from cache-hot neighbor taps).
-    bool set_potential_gradient(const std::vector<double>& v) {
-        if (force_v_buf_.buf == VK_NULL_HANDLE) {
+    // Arm mean_force. The kernel takes periodic central differences of the
+    // LIVE propagation potential v_buf_ in-shader -- no gradient field and no
+    // second copy of V: set_potential, the two-center rebuild and its per-kick
+    // schedule are all seen by the next read (a copy went stale as soon as
+    // the H2+ nuclei turned). Idempotent.
+    bool enable_mean_force() {
+        if (force_set_ == VK_NULL_HANDLE) {
             struct alignas(16) ForceParams {
                 std::uint32_t n, nx, ny, nz;
                 float inv_2h[4];
@@ -1840,17 +1842,20 @@ public:
                 {static_cast<float>(1.0 / (2.0 * grid_.x.spacing())),
                  static_cast<float>(1.0 / (2.0 * grid_.y.spacing())),
                  static_cast<float>(1.0 / (2.0 * grid_.z.spacing())), 0.0f}};
-            if (!ctx_->create_device_buffer(cells_ * sizeof(float),
-                                            &force_v_buf_) ||
-                !ctx_->create_device_buffer(4 * kGroups * sizeof(float),
-                                            &force_partials_) ||
-                !write_ubo(&force_ubo_, &fp, sizeof(fp))) {
+            // Each piece is created once, so a retry after a partial failure
+            // neither leaks nor reports ready without a descriptor set.
+            if ((force_partials_.buf == VK_NULL_HANDLE &&
+                 !ctx_->create_device_buffer(4 * kGroups * sizeof(float),
+                                             &force_partials_)) ||
+                (force_ubo_.buf == VK_NULL_HANDLE &&
+                 !write_ubo(&force_ubo_, &fp, sizeof(fp)))) {
                 return false;
             }
-            force_set_ = arena_.allocate(*ctx_, force_.set_layout());
-            if (force_set_ == VK_NULL_HANDLE) {
+            const VkDescriptorSet set = arena_.allocate(*ctx_, force_.set_layout());
+            if (set == VK_NULL_HANDLE) {
                 return false;
             }
+            force_set_ = set;
             const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             arena_.write_buffer(*ctx_, force_set_, 0, storage, psi_.buf);
             arena_.write_buffer(*ctx_, force_set_, 1,
@@ -1858,15 +1863,13 @@ public:
                                 force_ubo_.buf, sizeof(ForceParams));
             arena_.write_buffer(*ctx_, force_set_, 2, storage,
                                 force_partials_.buf);
-            arena_.write_buffer(*ctx_, force_set_, 4, storage,
-                                force_v_buf_.buf);
+            arena_.write_buffer(*ctx_, force_set_, 4, storage, v_buf_.buf);
         }
-        const std::vector<float> vf = to_f32(v);
-        return upload_raw(force_v_buf_, vf.data(), cells_ * sizeof(float));
+        return true;
     }
 
     // <grad V> = sum |psi|^2 grad V * dV -- the Ehrenfest dipole
-    // acceleration. Zero if no gradient was uploaded.
+    // acceleration. Zero until enable_mean_force().
     ses::Vec3d mean_force() {
         wait_async();  // reads psi: never mid-batch
         if (force_set_ == VK_NULL_HANDLE) {
@@ -2384,7 +2387,6 @@ public:
         ctx_->destroy_buffer(&dipole_partials_);
         ctx_->destroy_buffer(&dipole_ubo_);
         ctx_->destroy_buffer(&force_partials_);
-        ctx_->destroy_buffer(&force_v_buf_);
         ctx_->destroy_buffer(&force_ubo_);
         ctx_->destroy_buffer(&radial_buf_);
         ctx_->destroy_buffer(&synth_ubo_);
@@ -3769,7 +3771,6 @@ private:
     Buffer axpy_ubo_{};
     Buffer synth_ubo_{};
     Buffer radial_buf_{};
-    Buffer force_v_buf_{};  // scalar V for the in-shader mean-force gradient
     Buffer force_ubo_{};
     Buffer force_partials_{};
     Buffer dipole_ubo_{};

@@ -130,9 +130,10 @@ public:
         if (!gpu_ok_) {
             return;
         }
-        // Relax tables are transient (uploaded on relax entry); only gradient is fatal here.
-        if (!engine_.set_potential_gradient(sim_.potential())) {
-            std::fprintf(stderr, "engine: gradient setup failed -- "
+        // Relax tables are transient (uploaded on relax entry); only the
+        // mean-force setup is fatal here.
+        if (!engine_.enable_mean_force()) {
+            std::fprintf(stderr, "engine: mean-force setup failed -- "
                                  "falling back to CPU stepping\n");
             gpu_ok_ = false;
             return;
@@ -707,12 +708,11 @@ protected:
         return true;
     }
 
-    // Push sim_'s potential (+ gradient) to the engine. On failure the GPU
-    // path is abandoned and the CPU becomes the truth -- never a silently
-    // stale potential on the device.
+    // Push sim_'s potential to the engine (the mean force reads the same
+    // buffer). On failure the GPU path is abandoned and the CPU becomes the
+    // truth -- never a silently stale potential on the device.
     bool upload_potential_tables() {
-        if (engine_.set_potential(sim_.potential()) &&
-            engine_.set_potential_gradient(sim_.potential())) {
+        if (engine_.set_potential(sim_.potential())) {
             return true;
         }
         std::fprintf(stderr, "engine: potential upload failed -- falling "

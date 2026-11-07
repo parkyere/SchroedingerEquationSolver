@@ -2776,9 +2776,10 @@ bool check_engine_synth(ses_vk::DeviceContext& ctx) {
     return ok;
 }
 
-// Engine-level mean force: set_potential_gradient (host central differences,
-// periodic) + the <grad V> reduction, vs the same construction in CPU double
-// on the fp64 field. Rel tolerance covers the fp32 psi/grad narrowing.
+// Engine-level mean force: enable_mean_force (in-shader periodic central
+// differences of the engine's own V) + the <grad V> reduction, vs the same
+// construction in CPU double on the fp64 field. Rel tolerance covers the
+// fp32 psi/V narrowing.
 bool check_engine_force(ses_vk::DeviceContext& ctx) {
     const ses::Grid1D axis{-4.0, 4.0, 8};
     const ses::Grid3D g{axis, axis, axis};
@@ -2792,8 +2793,8 @@ bool check_engine_force(ses_vk::DeviceContext& ctx) {
         std::printf("mean force (raw Vulkan): engine init FAIL\n");
         return false;
     }
-    if (!engine.set_potential_gradient(v)) {
-        std::printf("mean force (raw Vulkan): set_potential_gradient FAIL\n");
+    if (!engine.enable_mean_force()) {
+        std::printf("mean force (raw Vulkan): enable_mean_force FAIL\n");
         return false;
     }
     const ses::Vec3d gpu = engine.mean_force();
