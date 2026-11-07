@@ -299,7 +299,8 @@ namespace lattice2d_detail {
 template <class Core>
 inline Field3D stencil2d(const Field3D& psi, Core&& core) {
     const Grid3D& g = psi.grid();
-    const double inv2h = 1.0 / (2.0 * g.x.spacing());
+    const double inv2hx = 1.0 / (2.0 * g.x.spacing());
+    const double inv2hy = 1.0 / (2.0 * g.y.spacing());
     Field3D out{g};
     parallel_for(g.y.n, [&](int j) {
         const int ny = g.y.n;
@@ -311,9 +312,9 @@ inline Field3D stencil2d(const Field3D& psi, Core&& core) {
             const int ip = (i + 1) % nx;
             const int im = (i - 1 + nx) % nx;
             const std::complex<double> ddx =
-                (psi(ip, j, 0) - psi(im, j, 0)) * inv2h;
+                (psi(ip, j, 0) - psi(im, j, 0)) * inv2hx;
             const std::complex<double> ddy =
-                (psi(i, jp, 0) - psi(i, jm, 0)) * inv2h;
+                (psi(i, jp, 0) - psi(i, jm, 0)) * inv2hy;
             out(i, j, 0) = core(g.x.coord(i), y, psi(i, j, 0), ddx, ddy);
         }
     });
