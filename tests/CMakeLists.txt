@@ -125,17 +125,24 @@ else()
     message(STATUS "SES_BUILD_GPU=OFF - director-contract tests skipped (no ses_scenario).")
 endif()
 target_compile_features(sesolver_tests PRIVATE cxx_std_20)
+# _CRT_SECURE_NO_WARNINGS: MSVC std::getenv (the pool-width override check).
+if(MSVC)
+    target_compile_definitions(sesolver_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(sesolver_tests)
 
 # The pool's determinism contract (bitwise results independent of the worker
 # count): rerun the pool-sensitive pinned-value suites at two other widths.
+# ParallelWorkers.* (matched by Parallel*) asserts the width took effect; an
+# empty selection (a renamed suite) fails instead of passing vacuously.
 foreach(_w IN ITEMS 1 3)
     add_test(NAME sesolver_tests.workers${_w}
              COMMAND sesolver_tests
                  --gtest_filter=Parallel*:Fft3*:PropagatorTables*:ImaginaryTables*:Fft.*)
     set_tests_properties(sesolver_tests.workers${_w} PROPERTIES
         ENVIRONMENT "SES_PARALLEL_WORKERS=${_w}"
+        FAIL_REGULAR_EXPRESSION "Running 0 tests"
         LABELS "pool")
 endforeach()

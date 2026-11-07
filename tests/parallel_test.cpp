@@ -14,6 +14,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -24,8 +25,18 @@ import ses.parallel;
 
 namespace {
 
-TEST(ParallelWorkers, AtLeastOne) {
+// The pool honours SES_PARALLEL_WORKERS. The pool-width ctest variants
+// (sesolver_tests.workers1/3) rerun the pinned suites under it: if the
+// override silently stopped working they would rerun at the default width,
+// green and proving nothing.
+TEST(ParallelWorkers, HonoursTheEnvironmentOverride) {
     EXPECT_GE(ses::parallel_workers(), 1);
+    if (const char* env = std::getenv("SES_PARALLEL_WORKERS")) {
+        const int v = std::atoi(env);
+        if (v >= 1) {
+            EXPECT_EQ(ses::parallel_workers(), v);
+        }
+    }
 }
 
 TEST(ParallelFor, CoversEveryIndexExactlyOnce) {
