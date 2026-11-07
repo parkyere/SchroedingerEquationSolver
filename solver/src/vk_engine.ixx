@@ -147,6 +147,17 @@ struct KinMulParams {
     float coef;  // -dt/2
 };
 
+// Batch step options (Engine::StepFlags): absorb damps psi by the absorbing
+// mask after EVERY step; bridge records the psi -> display-volume store into
+// the SAME submission (no extra fences). Namespace scope, not nested: a
+// nested class's default member initializers cannot be used by the enclosing
+// class's own default arguments (`StepFlags flags = {}`; Clang and GCC reject
+// it, MSVC accepts).
+struct StepFlags {
+    bool absorb = false;
+    bool bridge = false;
+};
+
 class Engine {
 public:
     // Free-energy estimate + normalized peak, from the per-step renorm.
@@ -159,13 +170,7 @@ public:
         double sum = 0.0;
         double peak = 0.0;
     };
-    // Batch step options: absorb damps psi by the absorbing mask after EVERY
-    // step; bridge records the psi -> display-volume store into the SAME
-    // submission (no extra fences).
-    struct StepFlags {
-        bool absorb = false;
-        bool bridge = false;
-    };
+    using StepFlags = ses_vk::StepFlags;
     // Synthesized-state report: handle < 0 = failure; peak = normalized peak
     // |psi|^2; norm2 = PRE-normalization grid norm (projection normalizer).
     struct SynthResult {
