@@ -788,7 +788,8 @@ private:
         atlas_.clear();
         atlas_R_ = R;
         // Baked offline by sesolver_genatlas (ses.h2plus_atlas_data): exact
-        // prolate-spheroidal orbitals for the nearest snapped R, zero runtime solve.
+        // prolate-spheroidal orbitals, zero runtime solve. Only the default
+        // R is baked; any other R yields an empty atlas (no MOs listed).
         const std::vector<ses::H2plusOrbital> orbs = ses::h2plus_atlas_baked(R);
         constexpr int kMaxExposed = 24;  // UI list scrolls; the box admits more
         for (const ses::H2plusOrbital& o : orbs) {

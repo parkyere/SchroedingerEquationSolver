@@ -12,18 +12,23 @@ export import ses.h2plus_atlas_data;
 
 export namespace ses {
 
-// The baked exact-atlas for the R nearest to the requested one. Sample
-// coordinates are END-INCLUSIVE NODES over [-1, 1] (eta) and [1, xi_max]
-// (xi, xi_max = the live grid's edge); the generator
-// (bench/gen_h2plus_atlas.cpp) interpolates the live profiles at exactly
-// these points -- the two conventions MUST stay identical.
+// The baked exact-atlas at R, or EMPTY when R is not one of the baked grid
+// points (never a neighbour's orbitals relabelled: their nuclei would not
+// sit in the caller's wells). Sample coordinates are END-INCLUSIVE NODES
+// over [-1, 1] (eta) and [1, xi_max] (xi, xi_max = the live grid's edge);
+// the generator (bench/gen_h2plus_atlas.cpp) interpolates the live profiles
+// at exactly these points -- the two conventions MUST stay identical.
 inline std::vector<H2plusOrbital> h2plus_atlas_baked(double R) {
     using namespace h2p_baked;
+    constexpr double kRTol = 1e-9;  // scene R values are exact 2h multiples
     int best = 0;
     for (int i = 1; i < kNR; ++i) {
         if (std::abs(kRgrid[i] - R) < std::abs(kRgrid[best] - R)) best = i;
     }
     std::vector<H2plusOrbital> out;
+    if (std::abs(kRgrid[best] - R) > kRTol) {
+        return out;
+    }
     for (int k = 0; k < kCount[best]; ++k) {
         const BakedOrb& b = kOrb[best][k];
         H2plusOrbital o;
