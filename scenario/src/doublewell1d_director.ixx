@@ -79,14 +79,20 @@ private:
         return ses::Grid1D{-kDw1dBox, kDw1dBox, kDw1dPoints};
     }
 
-    // Both eigenstates positive near xmin (solver sign convention) -> sum
-    // concentrates LEFT.
+    // psi_L = psi_0 +- psi_1, the sign picked so the two ADD on the left.
+    // It cannot come from the solver's sign rule: that reads u[0], ~e^-270
+    // deep in the confining wall here, so the odd state's sign is round-off
+    // (the boot state used to sit in the RIGHT well).
     void prepare_left() {
         const std::vector<ses::Bound1D> s =
             ses::bound_states_1d(grid1d_, potential_, 2);
         de_ = s[1].energy - s[0].energy;
+        double left = 0.0;
+        for (int i = 0; i < grid1d_.n && grid1d_.coord(i) < 0.0; ++i) {
+            left += (std::conj(s[0].psi[i]) * s[1].psi[i]).real();
+        }
         ses::Field1D psi = s[0].psi;
-        axpy(psi, 1.0, s[1].psi);
+        axpy(psi, left < 0.0 ? -1.0 : 1.0, s[1].psi);
         ses::normalize(psi);
         set_state(std::move(psi));
         after_batch();
