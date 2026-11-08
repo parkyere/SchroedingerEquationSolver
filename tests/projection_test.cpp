@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 #include <vector>
 import ses.projection;
 import ses.radial;

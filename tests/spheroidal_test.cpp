@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdio>
 #include <vector>
 
 import ses.spheroidal;

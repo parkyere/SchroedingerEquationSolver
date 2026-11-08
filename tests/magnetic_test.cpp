@@ -4,8 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <vector>
 import ses.magnetic;
 import ses.propagator;
 import ses.rotation;
