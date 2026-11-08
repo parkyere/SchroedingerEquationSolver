@@ -3709,7 +3709,9 @@ bool check_fault_deflation_inner(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
-// synthesize_state: a failed upload/submit must not hand out a handle.
+// synthesize_state / synthesize_state_half: a failed submit anywhere in the
+// chain (radial upload, synth, norm, scale; + fp16 pack) must not hand out a
+// handle -- an unnormalized or unpacked state is not a state.
 bool check_fault_synth_submit(ses_vk::DeviceContext& ctx) {
     const char* name = "fault synth submit";
     FaultRig rig;
@@ -3724,16 +3726,35 @@ bool check_fault_synth_submit(ses_vk::DeviceContext& ctx) {
         const double r = (i + 1) * h_radial;
         u[static_cast<std::size_t>(i)] = r * std::exp(-r);
     }
-    ctx.fault.submit_fail_after = 0;
-    const ses_vk::Engine::SynthResult r =
-        e.synthesize_state(u, 0, 0, h_radial, n_radial * h_radial, n_radial);
-    const bool consumed = ctx.fault.submit_fail_after < 0;
-    ctx.fault.submit_fail_after = -1;
-    const bool latched = take_latch(ctx);
+    bool pass = true;
+    for (int half = 0; half < 2; ++half) {
+        // fp32: upload, synth, norm, scale; fp16 adds the pack submit.
+        const int n_submits = half != 0 ? 5 : 4;
+        for (int k = 0; k < n_submits; ++k) {
+            ctx.fault.submit_fail_after = k;
+            const ses_vk::Engine::SynthResult r =
+                half != 0 ? e.synthesize_state_half(u, 0, 0, h_radial,
+                                                    n_radial * h_radial,
+                                                    n_radial)
+                          : e.synthesize_state(u, 0, 0, h_radial,
+                                               n_radial * h_radial, n_radial);
+            const bool consumed = ctx.fault.submit_fail_after < 0;
+            ctx.fault.submit_fail_after = -1;
+            const bool latched = take_latch(ctx);
+            const bool ok = consumed && latched && r.handle < 0;
+            if (!ok) {
+                std::printf("%s (raw Vulkan): %s submit #%d: consumed %d, "
+                            "latched %d, handle %d\n",
+                            name, half != 0 ? "fp16" : "fp32", k, consumed,
+                            latched, r.handle);
+            }
+            pass = pass && ok;
+        }
+    }
     e.destroy();
-    const bool pass = consumed && latched && r.handle < 0;
-    std::printf("%s (raw Vulkan): consumed %d, latched %d, handle %d  [%s]\n",
-                name, consumed, latched, r.handle, pass ? "PASS" : "FAIL");
+    std::printf("%s (raw Vulkan): every submit of the fp32 and fp16 chains "
+                "refuses a handle  [%s]\n",
+                name, pass ? "PASS" : "FAIL");
     return pass;
 }
 

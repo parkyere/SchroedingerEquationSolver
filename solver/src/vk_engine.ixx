@@ -169,6 +169,7 @@ public:
     struct NormPeak {
         double sum = 0.0;
         double peak = 0.0;
+        bool ok = false;  // both submits (norm + scale) completed
     };
     using StepFlags = ses_vk::StepFlags;
     // Synthesized-state report: handle < 0 = failure; peak = normalized peak
@@ -1760,6 +1761,7 @@ public:
         }
         out = sum_norm_partials();
         out.sum *= cell_volume_;
+        out.ok = true;
         return out;
     }
 
@@ -2081,8 +2083,12 @@ public:
         barrier_compute_to_compute(shot.cb());
         pack_.bind(shot.cb(), pack_set_);
         vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        shot.submit_and_wait(*ctx_);
+        const bool packed = shot.submit_and_wait(*ctx_);
         ctx_->destroy_buffer(&tmp);
+        if (!packed) {
+            ctx_->destroy_buffer(&st.buf);  // never packed: no handle
+            return res;
+        }
         states_.push_back(st);
         res.handle = static_cast<int>(states_.size()) - 1;
         return res;
@@ -2987,6 +2993,9 @@ private:
         }
 
         const NormPeak np = normalize_buffer(out);
+        if (!np.ok) {
+            return false;  // unnormalized buffer: no state, no stats
+        }
         if (out_norm2 != nullptr) {
             *out_norm2 = np.sum;
         }
@@ -2997,7 +3006,10 @@ private:
     }
 
     // Grid normalization of `buf` via the re-pointed any-target norm/scale
-    // sets. Returns {pre-normalization grid norm (x dV), raw peak density}.
+    // sets. Returns {pre-normalization grid norm (x dV), raw peak density,
+    // ok}. Each submit opens with a compute barrier: the producer of `buf`
+    // (synth) and the norm read sit in EARLIER submissions, and a fence wait
+    // gives the host, not the next dispatch, visibility.
     NormPeak normalize_buffer(Buffer& buf) {
         NormPeak np;
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -3010,6 +3022,7 @@ private:
         if (!shot.begin_compute(*ctx_)) {
             return np;
         }
+        barrier_compute_to_compute(shot.cb());  // synth write -> norm read
         norm_.bind(shot.cb(), norm_any_set_);
         vkCmdDispatch(shot.cb(), kGroups, 1, 1);
         record_partials_readback(shot.cb());
@@ -3035,9 +3048,10 @@ private:
         if (!s2.begin_compute(*ctx_)) {
             return np;
         }
+        barrier_compute_to_compute(s2.cb());  // norm read -> scale write
         scale_.bind(s2.cb(), scale_any_set_);
         vkCmdDispatch(s2.cb(), mul_groups_, 1, 1);
-        s2.submit_and_wait(*ctx_);
+        np.ok = s2.submit_and_wait(*ctx_);
         return np;
     }
 
