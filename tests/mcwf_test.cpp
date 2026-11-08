@@ -109,7 +109,7 @@ TEST(ChainDecayJumps, TwoLevelFirstArrivalMatchesTheExponential) {
         // channel, so exactly one jump.
         std::vector<double> us{std::exp(-1.0), 0.0};
         std::size_t k = 0;
-        auto u01 = [&] { return us[k++]; };
+        auto u01 = [&] { return us.at(k++); };
         const std::vector<int> fired =
             ses::chain_decay_jumps(ch, {0.0, 1.0}, 4.0, u01);
         ASSERT_EQ(fired.size(), 1u);
@@ -119,7 +119,7 @@ TEST(ChainDecayJumps, TwoLevelFirstArrivalMatchesTheExponential) {
         // u1 = e^{-3} -> t1 = 6 > dt=4 -> survives.
         std::vector<double> us{std::exp(-3.0)};
         std::size_t k = 0;
-        auto u01 = [&] { return us[k++]; };
+        auto u01 = [&] { return us.at(k++); };
         EXPECT_TRUE(ses::chain_decay_jumps(ch, {0.0, 1.0}, 4.0, u01).empty());
     }
 }
@@ -129,7 +129,7 @@ TEST(ChainDecayJumps, CascadeHopsFireWithinOneInterval) {
     const std::vector<ses::RateChannel> ch{{2, 1, 1.0}, {1, 0, 1.0}};
     std::vector<double> us{std::exp(-1.0), 0.0, std::exp(-2.0), 0.0};
     std::size_t k = 0;
-    auto u01 = [&] { return us[k++]; };
+    auto u01 = [&] { return us.at(k++); };
     const std::vector<int> fired =
         ses::chain_decay_jumps(ch, {0.0, 0.0, 1.0}, 10.0, u01);
     ASSERT_EQ(fired.size(), 2u);
