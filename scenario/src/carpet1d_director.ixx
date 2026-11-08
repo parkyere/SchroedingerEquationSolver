@@ -130,7 +130,9 @@ protected:
             }
         }
         sim_time_ += n * kCp1dDt;
-        track_peak();
+        // No track_peak(): peak_ only feeds the cloud volume/flow passes, and
+        // this scene is a surface (cloud() == false) -- a serial 1M-cell scan
+        // per batch for nothing. The relief normalizes by disp_peak_.
     }
 
 private:
