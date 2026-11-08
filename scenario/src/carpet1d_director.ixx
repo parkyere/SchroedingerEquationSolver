@@ -4,14 +4,12 @@ module;
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <memory>
 #include <string>
 #include <vector>
 export module ses.scenario.carpet1d_director;
 export import ses.scenario.lattice2d_director;
 import ses.propagator;
 import ses.wavepacket;
-import ses.parallel;
 
 
 // Quantum carpet: free packet on a periodic ring, T_rev = L^2/pi (full

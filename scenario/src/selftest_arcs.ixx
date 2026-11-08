@@ -9,7 +9,7 @@ module;
 #include <string>
 export module ses.scenario.selftest_arcs;
 export import ses.scenario.manifold_spec;
-import ses.scenario;  // Rung / LaserAxis / Pulse / kTimeScaleMax
+import ses.scenario;  // Rung / LaserAxis / kTimeScaleMax
 import ses.scenario.kepler_seed;
 
 
@@ -1612,7 +1612,7 @@ void register_verification_arcs(ShellT* the_shell) {
         // with the J0-mode energy scale.
         {"--selftest-corral", +[](ShellT* shell, const char* name) {
             shell->sched().after(1000, [shell, name] {
-                auto* cr = require_api(shell, name, shell->cr(), true);
+                auto* cr = require_api(shell, name, shell->cr());
                 if (cr == nullptr) {
                     return;
                 }
