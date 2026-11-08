@@ -67,7 +67,7 @@ double max_amp_diff(const ses::SpinState16& a, const ses::SpinState16& b) {
     return m;
 }
 
-// Fusion Stage 1: apply_fused (gather/matmul/scatter) must reproduce the
+// Gate fusion: apply_fused (gather/matmul/scatter) must reproduce the
 // hand-written gates, and the fused-gate step must reproduce exact_step.
 TEST(SpinFuse, SiteGateMatchesExactRotate) {
     ses::SpinState16 a = seed_tilted();
@@ -113,7 +113,7 @@ TEST(SpinFuse, GreedyFuseReducesPassesAndMatchesExactStep) {
     EXPECT_LT(max_amp_diff(a, b), 1e-10);
 }
 
-// Stage 3: the qubit-reorder relabel is an exact bijection, and the lattice
+// Qubit reordering: the relabel is an exact bijection, and the lattice
 // transpose turns a vertical bond into a bond applied in the transposed frame.
 TEST(SpinReorder, TransposeIsInvolution) {
     const std::vector<int> t = ses::lattice_transpose_perm();
