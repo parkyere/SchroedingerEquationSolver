@@ -199,8 +199,8 @@ TEST(Spheroidal, BakedAtlasMatchesTheLiveSolve) {
 }
 
 // The baked member must BE the live member on the grid: the generator's
-// resampling convention has to match the loader's reconstruction (cell
-// centres over [1, xi_max] with xi_max the grid EDGE), and the sample count
+// resampling convention has to match the loader's reconstruction (END-
+// INCLUSIVE NODES over [1, xi_max], xi_max = the grid EDGE), and the sample count
 // has to resolve the exponential cusp decay.
 TEST(Spheroidal, BakedGroundIsTheLiveGroundOnTheGrid) {
     const double R = 1.875;  // the baked grid point

@@ -61,7 +61,7 @@ TEST(Observables3, MeanMomentumPerAxis) {
 const Grid3D kIntGrid = cube(0.0, 8.0, 8);
 
 TEST(HarmonicPotential3, ExactValuesAndMinimum) {
-    // V = omega * |r-c|^2.
+    // V = 1/2 omega^2 |r-c|^2 (omega = 2: prefactor 2).
     const std::vector<double> v = ses::harmonic_potential(kIntGrid, 2.0, Vec3d{1.0, 2.0, 3.0});
     ASSERT_EQ(v.size(), 512u);
     EXPECT_EQ(v[static_cast<std::size_t>(kIntGrid.flat(1, 2, 3))], 0.0);
