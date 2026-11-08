@@ -242,11 +242,11 @@ public:
     }
     double spectrum_ev(int i) override {
         ensure_spectrum();
-        return spec_[static_cast<std::size_t>(i)].first * kHaToEv;
+        return strip_entry(spec_, i).first * kHaToEv;
     }
     double spectrum_weight(int i) override {
         ensure_spectrum();
-        return spec_[static_cast<std::size_t>(i)].second;
+        return strip_entry(spec_, i).second;
     }
 
     void reset_simulation() override { relax_ground(); }

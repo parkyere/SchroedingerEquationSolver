@@ -50,15 +50,25 @@ public:
 
     // ---- SpinApi ----
     void set_b(int axis, double v) override {
+        if (!api_axis_ok(axis)) {
+            return;
+        }
         b_[axis] = std::clamp(v, -1.0, 1.0);
         title_dirty_ = true;
     }
-    double b(int axis) const override { return b_[axis]; }
+    double b(int axis) const override {
+        return api_axis_ok(axis) ? b_[axis] : 0.0;
+    }
     void set_e(int axis, double v) override {
+        if (!api_axis_ok(axis)) {
+            return;
+        }
         e_[axis] = std::clamp(v, -1.0, 1.0);
         title_dirty_ = true;
     }
-    double e(int axis) const override { return e_[axis]; }
+    double e(int axis) const override {
+        return api_axis_ok(axis) ? e_[axis] : 0.0;
+    }
     // The drive is tuned to the field present at switch-on (frequency AND
     // plane, like a fixed coil): changing B later detunes it.
     void toggle_rf() override {

@@ -60,11 +60,16 @@ public:
     }
     double alpha() const override { return alpha_; }
     void set_b(int axis, double v) override {
+        if (!api_axis_ok(axis)) {
+            return;
+        }
         b_[axis] = std::clamp(v, -1.0, 1.0);
         sync_gpu_params();
         title_dirty_ = true;
     }
-    double b(int axis) const override { return b_[axis]; }
+    double b(int axis) const override {
+        return api_axis_ok(axis) ? b_[axis] : 0.0;
+    }
     void seed_random() override {
         std::uniform_real_distribution<double> u(-1.0, 1.0);
         std::uniform_real_distribution<double> ph(0.0, 2.0 * kPi);

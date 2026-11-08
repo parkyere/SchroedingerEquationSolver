@@ -94,6 +94,17 @@ struct TunnelApi {
 // Ladder direction (bool-trap guard: call sites name the rung).
 enum class Rung { Up, Down };
 
+// Index guards for the API accessors below (callers pass UI indices): a
+// setter ignores an index out of range and a getter reads 0.
+constexpr bool api_axis_ok(int axis) noexcept { return axis >= 0 && axis < 3; }
+// Lazy spectrum strip entry {E (Ha), weight}; {0, 0} outside [0, size).
+inline std::pair<double, double> strip_entry(
+    const std::vector<std::pair<double, double>>& strip, int i) noexcept {
+    return i >= 0 && i < static_cast<int>(strip.size())
+               ? strip[static_cast<std::size_t>(i)]
+               : std::pair<double, double>{};
+}
+
 // 1D harmonic-oscillator ladder (the 1D trap scene).
 struct Ladder1dApi {
     virtual ~Ladder1dApi() = default;
