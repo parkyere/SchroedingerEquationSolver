@@ -366,8 +366,8 @@ for any testable logic.
 
 ### B. 성능
 - **[scenario/core/viz] 2D 표면 장면이 매 배치/프레임 전체를 다시 만든다**: carpet은
-  1024² heightfield 전체 재구축 + 직렬 1M 셀 max 스캔 2회(행은 프레임당 ~6줄만 바뀜,
-  `track_peak` 결과는 cloud가 꺼진 이 장면에서 안 쓰임); `heightfield_surface`는 셀당
+  1024² heightfield 전체 재구축 + 직렬 1M 셀 max 스캔(행은 프레임당 ~6줄만 바뀜; 쓰이지
+  않던 `track_peak` 스캔은 이번에 제거); `heightfield_surface`는 셀당
   6정점 비인덱스 soup(~113 MB double)을 매번 새로 할당; `upload_mesh`는 스텝 프레임마다
   ~56 MB 임시 interleave 벡터. → 변경 행만 갱신, 인덱스 메시, 버퍼 재사용.
 - **[scenario] billiard/qdot/landau(와 corral relax)도 청크마다 512² 전체 GPU↔호스트
@@ -412,6 +412,29 @@ for any testable logic.
   `SwapchainPresenter`에 복사 금지·소멸자 release 없음; CPU fallback에서 볼륨 재업로드 시
   occupancy/shadow 볼륨 미재구축; converged early-out이 flow 토글을 무시(정지·수렴 상태에서
   F가 무반응); `kMaxMarkers`↔`SES_MAX_MARKERS`가 주석으로만 연결.
+
+- **[viz] 프레젠터**: 자체 펜스 타임아웃 뒤에도 `acquire`/`present`가 아직 대기 중인
+  cb·acquire 세마포어를 재사용한다(대기 중 cb에 `vkResetCommandPool`). 획득만 하고 제시하지
+  못한 이미지까지 다루는 프레젠터 전용 stall 가드가 필요(공유 `device_lost`로 조기 반환하면
+  엔진 쪽 래치에도 UI가 멈춤). 표면 caps 조회 결과도 무시(표면 손실이 영원한 '최소화'로 보임).
+- **[viz/shader]** `bloom_down`의 모서리 탭이 SOURCE 텍셀 반 칸이라 모든 레벨이 2×2 박스;
+  `accum.comp`의 fp16 누적 평균은 `kAccumCap = 512`보다 훨씬 일찍 갱신을 못 담아 수렴
+  early-out이 수 초 늦게 걸림(전력·GPU 시간); `volume.frag` 자기그림자 투과율을 8스텝 블록
+  시작점에서 읽음; R32/R32G32 LINEAR 샘플링이 선택 기능 `FILTER_LINEAR`를 확인하지 않음.
+- **[solver/shader]** `spin_born_sample`의 대체값(청크 내 `base+255`, 전역 기본 65535)이
+  확률 0인 기저 상태를 고를 수 있음(측정당 ~1e-7..1e-5: 재누적 반올림 차이와 double→float
+  `u` 캐스트) → thr을 gtotal 바로 아래로 clamp하고 마지막 비영 진폭으로 대체.
+  `project_deposit`은 subgroupSize ≥ 4와 LocalInvocationIndex 연속 subgroup을 가정(미확인);
+  가중치는 셰이더가 i0/frac을 다시 계산하고 bin은 CPU 키에서 오므로 `projection.ixx`의
+  "fp32 IDENTICAL" 주석은 Vulkan에서 거짓(~1e-4 셀이 한 노드 이동, 허용 오차 안).
+- **[solver]** `SpinEngine`: Chebyshev 차수 여유 `ceil(alpha)+24`가 alpha 적응형이 아님
+  (잠재), 장(field)이 있을 때 `step(0)`이 짝 없는 반 스윕을 적용. `Lattice2DEngine`: 크기
+  변경마다 디스크립터 셋 14개 누수(아레나는 해제 안 함), `allocate_sets`가 null 셋 미확인.
+- **[scenario]** Anderson 스페클이 6 bohr CAP 경사와 발사 패킷 아래까지 깔림;
+  `collapse_onto`가 `synthesize_into_psi`의 bool을 버림; corral/qdot relax 수렴 판정이 틱마다라
+  포획 정밀도(와 corral 원판 절단 주기)가 시간 배율 다이얼에 의존; harmonic1d 고유상태 상향
+  cap 판정이 측정 ⟨N⟩과 정수 cap을 비교(짝수 cap에서 cap+1 허용); hydrogen Reset이 광자·점프·
+  측정 라벨을 타이틀에 남김; `collapse_onto` 경로 뒤 `peak_` 미갱신(최대 10틱 밝기 오정규화).
 
 미검증 후보: 스타일·주석·modern-C++·보일러플레이트 위주의 LOW/NIT 약 430건은 이번
 사이클에서 적대적 검증을 하지 못했다(이전 검증에서 이 부류의 대부분이 반박됨). 다음
