@@ -40,7 +40,8 @@ export import ses.decay;
 // Sync contract: compute-to-compute barrier before every psi-aliasing
 // dispatch, transfer barriers around uploads/readbacks, a fence wait per
 // blocking submit; step_async overlaps ONE batch with rendering and every
-// psi-touching entry point drains it first (wait_async).
+// psi-touching entry point drains it first (wait_async) or opens with a
+// compute barrier (norm_and_peak, scale, project_psi).
 // GMF macro pre-claim (C++20 modules): volk.h supplies the VK_* macros (macros
 // don't cross module boundaries) and vk_mem_alloc.h keeps vma* calls compiling;
 // volk's VK_NO_PROTOTYPES lets header-only VkFFT link against volk dispatch.
@@ -640,6 +641,7 @@ public:
         }
     }
 
+private:
     // step()'s body into an arbitrary cb. Strang batch, interior FULL kicks:
     // e^{-iVdt/2} (kin e^{-iVdt})^{n-1} kin e^{-iVdt/2} -- product identical to
     // per-step half-kick pairs, one pass fewer per step. With absorb the mask
@@ -680,6 +682,7 @@ public:
         return record_bridge_tail(cb, flags.bridge);
     }
 
+public:
     // Submit a step batch WITHOUT waiting: it runs on the compute queue
     // while the graphics queue renders the previous display volume
     // (ping-pong: the batch writes the OTHER image). Same-queue submission
@@ -1179,7 +1182,7 @@ public:
         }
         State* st = state_at(handle);
         if (!upload_field(st->buf, state)) {
-            release_state(handle);  // recycles the slot and its four sets
+            release_state(handle);  // recycles the slot and its three sets
             return -1;
         }
         return handle;
@@ -1727,21 +1730,6 @@ private:
     }
 
 public:
-    void apply_mask(int handle) {
-        wait_async();
-        State* st = state_at(handle);
-        if (st == nullptr || st->is_half) {
-            return;
-        }
-        OneShot shot;
-        if (!shot.begin_compute(*ctx_)) {
-            return;
-        }
-        mul_.bind(shot.cb(), st->mul_set);
-        vkCmdDispatch(shot.cb(), mul_groups_, 1, 1);
-        shot.submit_and_wait(*ctx_);
-    }
-
     NormPeak norm_and_peak() {
         NormPeak out;
         OneShot shot;
@@ -2039,7 +2027,7 @@ public:
         State* st = state_at(handle);
         if (!synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
                                     n_radial, &res.peak, &res.norm2)) {
-            release_state(handle);  // recycles the slot and its four sets
+            release_state(handle);  // recycles the slot and its three sets
             return res;
         }
         res.handle = handle;
@@ -2693,7 +2681,7 @@ private:
     }
 
     // A resident state: its buffer (fp32, or fp16-packed at half footprint)
-    // + the four per-op descriptor sets (fp32 states only; fp16 consumers
+    // + the three per-op descriptor sets (fp32 states only; fp16 consumers
     // decode to scratch and go through the shared any-target sets).
     struct State {
         bool is_half = false;
@@ -2701,7 +2689,6 @@ private:
         VkDescriptorSet inner_set = VK_NULL_HANDLE;
         VkDescriptorSet axpy_set = VK_NULL_HANDLE;
         VkDescriptorSet copy_set = VK_NULL_HANDLE;
-        VkDescriptorSet mul_set = VK_NULL_HANDLE;
     };
 
     State* state_at(int handle) {
@@ -2877,7 +2864,7 @@ private:
                static_cast<double>(ctx_->timestamp_period) * 1e-6;
     }
 
-    // (Re)point a full state's four descriptor sets: only the st.buf bindings
+    // (Re)point a full state's three descriptor sets: only the st.buf bindings
     // vary; psi_/ubos/partials_ are stable but re-written idempotently so the
     // same call serves a fresh alloc and a free-list reuse.
     void wire_full_state_sets(State& st) {
@@ -2896,15 +2883,11 @@ private:
         arena_.write_buffer(*ctx_, st.copy_set, 1, uniform, muln_ubo_.buf,
                             sizeof(MulParams));
         arena_.write_buffer(*ctx_, st.copy_set, 3, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 0, storage, psi_.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 1, storage, st.buf.buf);
-        arena_.write_buffer(*ctx_, st.mul_set, 2, uniform, muln_ubo_.buf,
-                            sizeof(MulParams));
     }
 
     // Allocate a full state's buffer + descriptor sets without uploading
     // content. A released full-state slot (free_full_states_) is REUSED --
-    // its four sets are re-pointed at the new buffer -- so a synth/release
+    // its three sets are re-pointed at the new buffer -- so a synth/release
     // churn (Key-R reseed, partial measurement) does not leak sets or slots.
     int create_state_buffer_uninit() {
         if (!free_full_states_.empty()) {
@@ -2926,9 +2909,8 @@ private:
         st.inner_set = arena_.allocate(*ctx_, inner_.set_layout());
         st.axpy_set = arena_.allocate(*ctx_, axpy_.set_layout());
         st.copy_set = arena_.allocate(*ctx_, copy_.set_layout());
-        st.mul_set = arena_.allocate(*ctx_, mul_.set_layout());
         if (st.inner_set == VK_NULL_HANDLE || st.axpy_set == VK_NULL_HANDLE ||
-            st.copy_set == VK_NULL_HANDLE || st.mul_set == VK_NULL_HANDLE) {
+            st.copy_set == VK_NULL_HANDLE) {
             ctx_->destroy_buffer(&st.buf);
             return -1;
         }

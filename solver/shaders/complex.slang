@@ -38,7 +38,8 @@ public float arg(Complex a) { return atan2(a.v.y, a.v.x); }
 
 public Complex mix(Complex a, Complex b, float t) { return Complex(lerp(a.v, b.v, t)); }
 
-// mul_conj: term order fixed for bit-reproducible FMA contraction.
+// mul_conj: term order fixed. The bake passes no fp-mode flag, so a driver
+// may still contract to FMA: reproducible only to rounding, not bitwise.
 public Complex mul_conj(Complex a, Complex b) {
     return Complex(a.v.x * b.v.x + a.v.y * b.v.y,
                    a.v.x * b.v.y - a.v.y * b.v.x);

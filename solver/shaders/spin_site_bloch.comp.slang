@@ -1,7 +1,8 @@
 // Per-site reduced Bloch vector <sigma_i> over the exact 2^N state: one
 // workgroup per site (SV_GroupID.x), grid-stride over half_n bit-clear/bit-set
-// amplitude pairs, groupshared tree sum. Mirrors ses::exact_site_bloch bit for
-// bit (mul_conj term order). out[3*site+0..2] = (<sx>, <sy>, <sz>).
+// amplitude pairs, groupshared tree sum. fp32 mirror of ses::exact_site_bloch
+// (same mul_conj term order), compared within tolerance (check_spin_bloch:
+// 5e-4). out[3*site+0..2] = (<sx>, <sy>, <sz>).
 // CONTRACT: vkcheck check_spin_bloch.
 import complex;
 

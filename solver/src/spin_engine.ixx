@@ -504,7 +504,8 @@ public:
                                 VK_WHOLE_SIZE);
     }
 
-    // Full 2^16 state -> host staging; measurement path only (not per frame).
+    // Full 2^16 state -> host staging; vkcheck readback only (measure_exact
+    // samples and collapses on the device, no download).
     void download_state() {
         copy_sync(*ctx_, state_.buf, staging_.buf, dim_ * 2 * sizeof(float),
                   CopyDir::to_host);

@@ -215,7 +215,8 @@ public:
         upload_complex(link_x_, lx);
     }
 
-    // Real absorbing mask (interior 1, taper to 0 at walls) applied after each
+    // Real per-step absorbing mask (interior 1; a cos^2 taper or a quadratic
+    // CAP exp(-w dt), which is not 0 at the walls) applied after each
     // real-time step. Empty / not-called => no absorber. Not used during relax.
     void set_absorber(const std::vector<double>& mask) {
         if (n_cells_ == 0 || static_cast<int>(mask.size()) != n_cells_) {
@@ -291,6 +292,8 @@ public:
 
 private:
     static constexpr std::uint32_t kGroups = 256;
+    static_assert(kGroups <= 256,
+                  "norm_finalize.comp folds the partials in ONE 256-lane group");
 
     struct NParams {
         std::uint32_t n, pad0, pad1, pad2;
