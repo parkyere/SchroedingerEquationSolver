@@ -681,9 +681,9 @@ public:
 
     // Submit a step batch WITHOUT waiting: it runs on the compute queue
     // while the graphics queue renders the previous display volume
-    // (ping-pong: the batch writes the OTHER image). Any engine OneShot
-    // submitted meanwhile serializes AFTER the batch on the same queue, so
-    // readouts stay correct; wait_async() reclaims the cb and flips the
+    // (ping-pong: the batch writes the OTHER image). Same-queue submission
+    // order is NO dependency: every psi/V entry point calls wait_async() first
+    // or opens with a compute barrier (see norm_and_peak); wait_async() reclaims the cb and flips the
     // display at a host-observed completion point. Falls back to the
     // blocking step() if the dedicated cb cannot be created.
     void step_async(int nsteps, StepFlags flags = {}) {

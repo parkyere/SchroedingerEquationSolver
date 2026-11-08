@@ -72,8 +72,9 @@ struct DeviceContext {
     std::uint32_t queue_family = 0;
     VkQueue queue = VK_NULL_HANDLE;
     // Async-compute family when present (engine overlaps graphics), else aliases
-    // the main queue. ALL engine submits go here so engine buffers never cross
-    // families -- EXCLUSIVE sharing stays legal.
+    // the main queue. ALL engine submits go here, so engine-internal buffers
+    // stay EXCLUSIVE; what the renderer reads on the graphics queue (MC vbuf/
+    // indirect, display volumes) is created with share_across_queues (CONCURRENT).
     std::uint32_t compute_family = 0;
     VkQueue compute_queue = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;
@@ -232,9 +233,9 @@ struct DeviceContext {
         vkGetPhysicalDeviceProperties(phys_dev, &props);
         std::memcpy(device_name, props.deviceName, sizeof(device_name));
 
-        // First compute family, preferring one that also has graphics (image
-        // barriers use fragment stages) and can present. Desktop's combined
-        // family does all.
+        // The first compute family that also has graphics (image barriers use
+        // fragment stages) and can present; without one, the loop ends on the
+        // LAST compute family that can present. Desktop's combined family does all.
         std::uint32_t qf_count = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(phys_dev, &qf_count, nullptr);
         std::vector<VkQueueFamilyProperties> qf(qf_count);

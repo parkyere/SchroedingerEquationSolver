@@ -242,7 +242,8 @@ public:
             return false;
         }
         // Converged early-out: once accumulation saturates (accum.comp caps the
-        // mean at kAccumCap) a static scene's output cannot change -- skip the
+        // window at kAccumCap) later frames only move a static scene by the
+        // rotating jitter/dither residual -- visually converged, so skip the
         // submission; the blit keeps sampling the finished present image.
         if (in.accumulate) {
             if (accum_frames_ >= kAccumCap && in.volume_staging == nullptr &&
@@ -351,8 +352,9 @@ public:
         const float w = in.flash;
         // Dynamic rendering: transition attachments explicitly (no render pass).
         // loadOp=CLEAR discards the old color, so UNDEFINED old-layout is fine,
-        // but last frame's readers (present sample + post-chain imageLoads) must
-        // finish first. Depth uses its own barrier (the helper is color-only).
+        // but last frame's post-chain readers (accum/compose imageLoads, bloom-
+        // down sample) must finish first. Depth uses its own barrier (the helper
+        // is color-only).
         ses_vk::image_layout_barrier(
             cb, color_.img, VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -557,6 +559,7 @@ public:
             std::int32_t accumulate;
             std::int32_t p0, p1, p2;
         };
+        static_assert(sizeof(AccumParams) == 16, "accum_ubo_ is 16 bytes");
         const AccumParams ap{(use_accum && accum_frames_ > 1) ? 1 : 0, 0, 0, 0};
         force_accum_reset_ = false;
         std::memcpy(accum_ubo_.mapped, &ap, sizeof(ap));
@@ -568,6 +571,7 @@ public:
             float frame;
             float p0;
         };
+        static_assert(sizeof(ComposeParams) == 16, "compose_ubo_ is 16 bytes");
         const ComposeParams cp{0.35f, 1.0f, in.frame_index, 0.0f};
         std::memcpy(compose_ubo_.mapped, &cp, sizeof(cp));
         vmaFlushAllocation(ctx_->allocator, compose_ubo_.alloc, 0,
@@ -709,7 +713,6 @@ private:
         float jitter_frame = 0.0f;  // temporal raymarch jitter rotation
         float clip[4] = {0, 2, 1, 0};   // enable, axis, sign, offset
         float slice[4] = {0, 2, 0, 0};  // enable, axis, offset, map mode
-        // Appended last so earlier std140 offsets stay layout-compatible.
         float barrier[4] = {0, 0, 0, 0};  // enable, x_lo, x_hi, fog density
         // Marker balls (volume.frag): xyz+radius / rgb per ball, count in
         // marker_meta[0]; float4-aligned for std140.
@@ -922,7 +925,7 @@ private:
 
     bool create_target() {
         // COLOR_ATTACHMENT (scene draw) + STORAGE (post chain) + SAMPLED
-        // (bloom-down and the shell blit sample it).
+        // (the bloom-down samples it; the shell samples present_).
         if (!create_attachment(VK_FORMAT_R16G16B16A16_SFLOAT,
                                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                    VK_IMAGE_USAGE_STORAGE_BIT |
@@ -1090,6 +1093,7 @@ private:
             float threshold;
             float p0, p1;
         };
+        static_assert(sizeof(DownParams) == 16, "down_ubo_ is 16 bytes");
         const DownParams d0{1, 0.6f, 0, 0};
         const DownParams dn{0, 0.0f, 0, 0};
         std::memcpy(down_ubo_[0].mapped, &d0, sizeof(d0));
@@ -1200,8 +1204,8 @@ private:
                marker_pipe_ != VK_NULL_HANDLE;
     }
 
-    enum BlendMode { kBlendOff, kBlendPremultiplied, kBlendAdditive };
-    enum class DepthWrite { Follow, Off, On };  // Follow: write iff depth test
+    enum BlendMode { kBlendOff, kBlendPremultiplied };
+    enum class DepthWrite { Follow, Off };  // Follow: write iff depth test
 
     VkPipeline build_pipeline(const Blob& vs_blob, const Blob& fs_blob,
                               VkPipelineLayout layout,
@@ -1268,9 +1272,6 @@ private:
             case DepthWrite::Off:
                 ds.depthWriteEnable = VK_FALSE;
                 break;
-            case DepthWrite::On:
-                ds.depthWriteEnable = VK_TRUE;
-                break;
         }
         ds.depthCompareOp = VK_COMPARE_OP_LESS;
 
@@ -1285,14 +1286,6 @@ private:
             ba.colorBlendOp = VK_BLEND_OP_ADD;
             ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            ba.alphaBlendOp = VK_BLEND_OP_ADD;
-        } else if (blend == kBlendAdditive) {
-            ba.blendEnable = VK_TRUE;
-            ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-            ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-            ba.colorBlendOp = VK_BLEND_OP_ADD;
-            ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             ba.alphaBlendOp = VK_BLEND_OP_ADD;
         }
         VkPipelineColorBlendStateCreateInfo cbst{};
@@ -1779,7 +1772,8 @@ private:
 
     // Marker balls for the Surface view: one combined triangle soup of
     // UV-spheres (no pipeline change, just vertices). Rebuilt only when the
-    // marker list changes; the device-idle wait is fine at that rarity.
+    // marker list changes: every frame while a rotor scene moves the nuclei,
+    // device-idle wait included (backlog C: instanced unit spheres).
     bool ensure_marker_vbuf(const FrameInput& in) {
         const int n = std::min(in.marker_count, kMaxMarkers);
         bool same = n == marker_cached_count_;
