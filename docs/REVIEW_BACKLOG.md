@@ -33,8 +33,9 @@ for any testable logic.
   `SES_VK_VALIDATION=1` -- validator silent on the normalize submit ⇒ driver-bug
   confirmed. 1.4 lives isolated in commit `649826b` for easy A/B.
 
-- **[correctness] Missing compute→compute barrier between atlas synth and norm.**
-  `synthesize_state` (`vk_engine.ixx`) records the synth dispatch, then in a
+- **[correctness] Missing compute→compute barrier between synth and norm (every synth entry point).**
+  `synthesize_into_buffer` (`vk_engine.ixx`; shared by `synthesize_into_psi`,
+  the collapse onto psi, and `synthesize_state`/`_half` for the atlas) records the synth dispatch, then in a
   SEPARATE fenced submit `normalize_buffer` reads the same buffer with no
   device-side RAW `barrier_compute_to_compute`; likewise the norm-read → scale-write
   WAR. Visibility rides on the host fence, whereas the codebase's OWN idiom
@@ -48,8 +49,8 @@ for any testable logic.
   on the RTX 4060. Needs a Linux/5090 `sesolver_vkcheck` re-run to close.
 
 - **[low, deferred] Extract a `MeasurementEngine`** from `HydrogenDirector`
-  (`run_partial_measure` / `rebuild_psi_from` / `project_manifold_out`, ~180
-  lines). Deferred: the shared `cpu_is_truth_`/display-bridge/engine coupling
+  (`run_partial_measure` / `rebuild_psi_from` / `sin_partner`, ~140
+  lines; `project_manifold_out` already lives in `BaseDirector`). Deferred: the shared `cpu_is_truth_`/display-bridge/engine coupling
   makes the extraction low-cohesion -- it would need a fat back-reference into
   `HydrogenDirector`, so the churn on the (refactored, manually-verified) shell is
   not worth the negligible cohesion gain. Revisit only if that coupling is broken
@@ -192,8 +193,8 @@ for any testable logic.
 
 ### A. 이식성·정합성 버그 (NVIDIA 밖에서 드러남)
 - **[solver] 1D 디스패치 수가 Vulkan 보장 한계(65 535)를 넘는다.** `mul_groups_ =
-  group_count(cells_)`는 256³에서 65 536, `fft_lines_[0]`도 65 536. MC 경로는
-  `mc_nblocks_ > 65535`를 거르지만 핫패스는 안 거른다(NVIDIA 2³¹−1이 숨김).
+  group_count(cells_)`는 256³에서 65 536, `fft_lines_[0..2]` 모두 65 536. MC 경로의 블록 가드(`mc_nblocks_ > 65535`)는
+  classify/emit만 보호하고 `mc_density`·`bridge_store`도 `mul_groups_`로 디스패치(NVIDIA 2³¹−1이 숨김).
   `maxComputeWorkGroupCount`를 조회하고 2D 디스패치 또는 grid-stride로.
 - **[solver] 제출 간 가시성 규칙이 두 가지.** `Recorder{cb, true}`(배치 첫
   디스패치 무배리어)는 "이전 제출은 펜스 완료"를 전제하나 `norm_and_peak`·
@@ -213,18 +214,19 @@ for any testable logic.
   미확인; 스왑체인 재생성 시 `oldSwapchain` 미전달.
 - **[solver] `project_deposit` groupshared 46 KB·`mc_scan` 1024 레인·subgroup
   arithmetic 요구**를 부팅 시 확인하지 않음(보장 최소 16 KB/128 레인).
-  `check_device_features`에 바닥값 단언 추가.
+  `DeviceContext::create_device`의 1.3/sync2 부팅 게이트 옆에서 `maxComputeSharedMemorySize`·`maxComputeWorkGroupInvocations`·`subgroupSupportedOperations`를 읽어 거부(또는 폴백)하고, vkcheck `check_device_features`에도 같은 바닥값 단언.
 
 ### B. vkcheck 오라클 강도
-- 스핀 검사 허용 오차가 **절대값**(2e-3, 2e-4, ~6e-5)인데 정규화 2¹⁶ 상태의
-  진폭은 ≤5.4e-3 → 피크의 37 %/4 %/1 % 오차가 PASS. `ErrStats::tol(0, rel)`로.
+- 스핀 검사 허용 오차가 **절대값**(2e-3, 2e-4, ~6e-5): 피크 성분 대비 chebyshev 2e-3/4.1e-2 ≈ 5 %(느슨), engine-step 2e-4/8.6e-2 ≈ 0.2 %(적정; 둘 다
+  Néel 곱상태 출발), gates 6.1e-5/4.6e-3 ≈ 1.3 % → chebyshev·gates부터 `ErrStats::tol(0, rel)`로.
 - 마칭큐브 knife-edge 가드 `1e-9·peak`는 fp32 1 ulp(≈1.5e-8·peak)보다 작아
   정확-개수 단언이 잠재적 flaky → ≥1e-7·peak.
-- fp16 왕복 허용 오차 5e-3(실제 반 ulp 2.4e-4); 파일에 이미 있는 `f16_quantize`
-  비트 정확 오라클을 쓰면 됨. `flow_velocity` 커널은 오라클이 전혀 없음.
+- fp16 왕복 허용 오차 5e-3(|x|<0.5의 법정 오차는 RTE 1.2e-4·RTZ 2.4e-4); `check_engine_bridge`처럼
+  `f16_quantize`(RTE) 또는 RTZ 양자화와의 비트 일치를 요구할 것(RTE 단독은 RTZ 구현에서 거짓 FAIL). `flow_velocity` 커널은 오라클이 전혀 없음.
 - `spin_fused_gate`/`spin_permute`는 베이크·검증되지만 소비자가 없고 주석은
-  존재하지 않는 "Stage 2/3"을 설명. `check_lattice2d_size_guard`는 거부를 단언할
-  수 없음(`set_lattice`가 void) → `[[nodiscard]] bool`.
+  존재하지 않는 "Stage 2/3"을 설명. `check_lattice2d_size_guard`는 거부를 동작으로 이미
+  단언(가드 제거 시 비트 비교 FAIL); 남은 문제는 `set_lattice`가 void라 디렉터가 거부를 모름 →
+  `[[nodiscard]] bool`(2026-11-07 A와 같은 계약).
 - 13개 raw-kernel 검사가 같은 ~40줄 픽스처를 반복(~600줄) → `KernelFixture`.
 
 ### C. 성능 (측정 근거 있음)
@@ -235,7 +237,7 @@ for any testable logic.
 - **[viz] 프레임당 직렬 펜스 대기 3회**(render submit_and_wait → presenter 펜스
   → 엔진 배치). scene+post+blit을 한 제출로, 펜스 대기는 다음 프레임 첫머리로.
 - **[scenario] 스텝마다 전체 상태 왕복**: doubleslit은 화면 열 512개를 읽으려고
-  매 스텝 4 MB 다운로드(x16에서 ~1 GB/프레임); qpc는 스텝마다 readback→CPU CAP→
+  매 스텝 2 MiB fp32 다운로드 + 4 MiB double 언팩, 스텝마다 펜스 제출(x16의 256스텝/프레임에서 ~512 MiB/프레임); qpc는 스텝마다 readback→CPU CAP→
   업로드. GPU 쪽 열 판독/마스크 reduction으로.
 - **[core] 스레드 핫패스 안의 직렬 16.7M 패스**: `norm_sq/normalize/inner_product`
   (relax_deflated 스텝마다 디플레이션 벡터당 1회, `multi_quantum_jump` 채널당 1회),
@@ -244,7 +246,7 @@ for any testable logic.
   `build_half_potential_table/build_kinetic_table`. 전부 슬랩 순서 `parallel_for/
   parallel_sum`으로 비트 동일 가능.
 - **[core] `rotation.ixx axis_shear`**: 라인마다 twiddle 재할당 + 셀마다 sincos
-  (256³·3 shear·2회/스텝 ≈ 39만 회 twiddle 재구축). `magnetic.ixx`의 인접 반회전도
+  (256³·3 shear·2회/스텝 ≈ 79만 회 twiddle 재구축(라인당 fft+ifft 2회)). `magnetic.ixx`의 인접 반회전도
   병합 안 함(주석은 이번에 정정). `kick()`은 호출마다 268 MB 테이블 생성.
 - **[solver] relax 테이블을 complex로 저장**(`damp_mul`로 R32 가능 → VRAM·대역폭
   절반); `relax_deflated_step`은 스텝당 (2L+3)회 펜스 제출; Chebyshev 루프는
@@ -287,14 +289,14 @@ for any testable logic.
   dirty 플래그 무력화); CLI 파싱 2벌(Boost + raw `starts_with`); 창 제목 수소 고정.
 - **[build]** `ses_slang.cmake`의 slangc 다운로드에 `URL_HASH` 없음; `.clang-format`
   (ColumnLimit 100, BinPack false)이 실제 코드(80열 bin-packed) 174/190 파일과
-  불일치 — 설정을 코드에 맞추거나 삭제; 기본 `CMAKE_BUILD_TYPE=Debug`는 README의
-  "Debug 피하라"와 충돌; clang-scan-deps가 여전히 `-fcx-limited-range` 경고 출력.
+  불일치 — 설정을 코드에 맞추거나 삭제;
+  clang-scan-deps가 여전히 `-fcx-limited-range` 경고 출력.
 
 ### E. 작은 정확성 가드
 - `absorbing_mask`: 주기 격자에서 `d_hi = xmax − x`라 셀 0과 셀 n−1이 한 셀
   비대칭. `quadratic_cap_mask`: k=0 평면만 채움(전제조건이 주석뿐). `vec normalized()`
   /`look_at` 퇴화 입력에서 NaN. `gen_h2plus_atlas` n==1 clamp UB. `sphere_mesh`
-  rings<2 0으로 나눔. `photon_flight_frames` 0 → `progress` NaN.
+  rings<2 0으로 나눔. `photon_flight_frames`가 극소 양수 dE에서 `lround`→`int`로 넘침(spawn은 < 1만 1로 clamp하므로 NaN은 불가, 거대값은 그대로).
 - 벤치/테스트의 `soft_coulomb`, `bench_main`의 "per-frame hot path" 주석(CPU 경로).
 
 ### F. 테스트 스위트 (툴링 검수분, 미해결)
@@ -310,7 +312,7 @@ for any testable logic.
   `overlap_sq` 2~4벌, `expect_watertight` 2벌, 3D `energy_variance` 2벌(코어에는 1D만),
   손으로 만든 2D CAP 3벌·2D 패킷 필러 4벌·corral 링 2벌, `axpy` 루프 14곳 →
   `test_util.h`(매크로 게이트 대신 분리 헤더)로.
-- **stdout 잡음**: 10개 파일 22곳의 `printf`가 녹색 실행에서 33줄 출력 → `SCOPED_TRACE`/
+- **stdout 잡음**: 9개 파일 21곳의 `printf`가 녹색 실행에서 33줄 출력 → `SCOPED_TRACE`/
   `RecordProperty`.
 - **다중 관심사 테스트**(`potential_test` 412-458, `lattice2d_test` 208-262·376-446,
   `molecule_test` 32-83 …)와 근거 없는 허용 오차(`lattice2d_test` 0.4/0.15/0.2,
