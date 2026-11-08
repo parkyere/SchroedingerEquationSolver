@@ -124,7 +124,8 @@ TEST(DoubleWell1D, SplittingDrivesTheFullTunnelingOscillation) {
 TEST(PoschlTeller1D, IsReflectionlessWhereTheSquareWellReflects) {
     // R = negative-k probability (momentum space), so the slow transmitted tail
     // can't pollute the verdict; the two wells have EQUAL depth and area. The
-    // incident packet's own k<0 floor ~1e-11, far below the 5e-3 bound.
+    // incident packet's own k<0 floor is Phi(-5) ~ 3e-7 (k0 = 5 sigma_k), far
+    // below the 5e-3 bound.
     const ses::Grid1D g{-80.0, 80.0, 2048};
     // MAGIC depth: lambda (lambda+1) / (2 a^2) = 6/8 at lambda = 2, a = 2.
     // Non-integer lambda reflects (~1% measured at v0 = 0.375) -- the

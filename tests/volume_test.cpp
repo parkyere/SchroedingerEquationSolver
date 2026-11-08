@@ -1,4 +1,4 @@
-// RED: the ray-march GLSL mirrors this math; the shader can't be unit-tested,
+// RED: the ray-march shader (Slang) mirrors this math; it can't be unit-tested,
 // so every formula it uses is verified here first.
 //   - ray_box returns the raw [t_near, t_far]; t_near < 0 inside, caller clamps.
 //   - phase_lut bakes the TESTED colormap so the GPU samples it, not a re-derived formula.

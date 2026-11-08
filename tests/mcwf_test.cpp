@@ -125,7 +125,8 @@ TEST(ChainDecayJumps, TwoLevelFirstArrivalMatchesTheExponential) {
 }
 
 TEST(ChainDecayJumps, CascadeHopsFireWithinOneInterval) {
-    // 2->1 then 1->0, both gamma=1, dt=10; scripted arrivals t=1 then t=2.
+    // 2->1 then 1->0, both gamma=1, dt=10; scripted waits 1 then 2 (each from
+    // the previous jump: arrivals t = 1 and t = 3).
     const std::vector<ses::RateChannel> ch{{2, 1, 1.0}, {1, 0, 1.0}};
     std::vector<double> us{std::exp(-1.0), 0.0, std::exp(-2.0), 0.0};
     std::size_t k = 0;

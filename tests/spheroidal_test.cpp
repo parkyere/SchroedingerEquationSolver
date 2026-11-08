@@ -182,7 +182,7 @@ TEST(Spheroidal, PiUOrbitalHasAnAxisNode) {
 }
 
 TEST(Spheroidal, BakedAtlasMatchesTheLiveSolve) {
-    // R=1.875 = exact baked grid point (2h snap at 256^3/+-30).
+    // R=1.875 = exact baked grid point (2h snap at 256^3/+-40).
     const double R = 1.875;
     const std::vector<ses::H2plusOrbital> baked = ses::h2plus_atlas_baked(R);
     ASSERT_FALSE(baked.empty());
@@ -359,7 +359,8 @@ std::vector<Field3D> flushed_reference_chain(const AtlasFlushRig& rig, int top) 
 // states decays only as e^{-dE tau} (measured 1 - overlap: 1e-5, 1.3e-4,
 // 1.4e-3 for k = 2..4). What the flush promises for every member: the
 // continuum is gone (Var < 1e-2), E within 3 mHa of the converged grid
-// state, overlap > 0.99 (k <= 1: 1 mHa, 0.999).
+// state, overlap > 0.99 (k <= 1: 1 mHa and the 0.9999 contract; measured
+// 1 - overlap < 5e-6).
 TEST(AtlasFlush, EveryExposedMemberLandsOnItsGridState) {
     const AtlasFlushRig rig;
     const int top = 5;  // 1s sg, 1s su*, 2p pu, 2s sg, 2p su
@@ -385,7 +386,7 @@ TEST(AtlasFlush, EveryExposedMemberLandsOnItsGridState) {
                     e_ref, ov, var);
         EXPECT_LT(var, 1e-2) << "member " << k;
         EXPECT_NEAR(e, e_ref, k <= 1 ? 1e-3 : 3e-3) << "member " << k;
-        EXPECT_GT(ov, k <= 1 ? 0.999 : 0.99) << "member " << k;
+        EXPECT_GT(ov, k <= 1 ? 0.9999 : 0.99) << "member " << k;
     }
 }
 
@@ -404,7 +405,8 @@ TEST(AtlasFlush, TiltedAxisSigmaGLandsOnItsOwnGridGround) {
     Field3D psi = sg;
     itp.relax(psi, ses::kH2plusAtlasFlushSteps);
     EXPECT_NEAR(ses::mean_energy(psi, v), ses::mean_energy(ground, v), 1e-3);
-    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.999);
+    // the flush contract (measured 1 - overlap ~1e-8)
+    EXPECT_GT(std::norm(ses::inner_product(ground, psi)), 0.9999);
 }
 
 }  // namespace

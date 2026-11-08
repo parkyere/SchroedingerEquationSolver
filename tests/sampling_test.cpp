@@ -106,7 +106,8 @@ TEST(PhaseColors, UniformPhaseGivesExactlyUniformColor) {
 }
 
 TEST(PhaseColors, PlaneWavePhaseTracksKx) {
-    // e^{i k x}: interpolated phase deviates from k*x by O((kh)^2) (~1e-3 rad).
+    // e^{i k x}: the linearly interpolated phase deviates from k*x by
+    // ~0.016 (kh)^3 at most (4.3e-4 rad at kh = 0.3).
     const Grid1D axis{-8.0, 8.0, 16};  // h = 1
     const Grid3D g{axis, axis, axis};
     Field3D psi{g};
