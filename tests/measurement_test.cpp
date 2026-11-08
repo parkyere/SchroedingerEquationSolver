@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <vector>
 import ses.simulation;
 import ses.propagator;

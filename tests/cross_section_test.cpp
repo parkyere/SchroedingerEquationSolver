@@ -2,6 +2,7 @@
 // that volume.frag / slice.vert / slice.frag mirror textually; no per-fragment GPU
 // oracle exists, so transcription is verified by the dump-frame composite.
 
+#include <algorithm>
 #include <complex>
 
 #include <gtest/gtest.h>

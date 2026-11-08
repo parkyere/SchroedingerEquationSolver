@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -91,6 +92,7 @@ TEST(Billiard2D, CircleKeepsTheCausticHoleTheStadiumFillsIt) {
     std::printf("billiard caustic center/interior: circle %.3f stadium %.3f\n",
                 circle, stadium);
     // circle: |L| conserved -> center stays dark; stadium: L broken -> center fills
+    // (qualitative gates; measured circle 0.088, stadium 0.801)
     EXPECT_GT(circle, 0.0);
     EXPECT_LT(circle, 0.30);
     EXPECT_GT(stadium, 2.0 * circle);

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <vector>
 import ses.magnetic;
 import ses.propagator;

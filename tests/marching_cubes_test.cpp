@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <numbers>

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <vector>
 import ses.simulation;
 import ses.propagator;

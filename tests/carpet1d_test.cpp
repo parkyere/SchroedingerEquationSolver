@@ -36,7 +36,9 @@ TEST(Carpet1d, RingRevivesExactlyAtLSquaredOverPi) {
     const int n_rest =
         static_cast<int>(t_rev / dt + 0.5) - n_mid;
     prop.step(psi, n_rest);
-    EXPECT_GT(overlap2(psi, psi0), 0.99);
+    // V = 0: every kinetic phase at t_rev is 2 pi j^2, so only the step
+    // rounding (0.004 au) is left -- 1 - F ~ 1e-6.
+    EXPECT_GT(overlap2(psi, psi0), 0.9999);
 }
 
 TEST(Carpet1d, HalfRevivalIsTheHalfRingClone) {
@@ -55,7 +57,7 @@ TEST(Carpet1d, HalfRevivalIsTheHalfRingClone) {
     }
     ses::Field1D psi = psi0;
     prop.step(psi, static_cast<int>(0.5 * t_rev / dt + 0.5));
-    EXPECT_GT(overlap2(psi, clone), 0.99);
+    EXPECT_GT(overlap2(psi, clone), 0.9999);  // 1 - F ~ 3e-7 (as above)
     EXPECT_LT(overlap2(psi, psi0), 0.05);
 }
 

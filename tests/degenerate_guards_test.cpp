@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <stdexcept>
 #include <vector>
 import ses.observables;

@@ -6,8 +6,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <numbers>
 #include <vector>
 

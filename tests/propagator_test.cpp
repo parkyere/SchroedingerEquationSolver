@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <vector>
 import ses.propagator;
 import ses.observables;

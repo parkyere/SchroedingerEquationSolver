@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -32,7 +33,8 @@ TEST(Anderson1D, LandscapeIsDeterministicBoundedAndSubEnergy) {
         vsum += std::abs(v);
     }
     EXPECT_GT(vsum, 0.0);
-    // speckle overlap peaks ~1.4x the w=1.0 grain range
+    // Construction bound: |V| <= (1 + 2e^-2 + 2e^-8) w = 1.271 w for ANY seed
+    // (bumps 2 sigma apart, cut at 5 sigma); 1.4 guards the construction.
     EXPECT_LT(vmax, 1.4);
 }
 

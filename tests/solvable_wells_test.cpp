@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <numbers>
 #include <vector>
 
