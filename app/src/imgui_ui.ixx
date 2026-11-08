@@ -600,7 +600,9 @@ void draw_h2plus_panel(ShellT& shell, UiState& ui, ses_shell::MoleculeApi& ml,
             std::snprintf(lbl, sizeof(lbl), "%2d  %-18s  E = %.2f eV", k + 1,
                           ml.orbital_label(k), ml.energy(k) * kHaToEv);
             if (ImGui::Selectable(lbl)) {
-                shell.press(static_cast<char>('2' + k));
+                // Direct, not shell.press('2' + k): the digit hotkeys stop at
+                // '9' (states 0..7) and the list holds up to 24 orbitals.
+                ml.prepare(k);
             }
         }
         ImGui::EndListBox();
