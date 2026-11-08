@@ -96,10 +96,11 @@ of SDL/ImGui; the shell stays thin and replaceable.
 - **Everything is C++20 named modules** (`ses.*`); the only project headers
   are `solver/src/ses_vma.h` (VMA configuration) and `tests/test_util.h`.
   Module interfaces start with a global module fragment for textual includes
-  — keep std `#include`s before `import`, and `volk.h` textually first
-  wherever Vulkan types appear (VK_* macros never cross module boundaries).
-  `test_util.h` carries no std includes and goes after the imports (its
-  helpers name `ses::` types).
+  — keep every textual `#include` (std, third-party, `ses_vma.h`) before
+  `import`, and `volk.h` textually first wherever Vulkan types appear (VK_*
+  macros never cross module boundaries). `test_util.h`, which includes
+  nothing, is the one header that goes after the imports (its helpers name
+  `ses::` types).
 - **CPU double is the truth; the GPU mirrors it.** Every shader transcribes
   unit-tested CPU math, and `sesolver_vkcheck` drives each GPU kernel against
   the CPU oracle headlessly.
