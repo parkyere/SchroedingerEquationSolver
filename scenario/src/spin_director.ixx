@@ -78,7 +78,7 @@ public:
                              p == Pulse::Half ? 0.5 * kPi : kPi);
         }
         note_ = p == Pulse::Half ? "pi/2 pulse" : "pi pulse";
-        title_dirty_ = true;
+        state_changed();
     }
     void spin_echo() override {
         ens_.assign(kSpEcho, ses::Spinor{});
@@ -92,7 +92,7 @@ public:
         echo_left_ = static_cast<int>(kSpEchoTau / kSpDt + 0.5);
         echo_peak_ = 0.0;
         note_ = "echo: dephasing...";
-        title_dirty_ = true;
+        state_changed();
     }
     double echo_tau() const override { return kSpEchoTau; }
     double echo_peak() const override { return echo_peak_; }
@@ -144,7 +144,7 @@ public:
         note_ = strf("measured: {} of {} aligned with B", plus,
                      static_cast<int>(ens_.size()));
         echo_stage_ = 0;
-        title_dirty_ = true;
+        state_changed();
     }
     void toggle_view_mode() override {}
     bool handle_key(char key) override {
@@ -299,6 +299,14 @@ private:
         sim_time_ = 0.0;
         pending_steps_ = 0;
         note_.clear();
+        state_changed();
+    }
+
+    // An instant operation (pulse, echo start, Measure, Reset) changed the
+    // ensemble: refresh <s> now -- step_batch, the only other refresh, does
+    // not run while paused.
+    void state_changed() {
+        measure_mean();
         display_changed_ = true;
         title_dirty_ = true;
     }
