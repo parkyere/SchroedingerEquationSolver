@@ -15,6 +15,12 @@ find_program(SES_SLANGC slangc
     HINTS "${ses_slang_SOURCE_DIR}/bin"
     NO_DEFAULT_PATH REQUIRED)
 message(STATUS "Slang AOT compiler: ${SES_SLANGC}")
+# Version stamp, rewritten (new mtime) only when SES_SLANG_VERSION changes, so
+# a compiler bump rebakes every shader. The slangc binary is no reliable
+# DEPENDS: DOWNLOAD_EXTRACT_TIMESTAMP keeps the archive's mtime, which can
+# predate the existing headers.
+set(SES_SLANG_STAMP "${CMAKE_BINARY_DIR}/ses_slang_version.stamp")
+file(CONFIGURE OUTPUT "${SES_SLANG_STAMP}" CONTENT "${SES_SLANG_VERSION}\n")
 
 # Shared import-only modules (-I); as bake DEPENDS so an edit rebakes consumers.
 set(SES_SLANG_MODULE_DIR "${CMAKE_SOURCE_DIR}/solver/shaders")
@@ -38,7 +44,7 @@ function(ses_bake_shader hdrs_var srcdir spvdir _srcfile _stage _x)
         COMMAND "${CMAKE_COMMAND}" "-DIN=${_spv}" "-DOUT=${_hdr}"
                 "-DNAME=k_${_x}_spv"
                 -P "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
-        DEPENDS "${_slang}" ${SES_SLANG_MODULES}
+        DEPENDS "${_slang}" ${SES_SLANG_MODULES} "${SES_SLANG_STAMP}"
                 "${CMAKE_SOURCE_DIR}/tools/cmake/bin2h.cmake"
         COMMENT "slangc: ${_srcfile}.slang -> ${_x}_spv.h"
         VERBATIM)
