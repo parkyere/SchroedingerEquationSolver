@@ -41,8 +41,9 @@ inline std::vector<double> bouncer_potential(const ses::Grid1D& g,
     return v;
 }
 
-// dt sized by the wall's Trotter phase, not resolution: V*dt at the box
-// lip must stay << 1 rad or the ground heats (benzene dt rule).
+// dt sized by the wall's Trotter phase, not resolution: the half-step phase
+// V*dt/2 at the box lip (400 Ha at z = -1 -> 0.4 rad) must stay under ~1 rad
+// or the ground heats (benzene dt rule, kBzDt).
 constexpr double kBo1dZLo = -1.0;
 constexpr double kBo1dZHi = 79.0;
 constexpr int kBo1dPoints = 2048;

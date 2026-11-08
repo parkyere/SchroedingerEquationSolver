@@ -511,7 +511,8 @@ struct DisplayFlags {
 
 // A 1D-scene overlay primitive: packed (x, y, z) world-space triples; LINE_STRIP,
 // or with `fill` a TRIANGLE_STRIP sheet. `rgba` (premultiplied) REPLACES the
-// constant color. Both pointers stay valid until the next run_frame().
+// constant color. Both pointers stay valid until the next run_frame() or the
+// next mutating call (setters/handle_key may rebuild the curves).
 struct OverlayCurve {
     const float* xyz = nullptr;
     int count = 0;

@@ -15,7 +15,6 @@ export import ses.field;
 export import ses.grid;
 export import ses.lattice2d;
 import ses.heightfield;
-import ses.parallel;
 import ses.vk.lattice2d_engine;
 
 

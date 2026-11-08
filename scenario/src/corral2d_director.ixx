@@ -2,6 +2,7 @@ module;
 #include <numbers>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -67,8 +68,9 @@ public:
     // the mass-aware split-operator Engine (real time, damp absorber) + its
     // deflated ITP (relax). Not the base Peierls engine. The relax tables come
     // from the CPU ITP (mass baked); the disc-cut projection runs on the CPU
-    // between chunks (re-upload). vkcheck: check_engine_planar_mass + _relax +
-    // _deflation + _project.
+    // between chunks (re-upload). vkcheck: check_engine_planar_mass (512^2 x 1
+    // real time); relax/deflation only via the cubic 8^3, m = 1
+    // check_engine_relax/_deflation -- no planar relax oracle yet.
     void init_compute(ses_vk::DeviceContext& ctx, bool device_ok,
                       std::int64_t /*free_vram*/) override {
         compute_attempted_ = true;
@@ -150,7 +152,7 @@ public:
         mark_fired();
     }
 
-    // CONTRACT: tests/corral2d_test.cpp FermiWaveIsQuasiStationary.
+    // CONTRACT: tests/corral2d_director_test.cpp FermiWaveIsQuasiStationary.
     void fermi_wave() override {
         // Node count fence-limited: highest J0 zero the fence still quasi-confines.
         const double j0_n = 10.1734681350627;  // 3rd zero of J0

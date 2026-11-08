@@ -159,7 +159,8 @@ public:
     long long jump_count() const override { return jumps_; }
 
     // Lazy spectrum strip (0..200 eV): recomputed only on state mutation,
-    // never by unitary evolution. CONTRACT: tests/ho_spectrum_test.cpp.
+    // never by unitary evolution. CONTRACT: tests/harmonic1d_director_test.cpp
+    // (strip tracks damping between jumps); line shapes: tests/ho_spectrum_test.cpp.
     int spectrum_count() override {
         ensure_spectrum();
         return static_cast<int>(spec_.size());
