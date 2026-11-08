@@ -520,7 +520,10 @@ public:
             const int side = std::clamp(
                 static_cast<int>(std::min(width_, height_)) / 6, 96, 180);
             const int margin = side / 8;
-            const int vk_y = static_cast<int>(height_) - margin - side;
+            // Scissor offsets must be >= 0: below ~108 px of height the
+            // corner gizmo is pinned to the top edge instead.
+            const int vk_y =
+                std::max(0, static_cast<int>(height_) - margin - side);
             set_viewport_scissor(cb, margin, vk_y, side, side, 0.0f, 0.01f);
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1966,8 +1969,15 @@ private:
             }
             first = true;
         }
-        upload_image(fallback_tex_.img, psi_staging.data(),
-                     psi_staging.size() * sizeof(float), {nx, ny, nz}, first);
+        if (!upload_image(fallback_tex_.img, psi_staging.data(),
+                          psi_staging.size() * sizeof(float), {nx, ny, nz},
+                          first) &&
+            first) {
+            // Never written, still UNDEFINED: drop it, so nothing samples it
+            // and the next call starts the layout chain from UNDEFINED again
+            // (it was re-transitioned as SHADER_READ_ONLY).
+            ctx_->destroy_image(&fallback_tex_);
+        }
     }
 
     // Point the psi bindings (raymarch, particle advection, streakline color)
