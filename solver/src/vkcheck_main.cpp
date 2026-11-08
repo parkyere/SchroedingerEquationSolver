@@ -1265,7 +1265,7 @@ bool check_spin_bloch(ses_vk::DeviceContext& ctx) {
 
 // GPU fused k-qubit gate (spin_fused_gate.comp) vs CPU ses::apply_fused, on a
 // scattered k=4 window {1,4,9,14} built by fusing site.bond.site -- exercises
-// the orbit gather/matmul/scatter that Stage 2 of the canonical path rests on.
+// the orbit gather/matmul/scatter (a verified kernel with no runtime user yet).
 bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
     struct alignas(16) FusedParams {
         std::uint32_t n_orbits, k, qpack, pad;
@@ -1365,7 +1365,7 @@ bool check_spin_fused_gate(ses_vk::DeviceContext& ctx) {
 }
 
 // GPU qubit relabel (spin_permute.comp) vs CPU ses::permute_qubits, using the
-// lattice transpose -- the local/global reorder pass of Stage 3.
+// lattice transpose -- the local/global reorder pass (no runtime user yet).
 bool check_spin_permute(ses_vk::DeviceContext& ctx) {
     struct alignas(16) PermParams {
         std::uint32_t n, plo, phi, n_sites;
@@ -3469,7 +3469,8 @@ bool check_timestamp_profile(ses_vk::DeviceContext& ctx) {
 }
 
 // ---- failure-path contracts (fault-injection seam: ctx.fault) -------------
-// Each check arms ONE fault, drives the public API and asserts (1) the
+// Each check arms one fault at a time (re-arming after each is consumed),
+// drives the public API and asserts (1) the
 // failure is reported honestly, (2) the state is exactly what the contract
 // promises, (3) the one-shot flag was consumed at the detection site. The
 // injected failure latches device_lost like a real one; take_latch() reports

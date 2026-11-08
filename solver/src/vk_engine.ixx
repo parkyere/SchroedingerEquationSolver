@@ -170,7 +170,7 @@ public:
     struct NormPeak {
         double sum = 0.0;
         double peak = 0.0;
-        bool ok = false;  // both submits (norm + scale) completed
+        bool ok = false;  // the reduction completed (normalize_buffer: norm AND scale)
     };
     using StepFlags = ses_vk::StepFlags;
     // Synthesized-state report: handle < 0 = failure; peak = normalized peak
@@ -2991,9 +2991,11 @@ private:
 
     // Grid normalization of `buf` via the re-pointed any-target norm/scale
     // sets. Returns {pre-normalization grid norm (x dV), raw peak density,
-    // ok}. Each submit opens with a compute barrier: the producer of `buf`
-    // (synth) and the norm read sit in EARLIER submissions, and a fence wait
-    // gives the host, not the next dispatch, visibility.
+    // ok}. Each submit opens with a compute barrier, the norm_and_peak idiom:
+    // an explicit dependency on the earlier synth / norm submissions (their
+    // fence wait + this vkQueueSubmit already order and expose them, so it is
+    // belt-and-braces). Host reads of the partials go through
+    // record_partials_readback's host barrier + invalidate.
     NormPeak normalize_buffer(Buffer& buf) {
         NormPeak np;
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
