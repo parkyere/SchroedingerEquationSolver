@@ -39,7 +39,7 @@ _deps/
 *.user
 *.user.*
 
-# Runtime artifacts (--dump-frame / --dump-surface render captures)
+# Runtime artifacts (--dump-frame* render captures)
 /frame_dump*.bmp
 
 # OS cruft

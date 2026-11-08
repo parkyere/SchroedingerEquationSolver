@@ -18,8 +18,8 @@ for any testable logic.
   fault to the COMPUTE-side `normalize_buffer` (norm reduction, `vk_engine.ixx` `normalize_buffer`)
   during the startup atlas build -- **NOT the render path** (the earlier "render/
   present" hypothesis is REFUTED). ONLY the instance apiVersion enum differs
-  (identical enabled features + SPIR-V, no 1.4-exclusive feature; VMA/ImGui pinned
-  to the device's REAL version); the spec lets a driver steer behavior on that
+  (identical enabled features + SPIR-V, no 1.4-exclusive feature; VMA and ImGui
+  are given the instance's 1.3); the spec lets a driver steer behavior on that
   integer, so 1.4 selects a broken NVIDIA driver path (GSP CTX_SWITCH_TIMEOUT / Xid
   109 class). No app-side hazard can produce the hang. **1.3 loses NOTHING** -- no
   1.4-exclusive feature is used, so this is a non-blocking workaround, not a
@@ -306,7 +306,7 @@ for any testable logic.
   EggBox 16 s, RotorJMax 14 s …)인데 ctest `LABELS`/`TIMEOUT`이 없고, 같은 64³
   relax를 테스트마다 반복(`SetUpTestSuite` 없음). 기본 `CMAKE_BUILD_TYPE=Debug`
   강제는 README의 "Debug는 기어간다"와 충돌(`RelWithDebInfo` 또는 강제 해제).
-- **중복 헬퍼**: `cube()` 8벌(시그니처 3종), `max_abs_diff` 3벌, `node_count`/
+- **중복 헬퍼**: `cube()` 8벌(시그니처 3종) + 이름만 다른 같은 헬퍼 3벌(`imaginary_tables_test`/`propagator_tables_test`의 `cube4()`, `marching_cubes_test`의 `cube_grid()`), `max_abs_diff` 3벌, `node_count`/
   `overlap_sq` 2~4벌, `expect_watertight` 2벌, 3D `energy_variance` 2벌(코어에는 1D만),
   손으로 만든 2D CAP 3벌·2D 패킷 필러 4벌·corral 링 2벌, `axpy` 루프 14곳 →
   `test_util.h`(매크로 게이트 대신 분리 헤더)로.

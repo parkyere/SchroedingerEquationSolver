@@ -188,9 +188,9 @@ shell the box can hold, synthesized as (u/r)·Y_lm; every allowed decay
 channel's Einstein A comes from a **factorized E1 table** (constexpr tesseral
 angular factors × 1D radial integrals — A(2p→1s) is textbook-exact), and the
 s-state energies are audited against the grid Hamiltonian on every launch.
-The Δl = ±1 rule is analytic; Δm selection **emerges numerically** (forbidden
-channels suppressed by ~17 orders of magnitude; 3d_z² → 2p branches 4:1:1,
-reproducing Clebsch–Gordan). The demo starts with spontaneous decay ARMED, as
+The Δl = ±1 and Δm selection rules are exact zeros of the constexpr tesseral
+factors (forbidden channels are never created); 3d_z² → 2p branches 4:1:1
+from the same rationals, reproducing Clebsch–Gordan. The demo starts with spontaneous decay ARMED, as
 in nature. Emitted photons are logged on the right-hand **spectrometer
 strip** (energy-rainbow scale, one line + eV label per photon).
 
