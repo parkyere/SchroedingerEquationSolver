@@ -182,9 +182,17 @@ public:
                                       &surface_)) {
             fatal_shell_error("Vulkan surface", SDL_GetError());
         }
-        if (vk_ctx_.create_device(surface_) != ses_vk::Boot::ok) {
-            fatal_shell_error("Vulkan device",
-                              "no compute+present queue family");
+        // The message box is the only diagnostic a GUI-subsystem build shows,
+        // so name every requirement create_device can refuse on.
+        const ses_vk::Boot dev = vk_ctx_.create_device(surface_);
+        if (dev != ses_vk::Boot::ok) {
+            fatal_shell_error(
+                "Vulkan device",
+                dev == ses_vk::Boot::no_driver
+                    ? "no Vulkan device on this machine"
+                    : "Vulkan device creation failed (needs Vulkan 1.3 with "
+                      "synchronization2 + dynamicRendering and a "
+                      "compute+present queue family)");
         }
         std::fprintf(stderr, "vk: device %s%s\n", vk_ctx_.device_name,
                      vk_ctx_.validation_active ? " [validation ON]" : "");
