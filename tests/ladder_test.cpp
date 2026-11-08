@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <complex>
+#include <cstdio>
 #include <numbers>
 #include <vector>
 

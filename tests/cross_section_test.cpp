@@ -56,6 +56,14 @@ TEST(ClipRayInterval, ParallelRayOnCutSideIsInvisible) {
     EXPECT_FALSE(c.visible);
 }
 
+// The non-parallel branch can hide a ray too: an eye at p = 5 on the cut side
+// moving +p reaches the plane only at t = -5, before tn = 0.
+TEST(ClipRayInterval, RayMovingAwayFromTheVisibleHalfIsInvisible) {
+    const ses::ClipInterval c = ses::clip_ray_interval(0.0, 10.0, 5.0, 1.0,
+                                                       1.0, 0.0);
+    EXPECT_FALSE(c.visible);
+}
+
 TEST(SliceQuadCorner, AllSixCornersLieOnThePlaneAndSpanTheBox) {
     const Grid1D ax{-8.0, 8.0, 16};
     const Grid3D g{ax, ax, ax};

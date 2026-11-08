@@ -1,4 +1,4 @@
-// Degenerate / adversarial-input guards (REVIEW_BACKLOG latent-correctness):
+// Degenerate / adversarial-input guards:
 // inputs the app never produces, but helpers must not NaN / overrun / spin.
 
 
