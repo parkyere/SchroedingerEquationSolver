@@ -44,4 +44,18 @@ TEST(Harmonic1DDirector, StripTracksMcwfDampingBetweenJumps) {
     EXPECT_NEAR(mean_ev / tot / ses_shell::kHaToEv, live, 5e-3);
 }
 
+// The strip is indexed through the virtual API: an index outside
+// [0, spectrum_count()) reads 0 instead of past the strip.
+TEST(Harmonic1DDirector, SpectrumOutsideTheStripReadsZero) {
+    ses_shell::Harmonic1DDirector d;
+    ses_shell::Ladder1dApi* ld = d.ladder1d();
+    ASSERT_NE(ld, nullptr);
+    const int n = ld->spectrum_count();
+    ASSERT_GT(n, 0);
+    for (const int i : {-1, n}) {
+        EXPECT_EQ(ld->spectrum_ev(i), 0.0) << "i = " << i;
+        EXPECT_EQ(ld->spectrum_weight(i), 0.0) << "i = " << i;
+    }
+}
+
 }  // namespace
