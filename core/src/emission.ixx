@@ -271,16 +271,11 @@ inline IntervalResult collective_decay_interval(
         remaining -= t1;
         // Group pick = the environment's frequency measurement (stratified;
         // drawn even for a single group -- the documented stream order).
+        // ses::select_stratum: the same pick, but rounding at the top falls
+        // back to the LAST POSITIVE rate, never a zero-rate group.
         const double ug = u01();
-        double acc = 0.0;
-        std::size_t pick = groups.size() - 1;
-        for (std::size_t g = 0; g < groups.size(); ++g) {
-            acc += rates[g] / total;
-            if (ug < acc) {
-                pick = g;
-                break;
-            }
-        }
+        const std::size_t pick =
+            static_cast<std::size_t>(select_stratum(rates, total, ug));
         const CollectiveDipoles& cd = cds[pick];
         const PhotonRecord rec = sample_photon_emission(cd.dipoles, u01);
         const std::vector<std::complex<double>> cond =
