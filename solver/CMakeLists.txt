@@ -79,5 +79,6 @@ ses_enable_vkfft(sesolver_vkcheck)
 add_test(NAME VkCheck COMMAND sesolver_vkcheck)
 set_tests_properties(VkCheck PROPERTIES
     LABELS "gpu"
+    RESOURCE_LOCK gpu  # same lock as the Arc.* entries: never two GPU users
     SKIP_RETURN_CODE 77)  # exit 77 = ctest SKIP when no Vulkan device present
 message(STATUS "Framework-free harness 'sesolver_vkcheck' enabled.")

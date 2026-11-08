@@ -148,9 +148,10 @@ Strang tables:
   on demand as `(u/r)·Y_lm`; the synthesis captures per-state grid norms
   that normalize every projection and MCWF term.
 - **Orbital-free projection:** no resident orbital atlas. One grid pass
-  deposits `g_lm` components binned by radius (the deposit weights are
-  contractually bit-identical between `ses.harmonics::fill_orbital` and the
-  Slang deposit kernel); each amplitude `<n|ψ>` is then a 1D radial dot.
+  deposits `g_lm` components binned by radius (the Slang deposit kernel
+  mirrors `ses.harmonics::fill_orbital`'s linear interpolation in fp32 and is
+  checked within tolerance against `ses::project_radial_angular`); each
+  amplitude `<n|ψ>` is then a 1D radial dot.
   The startup "atlas" is a transient montage — one orbital resident at a
   time, shown, audited, freed.
 - **Factorized E1 channel table:** decay rates are
@@ -219,7 +220,7 @@ Explicitly *not* reused: GLM, Qt, FFTW, Eigen/BLAS/LAPACK, OpenMP.
   cell takes `-Z·(2/π)·Si(πr/h)/r` per nucleus (`-2Z/h` at the nucleus), the
   bare `-Z/r` with everything above the grid's own band `K = π/h` removed —
   no free parameter, and the same formula on the GPU (`two_center.slang`).
-  Its Gibbs tail `~cos(πr/h)/(πr²/h)` is exactly what a spacing-h lattice
+  Its Gibbs tail `(2Zh/π²)·cos(πr/h)/r²` is exactly what a spacing-h lattice
   aliases, so the lattice sum is translation invariant: moving nuclei (the
   H2+ rotor) see a grid egg-box of 0.27 mHa at h = 0.31 (cube average 3.8,
   point sampling 15.8) and the relaxed `E(1s)` lands +1.8 mHa above -0.5 Ha
