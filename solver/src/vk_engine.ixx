@@ -1155,7 +1155,7 @@ public:
         }
         State* st = state_at(handle);
         if (!upload_field(st->buf, state)) {
-            ctx_->destroy_buffer(&st->buf);
+            release_state(handle);  // recycles the slot and its four sets
             return -1;
         }
         return handle;
@@ -2013,7 +2013,7 @@ public:
         State* st = state_at(handle);
         if (!synthesize_into_buffer(st->buf, u, l, m, h_radial, rmax,
                                     n_radial, &res.peak, &res.norm2)) {
-            ctx_->destroy_buffer(&st->buf);
+            release_state(handle);  // recycles the slot and its four sets
             return res;
         }
         res.handle = handle;
