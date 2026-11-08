@@ -508,7 +508,10 @@ private:
             }
         }
         // Per-image semaphore: a single reused one races the presentation engine.
-        if (render_done_.size() != n) {
+        // A null entry left by an earlier partial failure forces a rebuild too.
+        if (render_done_.size() != n ||
+            std::ranges::find(render_done_, VK_NULL_HANDLE) !=
+                render_done_.end()) {
             for (VkSemaphore s : render_done_) {
                 vkDestroySemaphore(ctx_->device, s, nullptr);
             }
@@ -542,7 +545,14 @@ private:
     bool recreate_swapchain() {
         vkDeviceWaitIdle(ctx_->device);
         destroy_swapchain();
-        return create_swapchain() && swapchain_ != VK_NULL_HANDLE;
+        if (!create_swapchain()) {
+            // A partial create (a view or a render_done_ semaphore missing)
+            // must not survive as a valid swapchain_ -- the next frame would
+            // render through a null view: tear it down so acquire() retries.
+            destroy_swapchain();
+            return false;
+        }
+        return swapchain_ != VK_NULL_HANDLE;
     }
 
     ses_vk::DeviceContext* ctx_ = nullptr;
