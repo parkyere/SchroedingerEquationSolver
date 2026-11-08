@@ -187,6 +187,15 @@ public:
                          "run_frame: GPU device lost -- falling back to CPU\n");
             gpu_ok_ = false;
             cpu_is_truth_ = true;
+            // Disarm the GPU-only modes, as the CPU-meshing fallback does:
+            // their toggles return early once !gpu_ok_, so they could never
+            // be cleared and their labels would stick.
+            if (stepping_ == BaseStepping::RelaxingExcited) {
+                stepping_ = BaseStepping::Relaxing;  // deflation is GPU-only
+            }
+            laser_pol_ = LaserPol::Off;
+            decay_on_ = false;
+            title_dirty_ = true;
         }
         // Photon streaks: shared display component (base member).
         photon_streaks_.advance_and_build();
@@ -477,11 +486,17 @@ public:
             }
             // Drive the GRID resonance: the coarse-grid 1s has a cusp gap and a
             // relaxed 1s sits ~0.03 Ha below a synthesized one, so prefer the
-            // cooled <H>, else the h-audit grid energy.
-            const double e_1s = (relax_energy_display_ < kCooled1sMaxE)
+            // cooled <H>, else the h-audit grid energy. "Cooled" means at
+            // least as cold as the synthesized 1s: relax_energy_display_
+            // follows every ITP estimate, and an aborted relax (~-0.42) would
+            // detune the carrier by ~0.08 Ha against Omega_R = 0.04.
+            const double e_synth = grid_energy_1s_ != 0.0
+                                       ? grid_energy_1s_
+                                       : atom_.state_energy(kS1);
+            const double e_1s = (relax_energy_display_ < kCooled1sMaxE &&
+                                 relax_energy_display_ <= e_synth)
                                     ? relax_energy_display_
-                                    : (grid_energy_1s_ != 0.0 ? grid_energy_1s_
-                                                              : atom_.state_energy(kS1));
+                                    : e_synth;
             laser_omega_ = atom_.state_energy(kP2Z) - e_1s;
             laser_e0_ = atom_.dipole_z() > 0.0 ? kRabiTargetOmega / atom_.dipole_z() : 0.0;
             rabi_peak_ = 0.0;
@@ -1169,13 +1184,25 @@ private:
         // Deflation set: OWNED transient fp32 buffers, freed at auto-complete /
         // reset / next relaxation.
         free_deflation_buffers();
-        relax_deflate_.push_back(atom_.synth_transient(engine_, kS1));
-        if (deflate_p_triplet) {
-            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2X));
-            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2Y));
-            relax_deflate_.push_back(atom_.synth_transient(engine_, kP2Z));
+        // EVERY lower state must make it into the set (see FOOTGUN above): a
+        // failed synth (-1, e.g. a 134 MB VRAM miss) would silently deflate
+        // nothing and keys 3/4 would cool toward 1s under a 2s/2p label.
+        const auto deflate = [this](int state) {
+            const int h = atom_.synth_transient(engine_, state);
+            relax_deflate_.push_back(h);
+            relax_deflate_owned_.push_back(h);
+            return h >= 0;
+        };
+        const bool complete =
+            deflate(kS1) && (!deflate_p_triplet ||
+                             (deflate(kP2X) && deflate(kP2Y) && deflate(kP2Z)));
+        if (!complete) {
+            std::fprintf(stderr, "relax: deflation state synth failed -- %s "
+                                 "relax not started\n",
+                         label);
+            free_deflation_buffers();
+            return;
         }
-        relax_deflate_owned_ = relax_deflate_;
         sim_.set_psi(seed);
         cpu_is_truth_ = true;
         relax_label_ = label;
