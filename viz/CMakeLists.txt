@@ -46,6 +46,8 @@ target_compile_features(ses_viz PUBLIC cxx_std_20)
 add_dependencies(ses_viz ses_viz_spv)
 # PUBLIC: shell's swapchain pass textually includes blit_{vert,frag}_spv.h.
 target_include_directories(ses_viz PUBLIC "${_ses_viz_spv_dir}")
+# PRIVATE: ses_vma.h, the single VMA configuration every ses_vk TU shares.
+target_include_directories(ses_viz PRIVATE "${CMAKE_SOURCE_DIR}/solver/src")
 target_link_libraries(ses_viz
     PUBLIC
         ses_solver

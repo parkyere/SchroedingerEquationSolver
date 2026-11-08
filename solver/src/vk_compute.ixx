@@ -16,8 +16,8 @@ export import ses.vk.device;
 //
 // volk.h in the GMF supplies the VK_* macros (macros don't cross module
 // boundaries) and inoculates the TU against GMF/textual std redefinitions.
-// No VMA: this module never names vma*; each vma-calling module carries its
-// own identically configured vk_mem_alloc.h in its own GMF.
+// No VMA: this module never names vma*; each vma-calling module includes
+// ses_vma.h (the one VMA configuration) in its own GMF.
 
 
 export namespace ses_vk {

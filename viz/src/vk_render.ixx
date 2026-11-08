@@ -1,15 +1,7 @@
 module;
 #include <numbers>
 #include <volk.h>
-#if defined(_MSC_VER)
-#pragma warning(push, 0)
-#endif
-#define VMA_STATIC_VULKAN_FUNCTIONS 0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include <vk_mem_alloc.h>
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ses_vma.h"  // the one VMA configuration, shared with ses_solver
 #include <algorithm>
 #include <array>
 #include <cassert>
