@@ -311,8 +311,7 @@ for any testable logic.
   손으로 만든 2D CAP 3벌·2D 패킷 필러 4벌·corral 링 2벌, `axpy` 루프 14곳 →
   `test_util.h`(매크로 게이트 대신 분리 헤더)로.
 - **stdout 잡음**: 10개 파일 22곳의 `printf`가 녹색 실행에서 33줄 출력 → `SCOPED_TRACE`/
-  `RecordProperty`. `spheroidal_test`/`projection_test`는 `<cstdio>` 없이 `printf`,
-  `magnetic_test`는 `<vector>/<algorithm>` 없이 사용(전이 include 의존, MSVC 위험).
+  `RecordProperty`.
 - **다중 관심사 테스트**(`potential_test` 412-458, `lattice2d_test` 208-262·376-446,
   `molecule_test` 32-83 …)와 근거 없는 허용 오차(`lattice2d_test` 0.4/0.15/0.2,
   `corral2d_test` 0.6×/2×, `rotor_test` 30..42)는 항목별 분리·유도.
