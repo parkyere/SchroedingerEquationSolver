@@ -139,7 +139,10 @@ public:
             seed_random();
             return true;
         }
-        if (key >= '2' && key < static_cast<char>('2' + state_count())) {
+        // Digits 2..9 pick states 0..7; later states are panel-only. ('2' + k
+        // ran on past '9' into ':'..'I' with H2+'s 24 orbitals, swallowing
+        // global hotkeys such as F = flow -- the scene sees keys first.)
+        if (key >= '2' && key <= '9' && key - '2' < state_count()) {
             prepare(key - '2');
             return true;
         }
