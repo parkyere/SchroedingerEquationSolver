@@ -228,7 +228,8 @@ protected:
 
 private:
     // psi_ is GPU-resident during evolution; upload only after a CPU edit,
-    // download every step for the CPU-built heightfield display + energy.
+    // download once per gpu_step/gpu_relax batch for the CPU-built
+    // heightfield display + energy.
     void gpu_sync_up() {
         if (gpu_psi_dirty_) {
             gpu_.upload(psi_.data());
