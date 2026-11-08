@@ -313,6 +313,29 @@ TEST(CollectiveDecayInterval, SingleGroupArrivalCollapsesAndRecords) {
     EXPECT_NEAR(std::abs(r.c[1]), 0.0, 1e-12);
 }
 
+// Stratified group pick: when rounding leaves the summed rate fractions just
+// below 1 and u_group lands in that gap, the pick must fall back to the LAST
+// POSITIVE-rate group (as ses::select_stratum does), never a zero-rate group,
+// whose zero dipoles would zero every amplitude.
+TEST(CollectiveDecayInterval, GroupPickRoundingFallsBackToAPositiveRateGroup) {
+    // R_A = 0.1, R_B = 0.3: fl(0.1/0.4) + fl(0.3/0.4) = 1 - 2^-53.
+    const std::vector<ses::FreqGroup> groups{
+        {{{2, 1, 0.0, 0.0, 1.0}}, 0.3, 0.1},   // A: 2 -> 1 (z)
+        {{{2, 0, 1.0, 0.0, 0.0}}, 0.7, 0.3},   // B: 2 -> 0 (x)
+        {{{3, 0, 0.0, 0.0, 1.0}}, 0.9, 1.0}};  // C: from the empty state 3
+    std::vector<std::complex<double>> c{
+        {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}, {0.0, 0.0}};
+    const double u_group = std::nextafter(1.0, 0.0);
+    // t1 = 0.5 at R = 0.4; then B's x-dipole sampler draws (n = y, accepted).
+    auto u01 = make_script({std::exp(-0.4 * 0.5), u_group, 0.5, 0.25, 0.5, 0.3});
+    const ses::IntervalResult r =
+        ses::collective_decay_interval(groups, c, 1.0, u01);
+    ASSERT_EQ(r.jumps.size(), 1u);
+    EXPECT_DOUBLE_EQ(r.jumps[0].gap_e, 0.7);  // B, the last positive-rate group
+    ASSERT_EQ(r.c.size(), 4u);
+    EXPECT_NEAR(std::abs(r.c[0]), 1.0, 1e-12);
+}
+
 TEST(CollectiveDecayInterval, GroupPickProjectsTheEnergy) {
     // State 2 decays through TWO frequency groups: A (2->1, weak) and
     // B (2->0, strong). Picking B must localize c on state 0 ONLY.
