@@ -12,7 +12,6 @@ module;
 #endif
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -1376,17 +1375,16 @@ private:
                                  {{0, sbuf}, {1, ubo}, {2, cis}, {3, cis}})) {
             return false;
         }
-        // Flow draw set layout: SSBO + volume UBO + psi + LUT, vertex stage.
+        // Flow draw set layout: trail SSBO + volume UBO, vertex stage (flow.vert
+        // draws premultiplied white; it samples neither psi nor the LUT).
         {
-            const VkDescriptorSetLayoutBinding bs[4] = {
+            const VkDescriptorSetLayoutBinding bs[] = {
                 {0, sbuf, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
                 {1, ubo, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
-                {2, cis, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
-                {3, cis, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr},
             };
             VkDescriptorSetLayoutCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            ci.bindingCount = 4;
+            ci.bindingCount = static_cast<std::uint32_t>(std::size(bs));
             ci.pBindings = bs;
             if (vkCreateDescriptorSetLayout(ctx_->device, &ci, nullptr,
                                             &flow_dsl_holder_.set) !=
@@ -1491,12 +1489,10 @@ private:
         arena_.write_buffer(*ctx_, flow_set_, 0, sbuf, flow_buf_.buf);
         arena_.write_buffer(*ctx_, flow_set_, 1, ubo, volume_ubuf_.buf,
                             sizeof(VolumeUbo));
-        arena_.write_sampled(*ctx_, flow_set_, 3, phase_tex_.view, samp_1d_);
-        // Binding 2 (psi) pointed per frame; seed with the LUT so the sets are
+        // Binding 2 (psi) pointed per frame; seed with the LUT so the set is
         // never invalid.
         arena_.write_sampled(*ctx_, particles_set_, 2, phase_tex_.view,
                              samp_3d_);
-        arena_.write_sampled(*ctx_, flow_set_, 2, phase_tex_.view, samp_3d_);
         // Binding 3 (velocity) of the advect set is pointed per frame; seed.
         arena_.write_sampled(*ctx_, particles_set_, 3, phase_tex_.view,
                              samp_3d_);
@@ -1975,7 +1971,7 @@ private:
         }
     }
 
-    // Point the psi bindings (raymarch, particle advection, streakline color)
+    // Point the psi bindings (raymarch, particle advection, occupancy/shadow)
     // at the live volume (engine bridge or fallback).
     void point_volume_binding(VkImageView engine_view) {
         VkImageView view = engine_view;
@@ -1988,7 +1984,6 @@ private:
         }
         arena_.write_sampled(*ctx_, volume_set_, 1, view, samp_3d_);
         arena_.write_sampled(*ctx_, particles_set_, 2, view, samp_3d_);
-        arena_.write_sampled(*ctx_, flow_set_, 2, view, samp_3d_);
         arena_.write_sampled(*ctx_, occ_set_, 2, view, samp_3d_);
         arena_.write_sampled(*ctx_, shadow_set_, 2, view, samp_3d_);
         aux_valid_ = false;  // fresh field: rebuild occupancy + shadow
