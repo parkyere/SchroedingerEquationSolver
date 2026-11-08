@@ -1895,10 +1895,29 @@ void register_verification_arcs(ShellT* the_shell) {
             });
         }},
     };
+    // One arc per process: the shell forces ONE arc's scene, and two arcs
+    // would race on request_exit (a hydrogen arc on another arc's forced
+    // scene dereferenced a null hy()). ctest registers one per entry.
+    const Arc* chosen = nullptr;
+    int given = 0;
     for (const Arc& a : kArcs) {
         if (the_shell->has_arg(a.flag)) {
-            a.run(the_shell, a.flag + 2);  // skip "--"
+            ++given;
+            if (chosen == nullptr) {
+                chosen = &a;
+            }
         }
+    }
+    if (given > 1) {
+        std::fprintf(stderr,
+                     "selftest: %d arc flags given -- run one arc per "
+                     "process  [FAIL]\n",
+                     given);
+        the_shell->request_exit(2);
+        return;
+    }
+    if (chosen != nullptr) {
+        chosen->run(the_shell, chosen->flag + 2);  // skip "--"
     }
 }
 
