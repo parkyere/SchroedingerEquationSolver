@@ -411,16 +411,20 @@ private:
                 unwind();
                 return false;
             }
-        } else {
-            vkResetCommandPool(ctx.device, pool, 0);
+        } else if (vkResetCommandPool(ctx.device, pool, 0) != VK_SUCCESS) {
+            std::fprintf(stderr, "vk: command pool reset failed\n");
+            return false;
+        }
+        VkCommandBufferBeginInfo cbbi{};
+        cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vkBeginCommandBuffer(cb, &cbbi) != VK_SUCCESS) {
+            std::fprintf(stderr, "vk: command buffer begin failed\n");
+            return false;  // never record into a cb that did not begin
         }
         cb_ = cb;
         fence_ = fence;
         queue_ = queue;
-        VkCommandBufferBeginInfo cbbi{};
-        cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb_, &cbbi);
         return true;
     }
 

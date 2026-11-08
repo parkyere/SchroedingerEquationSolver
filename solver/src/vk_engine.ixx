@@ -723,7 +723,14 @@ public:
             async_bridged_ = false;
             return;
         }
-        vkResetFences(ctx_->device, 1, &async_fence_);
+        // A fence left signaled would let wait_async return before the batch
+        // ran: a failed reset poisons the path, as in OneShot::submit_and_wait.
+        if (vkResetFences(ctx_->device, 1, &async_fence_) != VK_SUCCESS) {
+            std::fprintf(stderr, "ses_vk::Engine: async fence reset failed\n");
+            ctx_->device_lost = true;
+            async_bridged_ = false;
+            return;
+        }
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
@@ -2696,16 +2703,25 @@ private:
         if (tc_pot_set_ != VK_NULL_HANDLE) {
             return true;
         }
+        // Each piece is created once (a retry after a partial failure must not
+        // re-create, i.e. leak, what already succeeded); tc_pot_set_ is the
+        // ready flag, so it comes last.
         const TwoCenterParams zero{};
-        if (!write_ubo(&tc_ubo_, &zero, sizeof(zero)) ||
-            !ctx_->create_device_buffer(8 * kGroups * sizeof(float),
-                                        &tc_partials_)) {
+        if ((tc_ubo_.buf == VK_NULL_HANDLE &&
+             !write_ubo(&tc_ubo_, &zero, sizeof(zero))) ||
+            (tc_partials_.buf == VK_NULL_HANDLE &&
+             !ctx_->create_device_buffer(8 * kGroups * sizeof(float),
+                                         &tc_partials_))) {
             return false;
         }
+        if (tc_force_set_ == VK_NULL_HANDLE) {
+            tc_force_set_ = arena_.allocate(*ctx_, tc_force_k_.set_layout());
+            if (tc_force_set_ == VK_NULL_HANDLE) {
+                return false;
+            }
+        }
         tc_pot_set_ = arena_.allocate(*ctx_, two_center_k_.set_layout());
-        tc_force_set_ = arena_.allocate(*ctx_, tc_force_k_.set_layout());
-        if (tc_pot_set_ == VK_NULL_HANDLE || tc_force_set_ == VK_NULL_HANDLE) {
-            tc_pot_set_ = VK_NULL_HANDLE;
+        if (tc_pot_set_ == VK_NULL_HANDLE) {
             return false;
         }
         const auto storage = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -3275,10 +3291,12 @@ private:
             return true;
         }
         const DipoleParams dp0{};
-        if (!ctx_->create_device_buffer(6 * kGroups * sizeof(float),
-                                        &dipole_partials_) ||
-            !write_ubo(&dipole_ubo_, &dp0, sizeof(dp0))) {
-            return false;
+        if ((dipole_partials_.buf == VK_NULL_HANDLE &&
+             !ctx_->create_device_buffer(6 * kGroups * sizeof(float),
+                                         &dipole_partials_)) ||
+            (dipole_ubo_.buf == VK_NULL_HANDLE &&
+             !write_ubo(&dipole_ubo_, &dp0, sizeof(dp0)))) {
+            return false;  // a retry re-creates only what is still missing
         }
         dipole_set_ = arena_.allocate(*ctx_, dipole_.set_layout());
         if (dipole_set_ == VK_NULL_HANDLE) {
@@ -3300,6 +3318,7 @@ private:
         }
         vkDeviceWaitIdle(ctx_->device);
         ctx_->destroy_buffer(&staging_);
+        staging_bytes_ = 0;  // nothing usable until the regrow succeeds
         if (!ctx_->create_host_buffer(bytes,
                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
