@@ -26,4 +26,20 @@ TEST(Qdot2DDirector, GrabGathersAPacketAtRest) {
         << "B = " << q->field() << ", Omega = " << q->energy_pred();
 }
 
+// The spectrum strip is indexed through the virtual API: an index outside
+// [0, spectrum_count()) reads 0 instead of past the strip.
+TEST(Qdot2DDirector, SpectrumOutsideTheStripReadsZero) {
+    ses_shell::Qdot2DDirector d;
+    ses_shell::QdotApi* q = d.qdot();
+    ASSERT_NE(q, nullptr);
+    q->begin_grab(0.0, 3.0);  // a settled packet (the boot state is relaxing)
+    q->end_grab();
+    const int n = q->spectrum_count();
+    ASSERT_GT(n, 0);
+    for (const int i : {-1, n}) {
+        EXPECT_EQ(q->spectrum_ev(i), 0.0) << "i = " << i;
+        EXPECT_EQ(q->spectrum_weight(i), 0.0) << "i = " << i;
+    }
+}
+
 }  // namespace

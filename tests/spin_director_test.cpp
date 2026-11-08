@@ -1,4 +1,5 @@
-// SpinDirector contracts (needs the GPU-layer library ses_scenario).
+// SpinDirector / SpinsDirector contracts (needs the GPU-layer library
+// ses_scenario).
 
 #include <gtest/gtest.h>
 
@@ -7,6 +8,7 @@
 #include <numbers>
 
 import ses.scenario.spin_director;
+import ses.scenario.spins_director;
 
 namespace {
 
@@ -66,6 +68,38 @@ TEST(SpinDirector, BlochReadoutFollowsInstantOperations) {
     EXPECT_NEAR(std::abs(s->bloch_y()), 1.0, 1e-9);
     d.reset_simulation();  // back to the boot +x
     EXPECT_NEAR(s->bloch_x(), 1.0, 1e-9);
+}
+
+// The axis is a virtual-API argument: one outside 0..2 is ignored (no write
+// past the 3-vector into its neighbours) and reads back 0.
+TEST(SpinDirector, AxisOutsideZeroToTwoIsIgnored) {
+    ses_shell::SpinDirector d;
+    ses_shell::SpinApi* s = d.spin();
+    for (const int axis : {-1, 3}) {
+        s->set_b(axis, 0.7);
+        s->set_e(axis, 0.7);
+        EXPECT_EQ(s->b(axis), 0.0) << "axis " << axis;
+        EXPECT_EQ(s->e(axis), 0.0) << "axis " << axis;
+    }
+    EXPECT_EQ(s->b(0), 0.0);
+    EXPECT_EQ(s->b(1), 0.0);
+    EXPECT_EQ(s->b(2), ses_shell::kSpB0);
+    EXPECT_EQ(s->e(0), 0.0);
+    EXPECT_EQ(s->e(2), 0.0);
+    EXPECT_NEAR(s->bloch_x(), 1.0, 1e-9);  // boot +x untouched
+}
+
+TEST(SpinsDirector, AxisOutsideZeroToTwoIsIgnored) {
+    ses_shell::SpinsDirector d;
+    ses_shell::SpinsApi* s = d.spins();
+    const double j0 = s->j();
+    const double bz = s->b(2);
+    for (const int axis : {-1, 3}) {
+        s->set_b(axis, 0.7);
+        EXPECT_EQ(s->b(axis), 0.0) << "axis " << axis;
+    }
+    EXPECT_EQ(s->j(), j0);
+    EXPECT_EQ(s->b(2), bz);
 }
 
 }  // namespace
