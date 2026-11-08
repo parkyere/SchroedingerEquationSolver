@@ -193,7 +193,6 @@ public:
                     const std::vector<double>& potential, double dt,
                     const std::vector<std::complex<double>>& psi0,
                     double mass = 1.0) {
-        dt_step_ = dt;
         inv_mass_ = 1.0 / mass;  // real-time kinetic k^2/(2m): scale the k^2 table
         ctx_ = &ctx;
         grid_ = grid;
@@ -214,15 +213,15 @@ public:
         // alignment is <= 64 (AMD/Intel/lavapipe).
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(ctx.phys_dev, &props);
-        kick_stride_ = static_cast<std::uint32_t>(
+        ubo_slot_stride_ = static_cast<std::uint32_t>(
             props.limits.minUniformBufferOffsetAlignment);
-        if (kick_stride_ == 0) {
-            kick_stride_ = 256;
+        if (ubo_slot_stride_ == 0) {
+            ubo_slot_stride_ = 256;
         }
         constexpr std::size_t kSlotBytes =
             std::max(sizeof(KickParams), sizeof(TwoCenterParams));
-        while (kick_stride_ < kSlotBytes) {
-            kick_stride_ *= 2;
+        while (ubo_slot_stride_ < kSlotBytes) {
+            ubo_slot_stride_ *= 2;
         }
 
         if (!mul_.create(ctx, blobs.mul, blobs.mul_size,
@@ -420,9 +419,10 @@ public:
             mc_kernel_ok_ = true;
         }
 
-        // std140 parameter blocks, written once into host-mapped UBOs (every
-        // submission fence-waits, so no in-flight aliasing; the scale UBO is
-        // the only one rewritten, between submissions).
+        // std140 parameter blocks in host-mapped UBOs. The ones rewritten after
+        // creation (scale, shear, kick, synth, axpy, mcwf, mc, dipole, proj,
+        // two-center) change only after the previous submission's fence
+        // (wait_async drains an in-flight batch first): no in-flight aliasing.
         const MulParams muln{static_cast<std::uint32_t>(cells_), 0, 0, 0};
         const HalfMulParams halfp{static_cast<std::uint32_t>(cells_),
                                   static_cast<float>(-0.5 * dt), 0.0f, 0.0f};
@@ -477,7 +477,7 @@ public:
             !write_ubo(&shear_ubo_[1], &shear_zero, sizeof(shear_zero))) {
             return false;
         }
-        if (!ctx.create_host_buffer(2 * kick_stride_,
+        if (!ctx.create_host_buffer(2 * ubo_slot_stride_,
                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                     &kick_ubo_)) {
             return false;
@@ -663,7 +663,7 @@ public:
                 record_kin_body(r);
                 if (s < sched) {
                     r.dispatch_dyn(two_center_k_, tc_sched_set_, mul_groups_,
-                                   static_cast<std::uint32_t>(s) * kick_stride_);
+                                   static_cast<std::uint32_t>(s) * ubo_slot_stride_);
                 }
                 const bool last = s + 1 == nsteps;
                 if (fuse) {
@@ -760,6 +760,7 @@ public:
                          "ses_vk::Engine: async step-batch fence wait %s\n",
                          vk_result_str(awr));
             ctx_->device_lost = true;  // async batch hung/faulted: device is gone
+            async_bridged_ = false;    // its bridge store never completed: no flip
         }
         async_pending_ = false;
         if (async_bridged_) {
@@ -902,12 +903,12 @@ public:
             const double t = t0 + s * dt;
             KickParams kp = make_kick_params(
                 d.axis, d.amplitude * std::cos(d.omega * t) * 0.5 * dt);
-            std::memcpy(slots + static_cast<std::size_t>(2 * s) * kick_stride_,
+            std::memcpy(slots + static_cast<std::size_t>(2 * s) * ubo_slot_stride_,
                         &kp, sizeof(kp));
             kp.theta = static_cast<float>(
                 d.amplitude * std::cos(d.omega * (t + dt)) * 0.5 * dt);
             std::memcpy(
-                slots + static_cast<std::size_t>(2 * s + 1) * kick_stride_, &kp,
+                slots + static_cast<std::size_t>(2 * s + 1) * ubo_slot_stride_, &kp,
                 sizeof(kp));
         }
         vmaFlushAllocation(ctx_->allocator, kick_ubo_.alloc, 0, VK_WHOLE_SIZE);
@@ -919,10 +920,10 @@ public:
         Recorder r{shot.cb(), true};
         for (int s = 0; s < nsteps; ++s) {
             r.dispatch_dyn(kick_, kick_set_, mul_groups_,
-                           static_cast<std::uint32_t>(2 * s) * kick_stride_);
+                           static_cast<std::uint32_t>(2 * s) * ubo_slot_stride_);
             run_step_body(r, half_mul_, halfv_set_, kin_mul_, kin3_set_);
             r.dispatch_dyn(kick_, kick_set_, mul_groups_,
-                           static_cast<std::uint32_t>(2 * s + 1) * kick_stride_);
+                           static_cast<std::uint32_t>(2 * s + 1) * ubo_slot_stride_);
             record_absorb(r, flags.absorb);
         }
         const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
@@ -1117,8 +1118,11 @@ public:
 
     // e^{-H dtau} Strang steps with per-step renormalization. Each step: one
     // submission for the imaginary body + norm reduction + partials readback,
-    // a host-double finish on THAT readback, then the 1/sqrt(norm) scale
-    // submission. The pre-renorm norm decays as e^{-2 E dtau} -> free energy.
+    // then either the GPU finalize + rescale inside that same submission
+    // (fused_relax_ok_; the host reads the partials only for the double
+    // energy/peak stats) or, without those kernels, a host-double finish on
+    // THAT readback and a 1/sqrt(norm) scale submission. The pre-renorm norm
+    // decays as e^{-2 E dtau} -> free energy.
     RelaxStats relax_step(int nsteps) {
         wait_async();
         RelaxStats stats;
@@ -1410,9 +1414,6 @@ public:
         const int nbx = (grid_.x.n - 1 + 7) / 8;
         const int nby = (grid_.y.n - 1 + 7) / 8;
         const int nbz = (grid_.z.n - 1 + 7) / 8;
-        mc_nblk_[0] = nbx;
-        mc_nblk_[1] = nby;
-        mc_nblk_[2] = nbz;
         mc_nblocks_ = static_cast<std::uint32_t>(nbx * nby * nbz);
         if (mc_nblocks_ == 0 || mc_nblocks_ > 65535) {
             std::fprintf(stderr, "ses_vk: mc block count %u out of range\n",
@@ -1575,7 +1576,6 @@ public:
         }
         Recorder r{shot.cb(), true};
         barrier_compute_to_compute(shot.cb());  // psi vs earlier submissions
-        r.require_barrier();
         r.dispatch(mc_density_, mc_den_set_, mul_groups_);
         r.dispatch(mc_classify_, mc_classify_set_, mc_nblocks_);
         r.dispatch(mc_scan_, mc_scan_set_, 1);
@@ -1694,7 +1694,6 @@ private:
     // [class.access.spec]; the definition lives in the private section).
     struct Recorder;
 
-public:
     // psi <- psi * mask: the absorbing-boundary damp, recorded once PER STEP
     // so the absorption rate cannot depend on how steps are batched.
     void record_absorb(Recorder& r, bool absorb) {
@@ -1725,6 +1724,7 @@ public:
         return false;
     }
 
+public:
     void apply_mask(int handle) {
         wait_async();
         State* st = state_at(handle);
@@ -1967,7 +1967,7 @@ public:
         for (int s = 0; s < n; ++s) {
             const TwoCenterParams p =
                 two_center_params(R, axes[static_cast<std::size_t>(s)]);
-            std::memcpy(slots + static_cast<std::size_t>(s) * kick_stride_, &p,
+            std::memcpy(slots + static_cast<std::size_t>(s) * ubo_slot_stride_, &p,
                         sizeof(p));
         }
         vmaFlushAllocation(ctx_->allocator, tc_sched_ubo_.alloc, 0,
@@ -2296,14 +2296,12 @@ public:
 
     // Interleaved RG floats, 2 per cell.
     bool readback(std::vector<float>& out) {
+        wait_async();  // reads psi: never mid-batch
         OneShot shot;
         if (!shot.begin_compute(*ctx_)) {
             return false;
         }
-        barrier_compute_to_transfer(shot.cb());
-        const VkBufferCopy down{0, 0, field_bytes_};
-        vkCmdCopyBuffer(shot.cb(), psi_.buf, staging_.buf, 1, &down);
-        barrier_transfer_to_host(shot.cb());
+        record_buffer_readback(shot.cb(), psi_, field_bytes_);
         const bool ok = shot.submit_and_wait(*ctx_);
         if (!ok) {
             return false;
@@ -2457,6 +2455,8 @@ public:
 
 private:
     static constexpr std::uint32_t kGroups = 256;
+    static_assert(kGroups <= 256,
+                  "norm_finalize.comp folds the partials in ONE 256-lane workgroup");
 
     // Null the lazily-created descriptor-set handles + the *_ok_ / cache-size
     // memos after destroy(): the arena that owned the sets is gone, so a
@@ -2498,7 +2498,6 @@ private:
         staging_bytes_ = 0;
         mc_max_tris_ = 0;
         mc_nblocks_ = 0;
-        mc_nblk_[0] = mc_nblk_[1] = mc_nblk_[2] = 0;
         vol_write_ = 0;
         vol_display_ = -1;
         volume_layout_[0] = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -2766,7 +2765,7 @@ private:
         return true;
     }
 
-    // Grow the dynamic-offset schedule UBO to `n` slots (kick_stride_ each;
+    // Grow the dynamic-offset schedule UBO to `n` slots (ubo_slot_stride_ each;
     // initialize() sizes it for TwoCenterParams) and (re)point its set.
     bool ensure_two_center_slots(int n) {
         if (tc_sched_ubo_.buf != VK_NULL_HANDLE && tc_slots_ >= n) {
@@ -2774,7 +2773,7 @@ private:
         }
         ctx_->destroy_buffer(&tc_sched_ubo_);
         if (!ctx_->create_host_buffer(
-                static_cast<VkDeviceSize>(kick_stride_) * n,
+                static_cast<VkDeviceSize>(ubo_slot_stride_) * n,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &tc_sched_ubo_)) {
             return false;
         }
@@ -3041,12 +3040,6 @@ private:
         return np;
     }
 
-    // Lazily create the RG16F volume + the store side of the bridge: one
-    // submission transitions UNDEFINED -> GENERAL for the compute stores
-    // (write_psi_to_volume owns the GENERAL <-> SHADER_READ_ONLY round-trip
-    // from then on). fp16 is DISPLAY-ONLY: physics stays in the fp32 psi
-    // SSBO; the texture units convert fp16 texels to fp32 on sample, so
-    // half the raymarch/occupancy/shadow traffic costs no shader math.
     // Flow-velocity volume contract with the renderer's sampler: side capped
     // at kFlowVelMaxDim (low-res field, bandwidth), speeds clamped to
     // kFlowVelVmax a.u. by flow_velocity.comp (streakline stability).
@@ -3071,6 +3064,12 @@ private:
         return false;
     }
 
+    // Lazily create the RG16F volume + the store side of the bridge: one
+    // submission transitions UNDEFINED -> GENERAL for the compute stores
+    // (write_psi_to_volume owns the GENERAL <-> SHADER_READ_ONLY round-trip
+    // from then on). fp16 is DISPLAY-ONLY: physics stays in the fp32 psi
+    // SSBO; the texture units convert fp16 texels to fp32 on sample, so
+    // half the raymarch/occupancy/shadow traffic costs no shader math.
     bool ensure_volume() {
         if (store_set_[0] != VK_NULL_HANDLE) {
             return true;
@@ -3446,7 +3445,7 @@ private:
     // descriptor set at the new buffer (rewriting a fence-idle set is legal).
     bool ensure_kick_capacity(int kicks) {
         const VkDeviceSize need =
-            static_cast<VkDeviceSize>(kick_stride_) * kicks;
+            static_cast<VkDeviceSize>(ubo_slot_stride_) * kicks;
         if (kick_ubo_.buf != VK_NULL_HANDLE && kick_slots_ >= kicks) {
             return true;
         }
@@ -3734,7 +3733,9 @@ private:
     VkDeviceSize field_bytes_ = 0;
     double cell_volume_ = 1.0;
     double dtau_ = 0.0;
-    std::uint32_t kick_stride_ = 256;
+    // Dynamic-UBO slot stride shared by the kick AND two-center schedule UBOs
+    // (sized in initialize()); a kick-only name once let them overlap.
+    std::uint32_t ubo_slot_stride_ = 256;
     int kick_slots_ = 0;
 
     Kernel mul_;
@@ -3814,7 +3815,6 @@ private:
     Buffer fullp_ubo_{};  // coef = -dt (interior full kick)
     Buffer kinp_ubo_{};
     Buffer damp_buf_{};  // real absorber mask, R32
-    double dt_step_ = 0.0;
     double inv_mass_ = 1.0;  // 1/m for the real-time kinetic (k^2 table scale)
     Buffer partials_{};
     Buffer staging_{};
@@ -3910,7 +3910,7 @@ private:
     bool mc_buffers_ok_ = false;
     bool mc_overflow_warned_ = false;
     int mc_max_tris_ = 0;
-    int mc_nblk_[3] = {0, 0, 0};
+
     std::uint32_t mc_nblocks_ = 0;
     VkDescriptorSet conj1_set_ = VK_NULL_HANDLE;
     VkDescriptorSet conjN_set_ = VK_NULL_HANDLE;
@@ -3927,7 +3927,7 @@ private:
     VkDescriptorSet relax_kin_set_ = VK_NULL_HANDLE;
     VkDescriptorSet force_set_ = VK_NULL_HANDLE;
     Buffer tc_ubo_;                                    // TwoCenterParams (host-visible)
-    Buffer tc_sched_ubo_;                              // per-step slots (kick_stride_)
+    Buffer tc_sched_ubo_;                              // per-step slots (ubo_slot_stride_)
     Buffer tc_partials_;                               // {F1, F2} per group
     VkDescriptorSet tc_pot_set_ = VK_NULL_HANDLE;
     VkDescriptorSet tc_sched_set_ = VK_NULL_HANDLE;
