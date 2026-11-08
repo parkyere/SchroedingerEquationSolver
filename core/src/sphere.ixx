@@ -8,8 +8,9 @@ export import ses.marching_cubes;
 export import ses.vec;
 
 
-// UV-sphere triangle soup; shared directions (j % segments wrap) weld
-// seams/poles bitwise -> watertight by construction.
+// UV-sphere triangle soup; shared directions (j % segments wrap) weld the
+// seam bitwise; the per-segment pole vertices agree only to rounding
+// (sin(pi) != 0).
 
 
 export namespace ses {
@@ -62,8 +63,9 @@ inline Mesh sphere_mesh(Vec3d center, double radius, int rings, int segments) {
     return m;
 }
 
-// Normals are unit but not outward-oriented; mesh shader lights with
-// abs(dot(n, view)).
+// Unit OUTWARD normals (shaft radial, base caps -d, cone head); triangles CCW
+// from outside. mesh.frag's diffuse uses abs(dot(n, view)); its specular
+// max(dot(n, view), 0) needs the outward sign.
 inline Mesh arrow_mesh(Vec3d dir, double len, double shaft_r, double head_r,
                        double head_frac, int segments) {
     const Vec3d d = normalized(dir);

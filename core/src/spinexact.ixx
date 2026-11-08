@@ -347,10 +347,10 @@ inline int exact_measure_z(SpinState16& s, int site, double u) {
     return outcome;
 }
 
-// ---- Gate fusion (Stage 1 of the canonical state-vector path) ----
+// ---- Gate fusion (CPU oracle of vkcheck spin_fused_gate; no runtime user yet) ----
 // A dense gate on up to k qubits: (1<<k)x(1<<k) row-major matrix + ascending
 // qubit list. apply_fused = per orbit gather 2^k amplitudes, matmul, scatter --
-// the CPU truth the GPU shared-memory-blocked kernel will mirror. Basis bit b of
+// the CPU truth spin_fused_gate.comp mirrors (one thread per orbit). Basis bit b of
 // the local index selects qubits[b]; local 0 = site up (grid bit clear).
 struct FusedGate {
     std::vector<int> qubits;
@@ -549,7 +549,7 @@ inline std::vector<FusedGate> fuse_gates(const std::vector<FusedGate>& gs,
     return out;
 }
 
-// ---- Qubit reordering (Stage 3: the local/global relabel mechanism) ----
+// ---- Qubit reordering (CPU oracle of vkcheck spin_permute; no runtime user yet) ----
 // A qubit permutation is a bijection of the 16-bit index. Reordering brings the
 // qubits a gate touches into a contiguous low window (coalesced access, no
 // fusion-window overflow) -- the single-GPU form of Intel-QS / cuStateVec's

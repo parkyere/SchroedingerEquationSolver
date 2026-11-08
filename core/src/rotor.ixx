@@ -69,7 +69,9 @@ inline bool rotor_kick(RigidRotor& r, Vec3d axis, double dJ,
     return true;
 }
 
-// Velocity-Verlet on the sphere: half-kick, EXACT rotation of n about omega,
+// Kick-drift-kick on the sphere with ONE torque sample for both half-kicks
+// (exact for constant tau, first order in tau(t) -- not velocity-Verlet):
+// half-kick, EXACT rotation of n about omega,
 // half-kick; L re-projected perpendicular to the new axis. Free rotation is
 // exact for any dt (a torque enters only through the half-kicks).
 inline void rotor_step(RigidRotor& r, Vec3d tau, double dt) {
