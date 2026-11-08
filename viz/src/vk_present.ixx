@@ -145,11 +145,16 @@ public:
         // destroyed view. One descriptor write per frame is negligible.
         update_descriptor(scene_view);
 
-        vkResetCommandPool(ctx_->device, pool_, 0);
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cb_, &bi);
+        // Checked like the solver's OneShot: recording into a cb whose reset
+        // or begin failed is undefined.
+        if (!checked(vkResetCommandPool(ctx_->device, pool_, 0),
+                     "present-blit pool reset") ||
+            !checked(vkBeginCommandBuffer(cb_, &bi), "present-blit cb begin")) {
+            return false;
+        }
 
         // Dynamic rendering (no render pass). Acquire semaphore (waited at
         // COLOR_ATTACHMENT_OUTPUT on submit) gates availability; render_done_ gates present.
@@ -196,7 +201,9 @@ public:
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0);
-        vkEndCommandBuffer(cb_);
+        if (!checked(vkEndCommandBuffer(cb_), "present-blit cb end")) {
+            return false;
+        }
 
         const VkPipelineStageFlags wait_stage =
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -209,7 +216,10 @@ public:
         si.pCommandBuffers = &cb_;
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores = &render_done_[idx];
-        vkResetFences(ctx_->device, 1, &fence_);
+        if (!checked(vkResetFences(ctx_->device, 1, &fence_),
+                     "present-blit fence reset")) {
+            return false;
+        }
         const VkResult sr = vkQueueSubmit(ctx_->queue, 1, &si, fence_);
         if (sr != VK_SUCCESS) {
             std::fprintf(stderr, "vk: present-blit submit %s\n", ses_vk::vk_result_str(sr));
@@ -243,6 +253,17 @@ public:
     }
 
 private:
+    // A failed call reports, latches device loss (as the submit and fence-wait
+    // paths do) and returns false.
+    bool checked(VkResult r, const char* what) {
+        if (r == VK_SUCCESS) {
+            return true;
+        }
+        std::fprintf(stderr, "vk: %s %s\n", what, ses_vk::vk_result_str(r));
+        ctx_->device_lost = true;
+        return false;
+    }
+
     bool pick_format(VkSurfaceFormatKHR* out) {
         std::uint32_t n = 0;
         vkGetPhysicalDeviceSurfaceFormatsKHR(ctx_->phys_dev, surface_, &n,
@@ -489,10 +510,19 @@ private:
             VK_SUCCESS) {
             return false;
         }
+        // An empty or short image list would let present() index images_
+        // past its end with the acquired index.
         std::uint32_t n = 0;
-        vkGetSwapchainImagesKHR(ctx_->device, swapchain_, &n, nullptr);
+        if (vkGetSwapchainImagesKHR(ctx_->device, swapchain_, &n, nullptr) !=
+                VK_SUCCESS ||
+            n == 0) {
+            return false;
+        }
         images_.resize(n);
-        vkGetSwapchainImagesKHR(ctx_->device, swapchain_, &n, images_.data());
+        if (vkGetSwapchainImagesKHR(ctx_->device, swapchain_, &n,
+                                    images_.data()) != VK_SUCCESS) {
+            return false;  // VK_INCOMPLETE included: the list must be whole
+        }
         views_.resize(n, VK_NULL_HANDLE);
         for (std::uint32_t i = 0; i < n; ++i) {
             VkImageViewCreateInfo vci{};
