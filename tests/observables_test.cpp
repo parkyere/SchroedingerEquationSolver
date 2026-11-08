@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <complex>
+#include <vector>
 
 import ses.field;
 import ses.grid;

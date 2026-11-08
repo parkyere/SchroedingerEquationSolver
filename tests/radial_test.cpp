@@ -194,7 +194,7 @@ TEST(BoundLevelTable, CountsAllFiftyFiveLevelsUpToNTen) {
     for (const ses::LevelInfo& e : table) {
         if (e.n == 1 || (e.n == 2 && e.l == 0)) {
             EXPECT_EQ(e.lifetime, 0.0);
-        } else if (e.n > 1) {
+        } else {
             EXPECT_GT(e.lifetime, 0.0);
         }
     }

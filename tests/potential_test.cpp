@@ -423,8 +423,7 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateIsBelowBudget) {
     // (cube average: -0.4913, point sampling: -0.4923).
     EXPECT_NEAR(e.front(), -0.5, 2.0e-3);
     const ses::Vec3d corner{0.5 * kEggBoxH, 0.5 * kEggBoxH, 0.5 * kEggBoxH};
-    const double coarse = relaxed_ground_energy(kEggBoxGrid, corner, 0.05, 400) -
-                          e.front();
+    const double coarse = e[4] - e.front();  // kEggBoxOffsets[4] == corner
     const double fine = relaxed_ground_energy(kEggBoxGrid, corner, 0.025, 800) -
                         relaxed_ground_energy(kEggBoxGrid, {}, 0.025, 800);
     std::printf("  on-point -> corner at dtau 0.05: %.3e, dtau 0.025: %.3e Ha\n",
@@ -446,7 +445,8 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
                                       kEggBoxGrid,
                                       {0.5 * kEggBoxH, 0.5 * kEggBoxH, 0.5 * kEggBoxH},
                                       0.05, 400)});
-    const double refined = spread({relaxed_ground_energy(fine, {}, 0.03, 600),
+    const double e_fine_on = relaxed_ground_energy(fine, {}, 0.03, 600);
+    const double refined = spread({e_fine_on,
                                    relaxed_ground_energy(
                                        fine, {0.5 * hf, 0.5 * hf, 0.5 * hf},
                                        0.03, 600)});
@@ -454,7 +454,7 @@ TEST(RegularizedCoulomb, EggBoxOfTheRelaxedGroundStateConvergesWithSpacing) {
                 refined);
     EXPECT_LT(refined, 5.0e-5);
     EXPECT_LT(refined, coarse / 6.0);
-    EXPECT_NEAR(relaxed_ground_energy(fine, {}, 0.03, 600), -0.5, 2.0e-3);
+    EXPECT_NEAR(e_fine_on, -0.5, 2.0e-3);
 }
 
 // ---- Trotter-phase guard: a kick e^{-iV dt/2} with |V| dt/2 > pi ALIASES
