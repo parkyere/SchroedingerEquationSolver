@@ -3,12 +3,9 @@ module;
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
-#include <array>
 #include <cmath>
-#include <complex>
 #include <cstdio>
 #include <iterator>
-#include <random>
 #include <string>
 #include <vector>
 export module ses.scenario.harmonic_director;
