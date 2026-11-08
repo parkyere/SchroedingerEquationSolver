@@ -634,8 +634,8 @@ public:
             return;
         }
         const bool bridged = record_step_batch(shot.cb(), nsteps, flags);
-        shot.submit_and_wait(*ctx_);
-        if (bridged) {
+        const bool ran = shot.submit_and_wait(*ctx_);
+        if (bridged && ran) {  // a failed batch wrote no volume: keep the display
             flip_volume();
         }
     }
@@ -929,8 +929,8 @@ public:
             record_absorb(r, flags.absorb);
         }
         const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
-        shot.submit_and_wait(*ctx_);
-        if (bridged) {
+        const bool ran = shot.submit_and_wait(*ctx_);
+        if (bridged && ran) {  // a failed batch wrote no volume: keep the display
             flip_volume();
         }
     }
@@ -1049,8 +1049,8 @@ public:
             record_absorb(r, flags.absorb);
         }
         const bool bridged = record_bridge_tail(shot.cb(), flags.bridge);
-        shot.submit_and_wait(*ctx_);
-        if (bridged) {
+        const bool ran = shot.submit_and_wait(*ctx_);
+        if (bridged && ran) {  // a failed batch wrote no volume: keep the display
             flip_volume();
         }
     }
@@ -1804,7 +1804,9 @@ public:
         transition_volume(shot.cb(), vol_write_,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         record_flow_velocity(shot.cb());
-        shot.submit_and_wait(*ctx_);
+        if (!shot.submit_and_wait(*ctx_)) {
+            return false;  // nothing written: keep the display volume
+        }
         flip_volume();
         return true;
     }

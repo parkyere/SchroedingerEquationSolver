@@ -3758,6 +3758,48 @@ bool check_fault_synth_submit(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
+// step (bridge) / write_psi_to_volume: a failed submit wrote no volume, so
+// the display must stay on the last completed write -- no flip onto the
+// unwritten ping-pong image -- and write_psi_to_volume reports the failure.
+bool check_fault_bridge_submit(ses_vk::DeviceContext& ctx) {
+    const char* name = "fault bridge submit";
+    FaultRig rig;
+    ses_vk::Engine e;
+    if (!rig.boot(ctx, e, name, false)) {
+        return false;
+    }
+    if (!e.write_psi_to_volume()) {  // creates + shows the first volume
+        std::printf("%s: first volume write FAIL\n", name);
+        e.destroy();
+        return false;
+    }
+    const VkImageView shown = e.volume_view();
+    ses_vk::StepFlags bridge;
+    bridge.bridge = true;
+    ctx.fault.submit_fail_after = 0;
+    e.step(1, bridge);
+    const bool step_consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool step_latched = take_latch(ctx);
+    const bool step_kept = e.volume_view() == shown;
+    ctx.fault.submit_fail_after = 0;
+    const bool write_refused = !e.write_psi_to_volume();
+    const bool write_consumed = ctx.fault.submit_fail_after < 0;
+    ctx.fault.submit_fail_after = -1;
+    const bool write_latched = take_latch(ctx);
+    const bool write_kept = e.volume_view() == shown;
+    e.destroy();
+    const bool pass = step_consumed && step_latched && step_kept &&
+                      write_refused && write_consumed && write_latched &&
+                      write_kept;
+    std::printf("%s (raw Vulkan): step consumed %d latched %d kept %d; "
+                "write refused %d consumed %d latched %d kept %d  [%s]\n",
+                name, step_consumed, step_latched, step_kept, write_refused,
+                write_consumed, write_latched, write_kept,
+                pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 // SpinEngine::measure_exact: a failed measurement submit must report nullopt
 // (0 is a valid outcome: no sentinel) and latch device_lost.
 bool check_fault_spin_measure(ses_vk::DeviceContext& ctx) {
@@ -4134,6 +4176,7 @@ int main() {
         {"fault_async_end", check_fault_async_end},
         {"fault_deflation_inner", check_fault_deflation_inner},
         {"fault_synth_submit", check_fault_synth_submit},
+        {"fault_bridge_submit", check_fault_bridge_submit},
         {"fault_spin_measure", check_fault_spin_measure},
         {"lattice2d_size_guard", check_lattice2d_size_guard},
     };
