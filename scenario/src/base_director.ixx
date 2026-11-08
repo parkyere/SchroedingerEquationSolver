@@ -111,8 +111,9 @@ struct PhotonStreakDisplay {
 
 class BaseDirector : public ScenarioDirector {
 public:
+    // Boots in Cloud: only the volume is staged. The CPU mesh is built on
+    // Surface entry (toggle_view_mode -> stage_active_view), its only reader.
     explicit BaseDirector(ses::WavepacketSimulation sim) : sim_(std::move(sim)) {
-        remesh();
         stage_volume();
     }
 
