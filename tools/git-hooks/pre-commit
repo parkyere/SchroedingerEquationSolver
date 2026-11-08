@@ -23,7 +23,14 @@ has_test=0
 has_prod=0
 
 # D included: deleting a test alongside production code is still a mix.
+# --no-renames: a rename would list only its NEW path, so a test moved out of
+# tests/ (a TEST deletion) would slip through beside a production edit.
 # NUL-separated so a path with spaces or glob characters classifies intact.
+# The list is captured first: a failing git inside the process substitution
+# would read as "nothing staged" and pass.
+staged=$(mktemp)
+trap 'rm -f "$staged"' EXIT
+git diff --cached --name-only -z --no-renames --diff-filter=ACDMR > "$staged"
 while IFS= read -r -d '' f; do
     case "$f" in
         */CMakeLists.txt)
@@ -35,7 +42,7 @@ while IFS= read -r -d '' f; do
         *)
             : ;;  # neutral - ignored
     esac
-done < <(git diff --cached --name-only -z --diff-filter=ACDMR)
+done < "$staged"
 
 if [ "$has_test" -eq 1 ] && [ "$has_prod" -eq 1 ]; then
     echo "------------------------------------------------------------------" >&2
