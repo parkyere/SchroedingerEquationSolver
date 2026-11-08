@@ -269,6 +269,11 @@ public:
     }
 
     void set_relaxing() override {
+        // Like keys 3/4 and the measurements: the atlas finale never resets
+        // a Relaxing armed mid-build, which would cool the boot state to 1s.
+        if (solving()) {
+            return;
+        }
         if (use_gpu_path() && !ensure_relax_tables()) {
             return;  // no tables, no imaginary time
         }
@@ -1238,10 +1243,16 @@ private:
         // transfer-vs-compute ordering against it -- drain first.
         engine_.wait_async();
         // Memo: sliders re-fire every drag frame and reset calls with 0/0 --
-        // skip the 67 MB upload when nothing changed.
-        if (fields_.e0 == uploaded_e0_ && fields_.b == uploaded_b_ &&
-            fields_.e_axis == uploaded_e_axis_ &&
-            fields_.b_axis == uploaded_b_axis_) {
+        // skip the 67 MB upload when nothing changed. A field's axis only
+        // matters while that field is on (an axis click at zero field would
+        // otherwise re-upload the same V and drop the relax tables).
+        const bool e_same =
+            fields_.e0 == uploaded_e0_ &&
+            (!fields_.e_active() || fields_.e_axis == uploaded_e_axis_);
+        const bool b_same =
+            fields_.b == uploaded_b_ &&
+            (!fields_.b_active() || fields_.b_axis == uploaded_b_axis_);
+        if (e_same && b_same) {
             return;
         }
         std::vector<double> v = sim_.potential();
