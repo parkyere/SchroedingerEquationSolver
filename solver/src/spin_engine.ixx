@@ -370,7 +370,7 @@ public:
         bool first = true;
         // Strang palindrome over n steps, field half-sweeps MERGED at internal
         // boundaries: (1/2)F [ B_fwd B_rev (F | (1/2)F) ]^n, using
-        // exp(θH)exp(θH)=exp(2θH) so 2 half-sweeps collapse to 1 full-sweep.
+        // exp(aH)exp(aH)=exp(2aH) so 2 half-sweeps collapse to 1 full-sweep.
         if (has_field_) {
             for (int s = 0; s < ses::kExactSites; ++s) {
                 dispatch_site(cb, s, first, site_set_);  // leading half-sweep

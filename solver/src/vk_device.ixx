@@ -17,6 +17,11 @@ export module ses.vk.device;
 
 export namespace ses_vk {
 
+// The ONE Vulkan version the app is written against: the instance's
+// VkApplicationInfo::apiVersion, VMA's vulkanApiVersion and ImGui's ApiVersion
+// (1.3, not 1.4: see create_instance).
+inline constexpr std::uint32_t kInstanceApiVersion = VK_API_VERSION_1_3;
+
 // pUserData is the owning DeviceContext's validation_errors counter.
 inline VKAPI_ATTR VkBool32 VKAPI_CALL debug_utils_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -167,9 +172,10 @@ struct DeviceContext {
         ai.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         ai.pApplicationName = "sesolver";
         // Vulkan 1.3 not 1.4: apiVersion 1.4 hangs the GPU (device lost) on some
-        // NVIDIA drivers and no 1.4 feature is used. VMA/ImGui use the device's
-        // REAL apiVersion (aci.vulkanApiVersion), not this.
-        ai.apiVersion = VK_API_VERSION_1_3;
+        // NVIDIA drivers and no 1.4 feature is used. VMA and ImGui are given
+        // this same version (VMA requires <= the instance's apiVersion); the
+        // boot gate in create_device guarantees the device has >= 1.3.
+        ai.apiVersion = kInstanceApiVersion;
         VkInstanceCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ici.pApplicationInfo = &ai;
@@ -364,7 +370,9 @@ struct DeviceContext {
         aci.device = device;
         aci.instance = instance;
         aci.pVulkanFunctions = &fns;
-        aci.vulkanApiVersion = props.apiVersion;  // device's real version (VMA must not exceed it)
+        // VMA: "must be less or equal to VkApplicationInfo::apiVersion" (and it
+        // knows 1.0-1.3 only) -- the device's real version may be 1.4.
+        aci.vulkanApiVersion = kInstanceApiVersion;
         if (vmaCreateAllocator(&aci, &allocator) != VK_SUCCESS) {
             return Boot::error;
         }
