@@ -54,4 +54,18 @@ TEST(SpinDirector, RfDriveIsResonantForAnyFieldDirection) {
     EXPECT_GT(rabi_quarter_peak(0.3, -0.25, -0.3), 0.95) << "oblique B";
 }
 
+// The Bloch arrow and <s> follow every state change, not only time steps:
+// a Measure, a pulse or a Reset made while paused must show at once.
+TEST(SpinDirector, BlochReadoutFollowsInstantOperations) {
+    ses_shell::SpinDirector d;
+    ses_shell::SpinApi* s = d.spin();
+    d.measure_now();  // boot +x, B along +z: collapses onto +-z
+    EXPECT_NEAR(std::abs(s->bloch_z()), 1.0, 1e-9);
+    EXPECT_NEAR(s->bloch_x(), 0.0, 1e-9);
+    s->pulse(ses_shell::Pulse::Half);  // +-z tipped into the x = 0 plane
+    EXPECT_NEAR(std::abs(s->bloch_y()), 1.0, 1e-9);
+    d.reset_simulation();  // back to the boot +x
+    EXPECT_NEAR(s->bloch_x(), 1.0, 1e-9);
+}
+
 }  // namespace
