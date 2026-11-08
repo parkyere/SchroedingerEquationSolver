@@ -3943,6 +3943,11 @@ bool check_engine_two_center_potential_values(ses_vk::DeviceContext& ctx) {
     engine.destroy();
     const std::vector<double> cpu =
         ses::regularized_coulomb_potential(rig.g, 1.0, rig.centers());
+    if (gpu.size() != cpu.size()) {  // before the loop indexes gpu[i]
+        std::printf("%s (raw Vulkan): readback size %zu != %zu  [FAIL]\n",
+                    name, gpu.size(), cpu.size());
+        return false;
+    }
     double max_err = 0.0;
     double max_mag = 0.0;
     for (std::size_t i = 0; i < cpu.size(); ++i) {
@@ -3950,7 +3955,7 @@ bool check_engine_two_center_potential_values(ses_vk::DeviceContext& ctx) {
         max_mag = std::max(max_mag, std::abs(cpu[i]));
     }
     const double tol = 2e-5;  // abs, Ha; |V| <= 2/h = 8 here, float32 Si ~1e-6
-    const bool pass = gpu.size() == cpu.size() && max_err < tol;
+    const bool pass = max_err < tol;
     std::printf("%s (raw Vulkan): max |V_gpu - V_cpu| = %.3e Ha (|V| <= %.2f, "
                 "tol %.1e)  [%s]\n",
                 name, max_err, max_mag, tol, pass ? "PASS" : "FAIL");

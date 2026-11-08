@@ -663,7 +663,7 @@ inline bool dump_scene_bmp(ses_vk::DeviceContext& ctx, VkImage img,
     hdr[kBmpOffPlanes] = 1;
     hdr[kBmpOffBpp] = 24;
     put32(kBmpOffDataSize, data_size);
-    std::fwrite(hdr, 1, kBmpHeaderSize, f);
+    bool wrote = std::fwrite(hdr, 1, kBmpHeaderSize, f) == kBmpHeaderSize;
     const unsigned char* px = static_cast<const unsigned char*>(host.mapped);
     std::vector<unsigned char> line(row, 0);
     for (std::uint32_t y = 0; y < h; ++y) {
@@ -673,11 +673,12 @@ inline bool dump_scene_bmp(ses_vk::DeviceContext& ctx, VkImage img,
             line[3 * x + 1] = src[4 * x + 1];  // G
             line[3 * x + 2] = src[4 * x + 0];  // R
         }
-        std::fwrite(line.data(), 1, row, f);
+        wrote = wrote && std::fwrite(line.data(), 1, row, f) == row;
     }
-    std::fclose(f);
+    // A short write (ENOSPC, EIO) must not let the dump arcs report PASS.
+    wrote = (std::fclose(f) == 0) && wrote;
     ctx.destroy_buffer(&host);
-    return true;
+    return wrote;
 }
 
 }  // namespace ses_shell

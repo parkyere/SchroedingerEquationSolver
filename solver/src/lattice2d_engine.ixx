@@ -65,7 +65,7 @@ public:
                             ssb_ssb_ubo)) {
             return false;
         }
-        // 16 sets (RT: phase+2sx+2sy; IT: phase+2sx+2sy; 3 norm; damp); headroom.
+        // 14 sets (RT: phase+2sx+2sy; IT: phase+2sx+2sy; 3 norm; damp); headroom.
         if (!arena_.create(ctx, 24, 64, 32)) {
             return false;
         }

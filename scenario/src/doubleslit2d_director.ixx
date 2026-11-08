@@ -297,7 +297,9 @@ private:
             eng_.set_lattice(phys_grid_, wallv_, kDs2dDt);
             if (eng_.ready()) {
                 eng_.set_solenoid(flux_, solenoid_x(), 0.0);
-                eng_.set_absorber(mask_);  // set_lattice resets links/absorber
+                // Re-applied: a same-size set_lattice keeps the old links and
+                // absorber, a resize resets them.
+                eng_.set_absorber(mask_);
             } else {
                 eng_ok_ = false;  // psi_ is read back every step: CPU resumes
             }
