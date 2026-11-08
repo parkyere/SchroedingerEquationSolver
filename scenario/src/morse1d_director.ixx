@@ -58,14 +58,14 @@ public:
         const int target = from + (r == Rung::Up ? 1 : -1);
         if (target < 0 || target >= bound_count()) {
             note_ = r == Rung::Up ? "top bound level (dissociation above)"
-                                  : "already the ground state";
+                    : level_ >= 0 ? "already the ground state"
+                                  : "no level below the pair";
             title_dirty_ = true;
             return false;
         }
         level_ = target;
         base_ = target;
-        replace_state(clone(target));
-        set_reset_target(clone(0));
+        replace_state(clone(target));  // reset target stays the ctor's clone(0)
         note_.clear();
         title_dirty_ = true;
         return true;

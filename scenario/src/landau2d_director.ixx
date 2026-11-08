@@ -94,7 +94,8 @@ public:
         ses::normalize(next);
         // Energy ceiling 0.30/h^2 = lattice band top (1D ladder_cap rule),
         // not a rung check: a-dag adds ~2B on the coherent orbit (only B on
-        // eigenstates). CONTRACT: lattice2d_test LadderRefusesPastTheLatticeBand.
+        // eigenstates). CONTRACT: landau2d_director_test
+        // LadderRefusesPastTheLatticeBand.
         const double e_cur = prop_->energy(psi_);
         const double e_next = prop_->energy(next);
         if (up) {

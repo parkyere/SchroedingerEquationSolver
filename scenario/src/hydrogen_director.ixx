@@ -1190,7 +1190,6 @@ private:
         const auto deflate = [this](int state) {
             const int h = atom_.synth_transient(engine_, state);
             relax_deflate_.push_back(h);
-            relax_deflate_owned_.push_back(h);
             return h >= 0;
         };
         const bool complete =
@@ -1274,8 +1273,13 @@ private:
         uploaded_e_axis_ = fields_.e_axis;
         uploaded_b_axis_ = fields_.b_axis;
         // Relax/flush tables must ride the SAME effective potential; resident
-        // stale tables are dropped (never mid-relax: tables in use).
-        v_eff_ = std::move(v);
+        // stale tables are dropped (never mid-relax: tables in use). With the
+        // fields back at zero v is the bare V that sim_ already serves.
+        if (fields_.any_active()) {
+            v_eff_ = std::move(v);
+        } else {
+            std::vector<double>().swap(v_eff_);
+        }
         if (stepping_ == BaseStepping::RealTime) {
             drop_relax_tables();
         }
@@ -1288,12 +1292,12 @@ private:
                                                        : sim_.potential();
     }
 
-    // Free the OWNED transient deflation buffers (synthesized at relax-start).
+    // Free the transient deflation buffers (synthesized at relax-start; a
+    // failed synth's -1 is a no-op for release_state).
     void free_deflation_buffers() {
-        for (int b : relax_deflate_owned_) {
+        for (int b : relax_deflate_) {
             engine_.release_state(b);
         }
-        relax_deflate_owned_.clear();
         relax_deflate_.clear();
     }
 
@@ -1472,8 +1476,7 @@ private:
     // Quantum-jump bookkeeping (decay/flash/measure state lives in base).
     int last_measured_index_ = -2;  // last energy-measurement outcome
     std::string relax_label_ = "2p";
-    std::vector<int> relax_deflate_;        // live RelaxingExcited deflation set
-    std::vector<int> relax_deflate_owned_;  // owned transient states to release
+    std::vector<int> relax_deflate_;  // RelaxingExcited deflation set (owned)
 
     // Startup atlas build (radial solve + synthesis, chunked in paint).
     int synth_next_ = 0;  // cursor into kStateSpec (kNumStates = done)

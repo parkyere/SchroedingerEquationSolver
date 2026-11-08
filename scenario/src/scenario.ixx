@@ -642,14 +642,14 @@ public:
     virtual bool cloud() const = 0;
     virtual double peak() const = 0;
     virtual VkImageView psi_volume_view() = 0;
-    // Low-res fp32 Bohmian-velocity volume for streaklines (null -> renderer
-    // skips flow; only GPU cloud scenes provide it).
+    // Low-res Bohmian-velocity volume (fp32-computed, rgba16f) for streaklines
+    // (null -> renderer skips flow; only GPU cloud scenes provide it).
     virtual VkImageView flow_velocity_view() { return VK_NULL_HANDLE; }
     // GPU surface mesh (non-null when extracted on-GPU); renderer draws these
     // and ignores mesh()/colors().
     virtual VkBuffer surface_vbuf() const { return VK_NULL_HANDLE; }
     virtual VkBuffer surface_indirect() const { return VK_NULL_HANDLE; }
-    // GPU-surface vertex cap; overflow clamps to a clean prefix (engine warns once).
+    // GPU-surface triangle cap; overflow clamps to a clean prefix (engine warns once).
     static constexpr int kMcMaxTris = 1000000;
     virtual float next_flash_intensity() = 0;
     virtual bool take_volume_written() = 0;

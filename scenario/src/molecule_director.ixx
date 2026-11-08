@@ -824,7 +824,13 @@ private:
 
     static std::string mo_label(const ses::H2plusOrbital& o, int partner) {
         const char* g = o.parity > 0 ? "g" : "u";
-        const char* sym = o.m == 0 ? "sigma" : (o.m == 1 ? "pi" : "delta");
+        // Lambda = |m| term symbol; the exposed atlas reaches m = 3 (phi).
+        static constexpr std::array<const char*, 5> kLambda = {
+            "sigma", "pi", "delta", "phi", "gamma"};
+        const char* sym =
+            (o.m >= 0 && o.m < static_cast<int>(kLambda.size()))
+                ? kLambda[static_cast<std::size_t>(o.m)]
+                : "?";
         // principal-ish index within the (m,parity) tower
         std::string s = strf("{}{}_{}{}", o.n_xi + o.n_eta + o.m + 1, sym, g,
                              o.parity < 0 && o.m == 0 ? "*" : "");

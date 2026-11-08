@@ -21,10 +21,12 @@ export namespace ses_shell {
 
 constexpr double kPt1dBox = 80.0;
 constexpr int kPt1dPoints = 65536;
-constexpr double kPt1dLambda = 2.0;
+constexpr double kPt1dLambda = 2.0;  // integer l: reflectionless
 constexpr double kPt1dA = 2.0;
-// l(l+1)/(2 a^2) = 6/8, l = 2, a = 2
-constexpr double kPt1dV0 = 0.75;
+// V0 = l(l+1)/(2 a^2) = 6/8 (exactly 0.75)
+constexpr double kPt1dV0 =
+    kPt1dLambda * (kPt1dLambda + 1.0) / (2.0 * kPt1dA * kPt1dA);
+static_assert(kPt1dV0 == 0.75);
 constexpr double kPt1dK0 = 0.5;
 constexpr double kPt1dLaunchX = -30.0;
 constexpr double kPt1dSigma = 5.0;
