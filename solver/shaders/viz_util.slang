@@ -4,7 +4,8 @@ module viz_util;
 public static const float kPi = 3.14159265358979;
 public static const float kTwoPi = 6.28318530717959;
 
-// atan2 phase -> [0,1) (phase_tex colour-wheel contract).
+// atan2 phase -> [0,1] (phase_tex colour wheel; 1.0 at atan2 = +pi, which
+// the REPEAT phase sampler wraps onto 0).
 public float phase01(float2 s) {
     return (atan2(s.g, s.r) + kPi) / kTwoPi;
 }

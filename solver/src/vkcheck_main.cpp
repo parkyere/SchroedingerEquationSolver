@@ -594,8 +594,9 @@ bool check_dipole_kick(ses_vk::DeviceContext& ctx) {
     return pass;
 }
 
-// <grad V> = sum |psi|^2 grad V: vec4 field-input reduction (grad V at
-// binding 4), vs a CPU double reference (rel 1e-4).
+// <grad V> = sum |psi|^2 grad V: scalar V at binding 4 (periodic central
+// differences in-shader) -> vec4 partials, vs a CPU double reference
+// (rel 1e-4).
 bool check_mean_force(ses_vk::DeviceContext& ctx) {
     // The kernel takes periodic central differences of V in-shader, so the
     // check feeds V (not a precomputed gradient); the CPU reference matches.
@@ -1887,7 +1888,6 @@ bool check_engine_step_modes(ses_vk::DeviceContext& ctx, const ses::Grid3D& g,
                     cmp.max_err, tol, pass ? "PASS" : "FAIL");
         all_pass = all_pass && pass;
     }
-    engine.set_use_vkfft(true);
     return all_pass;
 }
 
@@ -3468,17 +3468,12 @@ bool check_timestamp_profile(ses_vk::DeviceContext& ctx) {
     return step_pass && relax_pass;
 }
 
-}  // namespace
-
-
 // ---- failure-path contracts (fault-injection seam: ctx.fault) -------------
 // Each check arms ONE fault, drives the public API and asserts (1) the
 // failure is reported honestly, (2) the state is exactly what the contract
 // promises, (3) the one-shot flag was consumed at the detection site. The
 // injected failure latches device_lost like a real one; take_latch() reports
 // and clears it (test-only) so the readback and the next check run clean.
-
-namespace {
 
 struct FaultRig {
     ses::Grid3D g{ses::Grid1D{-4.0, 4.0, 8}, ses::Grid1D{-4.0, 4.0, 8},
@@ -3535,8 +3530,6 @@ bool read_or_fail(ses_vk::Engine& e, std::vector<float>& out,
     return true;
 }
 
-}  // namespace
-
 // relax_step: a failed submit must yield NO stats (stale partials would fake
 // energy/peak) and leave psi untouched (the batch was never submitted).
 bool check_fault_relax_submit(ses_vk::DeviceContext& ctx) {
@@ -3579,8 +3572,7 @@ bool check_fault_vkfft_batch(ses_vk::DeviceContext& ctx) {
     if (!rig.boot(ctx, e, name, false)) {
         return false;
     }
-    e.step(1);  // materializes the lazy plan
-    if (!e.vkfft_active()) {
+    if (!e.vkfft_active()) {  // the plan is made (or not) at initialize
         std::printf("%s (raw Vulkan): no native VkFFT plan  [SKIP]\n",
                     name);
         e.destroy();
@@ -3623,7 +3615,7 @@ bool check_fault_async_begin(ses_vk::DeviceContext& ctx) {
     e.wait_async();
     const bool consumed = !ctx.fault.async_begin;
     ctx.fault.async_begin = false;
-    const bool lost = ctx.device_lost;
+    const bool lost = take_latch(ctx);
     ref.step(5);
     std::vector<float> a;
     std::vector<float> b;
@@ -3822,8 +3814,6 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
 
 // ---- H2+ Ehrenfest rotor kernels (CPU oracle: ses.rotor / ses.emission) ---
 
-namespace {
-
 struct RotorRig {
     ses::Grid3D g{ses::Grid1D{-8.0, 8.0, 64}, ses::Grid1D{-8.0, 8.0, 64},
                   ses::Grid1D{-8.0, 8.0, 64}};
@@ -3854,8 +3844,6 @@ double rel_err(ses::Vec3d got, ses::Vec3d want) {
     const double e = ses::length(got - want);
     return m > 0.0 ? e / m : e;
 }
-
-}  // namespace
 
 // set_two_center_potential: the engine boots on a FLAT potential; after the
 // GPU rebuild, 20 real-time steps must match the CPU split-operator built
@@ -4018,6 +4006,8 @@ bool check_engine_two_center_rotating_batch(ses_vk::DeviceContext& ctx) {
                 name, cmp.max_err, tol, pass ? "PASS" : "FAIL");
     return pass;
 }
+
+}  // namespace
 
 int main() {
     const char* env = std::getenv("SES_VK_VALIDATION");

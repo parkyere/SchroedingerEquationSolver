@@ -135,7 +135,7 @@ public:
         float barrier_lo = 0.0f;
         float barrier_hi = 0.0f;
         VkImageView psi_volume = VK_NULL_HANDLE;  // engine bridge; null -> CPU fallback
-        VkImageView flow_velocity = VK_NULL_HANDLE;  // fp32 Bohmian v (streaklines)
+        VkImageView flow_velocity = VK_NULL_HANDLE;  // Bohmian v, rgba16f (streaklines)
         const ses::Mesh* mesh = nullptr;          // non-null: upload isosurface
         const std::vector<ses::Rgb>* mesh_colors = nullptr;
         const std::vector<float>* volume_staging = nullptr;  // RG staging

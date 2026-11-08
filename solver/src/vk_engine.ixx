@@ -683,9 +683,10 @@ public:
     // while the graphics queue renders the previous display volume
     // (ping-pong: the batch writes the OTHER image). Same-queue submission
     // order is NO dependency: every psi/V entry point calls wait_async() first
-    // or opens with a compute barrier (see norm_and_peak); wait_async() reclaims the cb and flips the
-    // display at a host-observed completion point. Falls back to the
-    // blocking step() if the dedicated cb cannot be created.
+    // or opens with a compute barrier (see norm_and_peak); wait_async()
+    // reclaims the cb and flips the display at a host-observed completion
+    // point. Falls back to the blocking step() if the dedicated cb cannot be
+    // created.
     void step_async(int nsteps, StepFlags flags = {}) {
         wait_async();
         if (ctx_->device_lost) {
@@ -3192,9 +3193,9 @@ private:
                              stages, access, stages, access);
         flow_vel_layout_[idx] = to;
     }
-    // Record the fp32 velocity field into flow_vel_[vol_write_] alongside the
-    // display bridge (same psi snapshot). GENERAL for the store, then
-    // SHADER_READ for the renderer's flow sampler.
+    // Record the velocity field (from fp32 psi, stored rgba16f) into
+    // flow_vel_[vol_write_] alongside the display bridge (same psi snapshot).
+    // GENERAL for the store, then SHADER_READ for the renderer's flow sampler.
     void record_flow_velocity(VkCommandBuffer cb) {
         if (!flow_vel_ok_ || flow_vel_set_[vol_write_] == VK_NULL_HANDLE) {
             return;

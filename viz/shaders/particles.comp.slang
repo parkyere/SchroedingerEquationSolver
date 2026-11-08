@@ -22,7 +22,7 @@ struct Params {
 [[vk::binding(1, 0)]] ConstantBuffer<Params, Std140DataLayout> params;
 
 [[vk::binding(2, 0)]] Sampler3D<float4> psi_tex;  // fp16 display volume
-[[vk::binding(3, 0)]] Sampler3D<float4> vel_tex;  // fp32 Bohmian velocity
+[[vk::binding(3, 0)]] Sampler3D<float4> vel_tex;  // Bohmian v (fp32 psi -> rgba16f)
 
 float2 psi_at(float3 p) {
     uint w, h, d;
@@ -32,7 +32,8 @@ float2 psi_at(float3 p) {
     return psi_tex.SampleLevel(uvw, 0.0).xy;
 }
 
-// fp32 (not fp16 display): real eigenstate reads v ~ 0, no spurious pulsation.
+// v from the fp32 psi (not the fp16 display volume), stored rgba16f: a real
+// eigenstate reads v ~ 0, no spurious pulsation.
 float3 vel_at(float3 p) {
     uint w, h, d;
     vel_tex.GetDimensions(w, h, d);
@@ -41,7 +42,8 @@ float3 vel_at(float3 p) {
     return vel_tex.SampleLevel(uvw, 0.0).xyz;
 }
 
-// PCG-ish hash -> [0,1).
+// PCG-ish hash -> [0,1] (float(w) rounds to 2^32, i.e. 1.0, for
+// w >= 2^32 - 128).
 float rnd(inout uint state) {
     state = state * 747796405u + 2891336453u;
     uint w = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
