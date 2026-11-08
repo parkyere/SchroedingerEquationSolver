@@ -7,6 +7,7 @@ module;
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <random>
 #include <string>
 #include <vector>
@@ -336,7 +337,15 @@ protected:
             if (buf_[target_] >= 0) {
                 e_[target_] = relax_energy_display_;
                 prepared_[target_] = true;
+            } else {
+                std::fprintf(stderr, "molecule: state %d buffer allocation "
+                                     "failed -- relax chain stopped\n",
+                             target_);
             }
+        } else {
+            std::fprintf(stderr, "molecule: readback of relaxed state %d "
+                                 "failed -- relax chain stopped\n",
+                         target_);
         }
         title_dirty_ = true;
         if (target_ < want_ && prepared_[target_]) {
@@ -629,8 +638,13 @@ protected:
         // Reset rebuilt only the CPU potential: the device V still holds the
         // last rotated axis, so the first batch would run on it. Rebuild it
         // for the boot axis now (the mean force reads the same buffer).
+        // Then show what boot shows (on_gpu_ready -> prepare(0)): the title
+        // claimed "showing <orbital>" over make()'s Gaussian seed.
         if (use_gpu_path()) {
             engine_.set_two_center_potential(snap_r(param_), rotor_.n);
+            prepare(0);
+        } else {
+            cur_ = -1;  // the seed is showing, not an atlas orbital
         }
     }
 
@@ -879,7 +893,7 @@ private:
 
     mutable std::vector<Mo> atlas_;
     mutable double atlas_R_ = -1.0;
-    int cur_ = 0;  // currently-shown atlas index
+    int cur_ = 0;  // currently-shown atlas index (-1: none)
     ses::RigidRotor rotor_;
     ses::Vec3d e1_{1.0, 0.0, 0.0};  // azimuth reference, parallel-transported
     std::vector<int> flush_deflate_;  // lower members' GPU handles, in flight

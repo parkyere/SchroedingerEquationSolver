@@ -51,6 +51,10 @@ constexpr double kDs2dSepMax = 16.0;
 constexpr double kDs2dWidth = 2.0;
 constexpr double kDs2dWidthMin = 1.0;
 constexpr double kDs2dWidthMax = 4.0;
+// d - w >= this keeps >= 0.5 bohr of middle wall on each side of y = 0, so
+// the solenoid plaquette (y in [0, h]) stays inside the wall: B = 0 on every
+// electron path, the Aharonov-Bohm premise.
+constexpr double kDs2dMinSlab = 1.0;
 constexpr double kDs2dScreenX = 45.0;
 constexpr double kDs2dAbsorb = 10.0;
 // Quadratic CAP peak (ses::quadratic_cap_mask).
@@ -79,13 +83,15 @@ public:
 
     // ---- SlitApi ----
     void set_separation(double d) override {
-        sep_ = std::clamp(d, kDs2dSepMin, kDs2dSepMax);
+        sep_ = std::clamp(d, std::max(kDs2dSepMin, width_ + kDs2dMinSlab),
+                          kDs2dSepMax);
         rebuild_wall_and_prop();
         fire();
     }
     double separation() const override { return sep_; }
     void set_width(double w) override {
-        width_ = std::clamp(w, kDs2dWidthMin, kDs2dWidthMax);
+        width_ = std::clamp(w, kDs2dWidthMin,
+                            std::min(kDs2dWidthMax, sep_ - kDs2dMinSlab));
         rebuild_wall_and_prop();
         fire();
     }
