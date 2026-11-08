@@ -339,9 +339,12 @@ public:
             std::fprintf(stderr, "manifold: %s -> %s  A = %.3e /au  tau = %.3e au%s\n",
                          spec_[c.from].name, spec_[c.to].name, c.a_true,
                          c.a_true > 0.0 ? 1.0 / c.a_true : 0.0,
-                         // forbidden (angular == 0) channels are never built,
-                         // so a tiny rate here is an allowed but weak line
-                         c.a_true < 1e-3 * a_max ? "  [weak]" : "");
+                         // angular-forbidden (dl != +-1) channels are never
+                         // built; a rate this small is a weak allowed line
+                         // (hydrogen 4p-3d) or a radially forbidden one (the
+                         // trap's |dN| != 1, e.g. 3p -> 0s)
+                         c.a_true < 1e-3 * a_max ? "  [weak/radially forbidden]"
+                                                 : "");
         }
         return true;
     }

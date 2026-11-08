@@ -566,7 +566,9 @@ public:
     }
 
     // Cycle a field's axis z->x->y. Both the E tilt and the diamagnetic term
-    // are axis-dependent, so the half-potential is rebuilt either way.
+    // are axis-dependent, so the half-potential is rebuilt while the toggled
+    // field is on; at zero field upload_field_tables' memo skips it (V does
+    // not depend on that axis).
     void toggle_efield_axis() override {
         fields_.cycle_e_axis();
         upload_field_tables();

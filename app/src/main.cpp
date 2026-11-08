@@ -6,7 +6,6 @@
 // imports' GMFs would C2572 (MSVC C++20-modules ordering).
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
