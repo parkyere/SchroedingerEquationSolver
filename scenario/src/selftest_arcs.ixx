@@ -1361,23 +1361,27 @@ void register_verification_arcs(ShellT* the_shell) {
                     if (mo == nullptr) {
                         return;
                     }
-                    const bool count_ok = mo->bound_count() == 6;
+                    const int n = mo->bound_count();
+                    const bool count_ok = n == 6;
+                    // Climbs to the top level; a refusal below it (or more
+                    // than n rungs) fails here instead of spinning the arc.
+                    const auto climb_to_top = [mo, n] {
+                        for (int k = 0; k < n && mo->level() + 1 < n; ++k) {
+                            if (!mo->jump(Rung::Up)) {
+                                return false;
+                            }
+                        }
+                        return mo->level() + 1 == n;
+                    };
                     const double e0 = mo->level_energy();
                     mo->jump(Rung::Up);
                     const double e1 = mo->level_energy();
-                    bool climb_ok = true;
-                    while (mo->level() + 1 < mo->bound_count()) {
-                        climb_ok = climb_ok && mo->jump(Rung::Up);
-                    }
+                    const bool climb_ok = climb_to_top();
                     const double e_top = mo->level_energy();
                     mo->jump(Rung::Down);
                     const double e_below = mo->level_energy();
-                    const bool refuse_ok = [&] {
-                        while (mo->level() + 1 < mo->bound_count()) {
-                            mo->jump(Rung::Up);
-                        }
-                        return !mo->jump(Rung::Up);  // past the top: dissociation
-                    }();
+                    // past the top: dissociation
+                    const bool refuse_ok = climb_to_top() && !mo->jump(Rung::Up);
                     const double gap_bot = e1 - e0;
                     const double gap_top = e_top - e_below;
                     const bool anharm_ok = gap_top < 0.6 * gap_bot;
