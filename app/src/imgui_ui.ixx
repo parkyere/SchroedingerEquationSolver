@@ -40,8 +40,6 @@ struct UiState {
     float ho_omega = 0.25f;
     // matches kDw1dBarrier at boot.
     float dw_barrier = 0.12f;
-    // snapped to the grid by the director.
-    float h2p_r = 2.0f;
     // boot values match the director's.
     float ds_sep = 8.0f;
     float ds_width = 2.0f;
@@ -145,7 +143,7 @@ template <typename ShellT>
 void draw_time_scale(ShellT& shell, UiState& ui) {
     // Read back director truth: a programmatic change (Real time -> x1) must not leave the slider stale.
     ui.time_scale = shell.time_scale();
-    if (ImGui::SliderInt("Time scale", &ui.time_scale, 1, 16, "x%d")) {
+    if (ImGui::SliderInt("Time scale", &ui.time_scale, 1, ses_shell::kTimeScaleMax, "x%d")) {
         shell.set_time_scale(ui.time_scale);
     }
     if (ImGui::IsItemHovered()) {
@@ -260,7 +258,7 @@ inline void draw_energy_spectrometer(const char* title, double emax,
 inline void draw_spectrometer(ses_shell::HydrogenApi& hy) {
     const double emax = hy.spectro_max_ev();
     if (emax <= 0.0) {
-        return;  // not an emission scene (the trap shares this Api)
+        return;  // HydrogenApi default: 0 hides the strip
     }
     char footer[32];
     std::snprintf(footer, sizeof(footer), "photons: %d", hy.spectro_count());

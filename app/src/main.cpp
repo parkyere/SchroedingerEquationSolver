@@ -437,7 +437,6 @@ public:
     ses_shell::BouncerApi* bo() { return director_->bouncer(); }
     ses_shell::SpinApi* sp() { return director_->spin(); }
     ses_shell::SpinsApi* sn() { return director_->spins(); }
-    bool solving() const { return director_->solving(); }
     bool manifold_ready() const { return director_->scene_ready(); }
     void debug_set_camera_distance(double d) {
         distance_ = std::clamp(d, 4.0, 300.0);
@@ -468,7 +467,9 @@ public:
 private:
     // Deferred scene switch: director owns live GPU work, so wait for compute
     // init, idle the device before teardown, then re-run the SAME deferred
-    // compute-init path (window stays live through the new scene's solve).
+    // compute-init path. presented_once_ is already set, so that runs in this
+    // same iteration: the blocking init (plan compile, radial solve) freezes
+    // the old scene's last frame; only the chunked atlas build stays live.
     void apply_pending_scene() {
         if (pending_scene_ < 0 || !compute_init_done_) {
             return;
@@ -517,7 +518,7 @@ private:
         ImGui_ImplSDL3_InitForVulkan(window_);
 
         ImGui_ImplVulkan_InitInfo info{};
-        info.ApiVersion = VK_API_VERSION_1_3;  // the instance's version
+        info.ApiVersion = ses_vk::kInstanceApiVersion;  // the instance's version
         info.Instance = vk_ctx_.instance;
         info.PhysicalDevice = vk_ctx_.phys_dev;
         info.Device = vk_ctx_.device;
@@ -669,6 +670,7 @@ private:
                 // Scene hotkey first; an unhandled F toggles the flow tracers
                 // (Bohmian current).
                 if (director_->handle_key('F')) {
+                    refresh_status();  // as the Z branch and the generic path do
                     return;
                 }
                 toggle_flow();
@@ -766,8 +768,11 @@ private:
                                  ses_vk::SceneRenderer::kMaxOverlayCurves);
         for (int c = 0; c < nov; ++c) {
             const ses_shell::OverlayCurve oc = director_->overlay_curve(c);
-            in.overlay[c] = {oc.xyz, oc.count, oc.r,    oc.g,
-                             oc.b,   oc.a,     oc.fill, oc.rgba};
+            // Designated: a field reorder in either struct is a compile error,
+            // not a silent positional mix-up.
+            in.overlay[c] = {.xyz = oc.xyz, .count = oc.count, .r = oc.r,
+                             .g = oc.g, .b = oc.b, .a = oc.a, .fill = oc.fill,
+                             .rgba = oc.rgba};
         }
         in.overlay_count = nov;
         in.accumulate = ses::accumulate_frame(
@@ -782,7 +787,9 @@ private:
                                  ses_vk::SceneRenderer::kMaxMarkers);
         for (int m = 0; m < nmk; ++m) {
             const ses_shell::SceneMarker mk = director_->marker(m);
-            in.markers[m] = {mk.x, mk.y, mk.z, mk.radius, mk.r, mk.g, mk.b};
+            in.markers[m] = {.x = mk.x, .y = mk.y, .z = mk.z,
+                             .radius = mk.radius, .r = mk.r, .g = mk.g,
+                             .b = mk.b};
         }
         in.marker_count = nmk;
         const std::optional<ses_shell::Slab> slab = director_->barrier_slab();
