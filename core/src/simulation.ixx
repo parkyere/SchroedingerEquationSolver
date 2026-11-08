@@ -2,7 +2,6 @@ module;
 #include <optional>
 #include <utility>
 #include <vector>
-#include <cstdint>
 #include <cassert>
 export module ses.simulation;
 export import ses.grid;

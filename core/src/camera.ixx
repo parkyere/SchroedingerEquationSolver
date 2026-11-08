@@ -1,5 +1,6 @@
 module;
 #include <cmath>
+#include <numbers>
 export module ses.camera;
 import ses.vec;
 
@@ -97,6 +98,11 @@ inline Vec3d orbit_eye(double azimuth, double elevation, double distance, Vec3d 
     return target + distance * Vec3d{ce * std::sin(azimuth), std::sin(elevation),
                                      ce * std::cos(azimuth)};
 }
+
+// Vertical field of view of the stage camera. The renderer's projection and
+// the click-to-stage unprojection must use the same one, or a grab lands off
+// the cursor.
+inline constexpr double kStageFovy = 45.0 * std::numbers::pi / 180.0;
 
 // Unproject an NDC point onto the z=0 stage plane. Contract:
 // tests/pick_test.cpp round-trips perspective * look_at.

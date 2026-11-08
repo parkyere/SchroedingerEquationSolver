@@ -1,5 +1,4 @@
 module;
-#include <cmath>
 #include <cstddef>
 #include <vector>
 export module ses.magnetic;

@@ -2038,7 +2038,7 @@ private:
         const double zfar = in.distance + box_reach + 1.0;
         const double kPi = std::numbers::pi;
         const ses::Mat4 proj =
-            ses::perspective(45.0 * kPi / 180.0, aspect, 0.1, zfar);
+            ses::perspective(ses::kStageFovy, aspect, 0.1, zfar);  // = pick_stage
         const ses::Vec3d eye =
             ses::orbit_eye(in.azimuth, in.elevation, in.distance, ses::Vec3d{});
         const ses::Mat4 view =

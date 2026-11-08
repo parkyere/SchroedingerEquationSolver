@@ -644,12 +644,11 @@ private:
         if (w <= 0 || h <= 0) {
             return false;
         }
-        const double kPi = std::numbers::pi;
         const double ndc_x = 2.0 * mx / w - 1.0;
         const double ndc_y = 1.0 - 2.0 * my / h;
         const ses::StagePick p =
             ses::unproject_to_z0(azimuth_, elevation_, distance_,
-                                 45.0 * kPi / 180.0,
+                                 ses::kStageFovy,  // the renderer's projection
                                  static_cast<double>(w) / h, ndc_x, ndc_y);
         if (p.hit) {
             *out_x = p.x;

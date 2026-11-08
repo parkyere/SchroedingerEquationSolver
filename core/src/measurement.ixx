@@ -3,7 +3,6 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <vector>
-#include <cstdint>
 export module ses.measurement;
 export import ses.grid;
 export import ses.vec;

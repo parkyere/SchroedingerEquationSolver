@@ -3,7 +3,6 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <vector>
-#include <cstdint>
 export module ses.rotation;
 export import ses.grid;
 export import ses.spectral;
