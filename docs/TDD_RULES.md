@@ -26,7 +26,7 @@ Path classification (also enforced by the hook):
 |---|---|
 | TEST | `tests/**` |
 | PRODUCTION | `core/**`, `solver/**`, `viz/**`, `scenario/**`, `app/**` |
-| NEUTRAL | everything else (build, docs, config, tooling) |
+| NEUTRAL | everything else (build, docs, config, tooling) — including every `CMakeLists.txt`, wherever it lives (the hook classifies them so) |
 
 Neutral files may ride along with either a test or a production commit.
 
@@ -35,6 +35,9 @@ Neutral files may ride along with either a test or a production commit.
 ```
 test:     a new (red) test, or test refactor          -> TEST commit
 feat:     production that makes a red test green       -> PRODUCTION commit
+fix:      production defect fix (red test first where   -> PRODUCTION commit
+          the behavior is testable; GPU: with vkcheck)
+perf:     behavior-preserving production speedup       -> PRODUCTION commit
 refactor: behavior-preserving production cleanup       -> PRODUCTION commit
 chore: / build: / docs:   neutral infra                -> NEUTRAL commit
 ```
@@ -62,13 +65,15 @@ canonical example.
 
 ## Humble Object exception
 
-The SDL3 shell in `app/` (window, input, UI, the fullscreen-triangle
-presentation, and the demo scheduling in `main.cpp`) is **not** unit-tested — that is the deliberate
-Humble Object boundary. It must stay logic-free; any logic worth testing is
-pushed down into `core/` and driven test-first there. The shell is verified by
-running it — and by the headless `--selftest-*` and `--dump-frame*` arcs.
+The SDL3 shell in `app/` (window, input, the ImGui panel and `main.cpp`'s
+frame loop) and the swapchain presenter (`viz/src/vk_present.ixx`, the
+fullscreen-triangle blit) are **not** unit-tested — that is the deliberate
+Humble Object boundary. They must stay logic-free; any logic worth testing is
+pushed down (the demo scheduler, for one, is `ses.scenario.scheduler` with
+`tests/scheduler_test.cpp`) and driven test-first there. The shell is verified
+by running it — and by the headless `--selftest-*` and `--dump-frame*` arcs.
 
-The GPU side of `app/` is **not** exempt: every `ses_vk` kernel and engine
+The GPU layers (`solver/`, `viz/`) are **not** exempt: every `ses_vk` kernel and engine
 path is verified against the unit-tested CPU double core by
 `sesolver_vkcheck` (a framework-free oracle binary), which runs inside ctest. A GPU
 kernel lands together with its vkcheck comparison — the GPU analogue of

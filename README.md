@@ -21,7 +21,7 @@ dynamics, and scattering.
 
 | Decision | Choice |
 |---|---|
-| Language / build | C++20 **named modules** throughout (no project headers), CMake ≥ 3.28, pinned vcpkg submodule (static deps) |
+| Language / build | C++20 **named modules** throughout (project headers: only `ses_vma.h` and `tests/test_util.h`), CMake ≥ 3.28, pinned vcpkg submodule (static deps) |
 | GUI shell | **SDL3** — window, input, and the Vulkan surface; **Dear ImGui** (vendored submodule) draws the control panel |
 | GPU compute + rendering | **Framework-free Vulkan 1.3** (`ses_vk`: volk + VMA + VkFFT); shaders authored in **Slang**, offline-baked to SPIR-V by `slangc` (fetched as a build-time tool, no runtime dependency) |
 | Physics core | CPU double-precision truth in `core/`, no GPU/GUI dependencies |
@@ -93,11 +93,13 @@ of SDL/ImGui; the shell stays thin and replaceable.
 
 ## Reading the code
 
-- **Everything is C++20 named modules** (`ses.*`); there are no project
-  header files. Module interfaces start with a global module fragment for
-  textual includes — keep `#include` before `import`, and `volk.h` textually
-  first wherever Vulkan types appear (VK_* macros never cross module
-  boundaries).
+- **Everything is C++20 named modules** (`ses.*`); the only project headers
+  are `solver/src/ses_vma.h` (VMA configuration) and `tests/test_util.h`.
+  Module interfaces start with a global module fragment for textual includes
+  — keep std `#include`s before `import`, and `volk.h` textually first
+  wherever Vulkan types appear (VK_* macros never cross module boundaries).
+  `test_util.h` carries no std includes and goes after the imports (its
+  helpers name `ses::` types).
 - **CPU double is the truth; the GPU mirrors it.** Every shader transcribes
   unit-tested CPU math, and `sesolver_vkcheck` drives each GPU kernel against
   the CPU oracle headlessly.

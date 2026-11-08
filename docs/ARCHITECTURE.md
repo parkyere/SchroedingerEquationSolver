@@ -51,7 +51,9 @@ research-grade mean-field (DFT) project. We stay single-electron on purpose.
 
 - **`core` depends on nothing** (no GUI, no GPU, no windowing). Every behavior
   has an analytic or golden oracle and is unit-tested, test-first. Everything
-  is C++20 named modules (`ses.*`) — no project header files anywhere.
+  is C++20 named modules (`ses.*`); the only project headers are
+  `solver/src/ses_vma.h` (the VMA configuration) and `tests/test_util.h`
+  (shared test scaffolding).
 - **`solver/`** (`ses_solver`, modules `ses.vk.device/compute/engine/...`) is
   the Schrodinger GPGPU library: framework-free Vulkan 1.3 on top of `core`
   plus vendored infrastructure only (volk, VMA, VkFFT, offline-baked Slang
@@ -84,12 +86,12 @@ accessors (`hydrogen()`, `tunnel()`, `slit()`, `landau()`, ...) that return
 `nullptr` unless implemented — no down-casts anywhere. Scene keys funnel
 through `handle_key(char)`.
 
-Three director families implement the seam:
+Four director families implement the seam:
 
 | Family | Scenes | Compute |
 |---|---|---|
 | `BaseDirector` | hydrogen, 3D trap, 3D tunnel, H₂⁺, benzene, Rutherford | GPU engine, 256³, CPU double truth + fp32 GPU mirror under one sync invariant (`cpu_is_truth_`) |
-| `Line1DDirector` | eight 1D scenes (HO, tunnel, double well, Pöschl–Teller, Morse, Bloch, Anderson, bouncer) | CPU double, 64k-point grids (Bloch 4096), overlay-polyline display |
+| `Line1DDirector` | eight 1D scenes (HO, tunnel, double well, Pöschl–Teller, Morse, Bloch, Anderson, bouncer) | CPU double, 64k-point grids (Bloch and Anderson 4096, bouncer 2048), overlay-polyline display |
 | `Lattice2DDirectorBase` (+ two standalone directors) | corral, qdot, billiard, qpc, carpet (base); double slit, Landau (standalone) | Peierls lattice on one z-plane (CPU, or the 2D/3D GPU engines per scene), displayed by replicating into a thin volume slab |
 | `SpinDirector` / `SpinsDirector` | spin, spins | Pauli two-level CPU stage; 2¹⁶ exact state vector on the GPU spin engine vs CPU mean field |
 
