@@ -782,6 +782,7 @@ public:
         bool valid = false;
     };
     StepProfile profile_step() {
+        wait_async();
         StepProfile p{};
 #ifdef SES_HAVE_VKFFT
         if (!vkfft_active() || !ensure_profile_pool()) {
@@ -847,6 +848,7 @@ public:
         bool valid = false;
     };
     RelaxProfile profile_relax() {
+        wait_async();
         RelaxProfile p{};
         if (!relax_tables_ready() || !ensure_profile_pool()) {
             return p;
@@ -939,6 +941,9 @@ public:
     // The absorbing-boundary mask as a REAL R32 buffer (engine-owned);
     // batches damp with it when their absorb flag is set.
     bool set_absorber(const std::vector<double>& mask) {
+        if (mask.size() != cells_) {
+            return false;
+        }
         if (damp_buf_.buf == VK_NULL_HANDLE &&
             !ctx_->create_device_buffer(cells_ * sizeof(float), &damp_buf_)) {
             return false;
@@ -996,6 +1001,9 @@ public:
     // the GPU transcription of ses.rotation rotate_axis. One submission.
     void rotate_axis_shear(int axis, double theta) {
         wait_async();
+        if (planar_off_z(axis)) {
+            return;
+        }
         const int b = (axis + 1) % 3;  // in-plane axes (b x c = axis)
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, theta);
@@ -1008,6 +1016,10 @@ public:
         shot.submit_and_wait(*ctx_);
     }
     void rotate_z_shear(double theta) { rotate_axis_shear(2, theta); }
+    // A planar (n x n x 1) engine has no z extent to rotate into: a rotation
+    // about x or y would only translate the plane. Refused (the cubic scenes
+    // and vkcheck are the only rotating callers).
+    bool planar_off_z(int axis) const { return grid_.z.n == 1 && axis != 2; }
 
     // Magnetic Strang step: R(a) . real-step . R(a), a = (B/2)(dt/2), about the
     // field axis; the potential must be the diamagnetic-augmented one. Same
@@ -1016,6 +1028,9 @@ public:
     void magnetic_step(int axis, double half_angle, int nsteps,
                        StepFlags flags = {}) {
         wait_async();
+        if (planar_off_z(axis)) {
+            return;
+        }
         const int b = (axis + 1) % 3;
         const int c = (axis + 2) % 3;
         stage_rotation_ubos(b, c, half_angle);
@@ -1045,6 +1060,9 @@ public:
                           const std::vector<double>& kin_w, double dtau,
                           double cell_volume) {
         relax_ready_ = false;  // set again only once every piece is in place
+        if (half_w.size() != cells_ || kin_w.size() != cells_) {
+            return false;
+        }
         dtau_ = dtau;
         cell_volume_ = cell_volume;
         std::vector<float> hf(2 * cells_, 0.0f);
@@ -1181,6 +1199,7 @@ public:
 
     // <state|psi> = sum conj(state)*psi * dV (fp16 states decode to scratch).
     std::complex<double> inner_with_psi(int handle) {
+        wait_async();  // reads psi: never mid-batch
         State* st = state_at(handle);
         if (st == nullptr) {
             return {};
@@ -1913,6 +1932,7 @@ public:
     // Coulomb of unit charges at +-(R/2) n, sampled exactly like the CPU
     // builder; half_mul reads V live, so nothing else follows. One submission.
     bool set_two_center_potential(double R, ses::Vec3d n) {
+        wait_async();  // the batch's half_mul reads V live
         if (!ensure_two_center()) {
             return false;
         }
@@ -1966,6 +1986,7 @@ public:
         bool ok = false;
     };
     NuclearForces two_center_forces(double R, ses::Vec3d n) {
+        wait_async();  // the forces read psi
         NuclearForces out;
         if (!ensure_two_center()) {
             return out;
@@ -2133,6 +2154,7 @@ public:
         if (l_max < 0 || (l_max + 1) * (l_max + 1) > kDepositComps) {
             return false;
         }
+        proj_ok_ = false;  // a failed re-call must not leave the set on freed buffers
         proj_nr_ = n_radial;
         proj_ncomp_ = (l_max + 1) * (l_max + 1);
         proj_h_radial_ = h_radial;
@@ -2175,13 +2197,14 @@ public:
         arena_.write_buffer(*ctx_, proj_set_, 6, storage, proj_sorted_buf_.buf);
         arena_.write_buffer(*ctx_, proj_set_, 7, storage, proj_binoff_buf_.buf);
         arena_.write_buffer(*ctx_, proj_set_, 8, storage, glm_buf_.buf);
+        proj_ok_ = true;
         return true;
     }
 
     // Deposit psi -> g_lm (ONE grid pass, independent of state count), read
     // back to glm_host_ as double. Then call project_amplitude per state.
     void project_psi() {
-        if (proj_set_ == VK_NULL_HANDLE) {
+        if (!proj_ok_) {
             return;  // set_projection_index failed/absent
         }
         ProjectParams pp{};
@@ -2221,7 +2244,8 @@ public:
         const float* raw = static_cast<const float*>(staging_.mapped);
         // Shape once, reuse thereafter (every element is overwritten below);
         // avoids re-allocating the ncomp vectors per projection.
-        if (glm_host_.size() != static_cast<std::size_t>(proj_ncomp_)) {
+        if (glm_host_.size() != static_cast<std::size_t>(proj_ncomp_) ||
+            glm_host_.front().size() != static_cast<std::size_t>(proj_nr_)) {
             glm_host_.assign(static_cast<std::size_t>(proj_ncomp_),
                              std::vector<std::complex<double>>(
                                  static_cast<std::size_t>(proj_nr_)));
@@ -2461,6 +2485,7 @@ private:
         pd_kernel_ok_ = false;
         fused_relax_ok_ = false;
         relax_ready_ = false;
+        proj_ok_ = false;
         flow_vel_ok_ = false;
         mcwf_kernel_ok_ = false;
         mc_kernel_ok_ = false;
@@ -2634,6 +2659,9 @@ private:
 
     bool upload_field(Buffer& dst,
                       const std::vector<std::complex<double>>& src) {
+        if (src.size() != cells_) {
+            return false;  // a larger src would copy past dst
+        }
         const std::vector<float> f = to_rg32f(src);
         return upload_raw(dst, f.data(), f.size() * sizeof(float));
     }
@@ -3480,6 +3508,9 @@ private:
     // then the inverse FFT along that axis (conj -> FFT -> conj/n).
     void record_shear(Recorder& r, int which, int freq_axis) {
         const std::uint32_t nn = fft_lines_[freq_axis];
+        if (nn == 0) {
+            return;  // length-1 axis: k = 0 only, the shear is the identity
+        }
         r.dispatch(fft_, fft_set_[freq_axis], nn);
         r.dispatch(shear_, shear_set_[which], mul_groups_);
         r.dispatch(conj_, conj1_set_, mul_groups_);
@@ -3541,6 +3572,9 @@ private:
 
     // Upload helpers for the in-shader phase inputs.
     bool upload_potential(const std::vector<double>& v) {
+        if (v.size() != cells_) {
+            return false;  // cells_ floats are read below
+        }
         const std::vector<float> vf = to_f32(v);
         return upload_raw(v_buf_, vf.data(), cells_ * sizeof(float));
     }
@@ -3769,6 +3803,7 @@ private:
     int proj_ncomp_ = 0;
     double proj_h_radial_ = 0.0;
     std::vector<std::vector<std::complex<double>>> glm_host_;
+    bool proj_ok_ = false;  // the last set_projection_index fully succeeded
 
     Buffer psi_{};
     Buffer v_buf_{};    // scalar potential, R32
