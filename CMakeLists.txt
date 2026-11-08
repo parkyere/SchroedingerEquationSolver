@@ -8,7 +8,7 @@ if(CMAKE_HOST_UNIX AND SES_AUTODETECT_COMPILER
     foreach(_cxx IN ITEMS
             clang++-25 clang++-24 clang++-23 clang++-22 clang++-21 clang++-20
             clang++-19 clang++-18 clang++-17 clang++-16
-            g++-16 g++-15 g++-14 g++-13 g++-12 clang++ g++)
+            g++-16 g++-15 g++-14 clang++ g++)  # gcc >= 14: C++20 module floor
         # unset(CACHE): find_program caches, else a reused var keeps the first answer.
         unset(_ses_cxx_path CACHE)
         find_program(_ses_cxx_path NAMES ${_cxx})
@@ -114,11 +114,14 @@ if(MSVC)
         message(STATUS "AVX2 enabled (MSVC /arch:AVX2).")
     endif()
 elseif(SES_NATIVE)
-    # Pin vector width to 256 (4-wide double) so AVX-512 hosts keep the same
-    # reduction order/rounding as the AVX2 build (oracles stay valid).
-    target_compile_options(ses_arch INTERFACE
-        -march=native -mprefer-vector-width=256)
-    message(STATUS "Native CPU tuning (-march=native, 256-bit vectors).")
+    target_compile_options(ses_arch INTERFACE -march=native)
+    # x86 only (GCC rejects the option elsewhere): keep AVX-512 hosts on the
+    # AVX2 build's 256-bit codegen. Results do not depend on the width anyway
+    # (-ffp-contract=off, no fast-math: no FP reassociation).
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+        target_compile_options(ses_arch INTERFACE -mprefer-vector-width=256)
+    endif()
+    message(STATUS "Native CPU tuning (-march=native).")
 elseif(SES_ENABLE_AVX2 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
     target_compile_options(ses_arch INTERFACE -mavx2 -mfma)
     message(STATUS "AVX2 enabled (SES_ENABLE_AVX2=ON).")
