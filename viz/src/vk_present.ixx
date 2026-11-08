@@ -138,7 +138,6 @@ public:
             return false;
         }
         const std::uint32_t idx = acquired_idx_;
-        acquired_ = false;
 
         // Every frame, not memoized: the renderer recreates its target on
         // resize/scene switch and a reused handle VALUE would alias a
@@ -226,6 +225,10 @@ public:
             ctx_->device_lost = true;
             return false;
         }
+        // The submit now waits on acquire_sem_, so the image is consumed. Any
+        // earlier failure keeps it acquired: the next present() reuses idx and
+        // the still-signaled semaphore instead of re-acquiring over it.
+        acquired_ = false;
         const VkResult wr = vkWaitForFences(ctx_->device, 1, &fence_, VK_TRUE,
                                             ses_vk::kFenceTimeoutNs);
         if (wr != VK_SUCCESS) {
