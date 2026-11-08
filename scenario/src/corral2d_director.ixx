@@ -305,7 +305,7 @@ protected:
             track_peak();
             return;
         }
-        // Damp (fence + open boundary); the surviving norm = escaped fraction.
+        // Damp (fence + open boundary); the surviving norm = 1 - escaped fraction.
         if (eng_ok_) {
             if (eng_dirty_) {
                 eng_.upload_state(psi_.data());

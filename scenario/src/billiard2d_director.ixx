@@ -216,7 +216,7 @@ protected:
             }
             int left = n;
             while (left > 0) {
-                const int chunk = std::min(left, 4);  // sample the avg 4x/tick
+                const int chunk = std::min(left, 4);  // sample every 4 steps (4x/tick at x1)
                 eng_.step(chunk);
                 eng_.readback(rb_);
                 unpack_interleaved(rb_.data(), psi_.data());

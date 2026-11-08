@@ -60,7 +60,7 @@ constexpr double kDs2dAbsorb = 10.0;
 // Quadratic CAP peak (ses::quadratic_cap_mask).
 // CONTRACT: lattice2d_test SinglePacketDrainsThroughTheOpenBoundary.
 constexpr double kDs2dAbsorbW0 = 4.0;
-constexpr int kDs2dStepsPerTick = 16;  // ~9.6 au/s at 60 fps: ~9 s transit
+constexpr int kDs2dStepsPerTick = 16;  // 0.16 au per 16 ms tick = 10 au/s: ~9 s transit
 
 class DoubleSlit2DDirector final : public ScenarioDirector, public SlitApi {
 public:
@@ -133,9 +133,9 @@ public:
     // ---- lifecycle ----
     const ses::Grid3D& grid() const override { return disp_grid_; }
     // Peierls + solenoid scene: GPU port is ses_vk::Lattice2DEngine (exact link
-    // phases, vkcheck-certified). The edge CAP runs on the GPU too (no renorm:
-    // the surviving norm IS the transmitted fraction), so each step only reads
-    // back for the per-step screen integral -- no re-upload.
+    // phases, vkcheck-certified). The edge CAP (all four sides) runs on the GPU
+    // too, with no renorm, so each step only reads back for the per-step
+    // screen integral -- no re-upload.
     void init_compute(ses_vk::DeviceContext& ctx, bool device_ok,
                       std::int64_t /*free_vram*/) override {
         compute_attempted_ = true;
