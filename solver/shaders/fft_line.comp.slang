@@ -1,7 +1,8 @@
 // Radix-2 in-place line FFT, unnormalized; one workgroup per line, N/2 threads
 // x 2-elem butterfly in groupshared. SPIR-V baked offline per size via -DFFT_N
-// (8/64/256/512). Params enumerate lines along an axis; n_lines=1,stride=1,
-// base=0 = plain 1-D FFT.
+// (8/64/128/256/512). Params enumerate lines along an axis: line l starts at
+// (l % mod_a)*mul_b + (l / mod_a)*mul_c and steps by stride; n_lines=1,
+// stride=1, mod_a=1 = plain 1-D FFT.
 #ifndef FFT_N
 #define FFT_N 256
 #endif

@@ -27,12 +27,13 @@ export import ses.spinexact;
 // volk/VMA textually first: VK_*/VMA macros never cross module boundaries.
 
 
-// GPU exact 2^N Heisenberg; fp32 bit-faithful to CPU oracle
-// (ses.spinexact gates; vkcheck check_spin_step).
+// GPU exact 2^N Heisenberg; fp32 mirror of the double CPU oracle, compared
+// within tolerance (ses.spinexact gates; vkcheck check_spin_step).
 // Gates alias the state SSBO in place -> compute-to-compute barrier between dispatches is mandatory.
-// step()/upload() fold a per-site Bloch reduction so only 48 floats read back
-// per frame (state stays GPU-resident); download_state() pulls the full 2^16
-// only on demand (measurement). CONTRACT: vkcheck check_spin_bloch.
+// The runtime advances with chebyshev_step (exact mode) and measures on the
+// device (measure_exact); step()/upload() fold a per-site Bloch reduction so
+// only 48 floats read back (state stays GPU-resident); download_state() pulls
+// the full 2^16 only on demand. CONTRACT: vkcheck check_spin_bloch.
 
 
 export namespace ses_vk {
@@ -408,11 +409,12 @@ public:
     // J_k(R*dt). Spectrally accurate; one submit + a Bloch reduce. Replaces the
     // Trotter step() for exact-mode runtime.
     void chebyshev_step(double dt) {
-        const double R = 8.0 * std::sqrt(f_bx_ * f_bx_ + f_by_ * f_by_ +
-                                         f_bz_ * f_bz_) +
-                         72.0 * std::abs(f_j_) + 1e-12;
+        // The CPU oracle's own bound and tail pad (re-typed copies drift).
+        const double R =
+            ses::hamiltonian_spectral_bound(f_bx_, f_by_, f_bz_, f_j_);
         const double alpha = R * dt;
-        const int k_want = static_cast<int>(std::ceil(alpha)) + 24;
+        const int k_want =
+            static_cast<int>(std::ceil(alpha)) + ses::kChebTailPad;
         const int K = std::clamp(k_want, 2, kMaxCheb - 1);
         if (K < k_want && !cheb_warned_) {
             cheb_warned_ = true;
@@ -576,6 +578,8 @@ private:
         std::uint32_t half_n, pad0, pad1, pad2;
     };
     static constexpr int kBlochFloats = 3 * ses::kExactSites;
+    static_assert(ses::kExactDim == 256u * 256u,
+                  "spin_born_sample.comp: 256 threads x 256-amplitude chunks");
 
     static void fill_c(float* dst, const std::complex<double>& z) {
         dst[0] = static_cast<float>(z.real());

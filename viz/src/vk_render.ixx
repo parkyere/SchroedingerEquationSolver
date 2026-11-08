@@ -698,8 +698,9 @@ private:
         float eye[4];
         float box_min[4];
         float box_max[4];
-        // Prefix padding: keeps the shorter vert/slice/shadow/occupancy Ubo
-        // std140 layout-compatible.
+        // proton_*: dead (the old proton sphere, superseded by marker_*); no
+        // stage reads them. viz_ubo.slang mirrors them: delete both together,
+        // keeping std140 packing.
         float proton_center[4];
         float proton_color[4];
         float inv_peak = 0.0f;

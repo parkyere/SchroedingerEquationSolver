@@ -1,8 +1,9 @@
 // One checkerboard-parity mean-field sweep: B_eff = B_ext - 2 J sum_nn <sigma>,
-// project out the n-parallel part (no torque), exact SU(2) step, then Gilbert
-// damping. Same-parity sites are non-adjacent -> each writes only its own site
-// and reads opposite-parity neighbours, so no intra-dispatch race. Bit-faithful
-// to ses::spinlattice_step. CONTRACT: vkcheck check_spin_mf.
+// exact SU(2) step about the FULL B_eff (no projection), then Gilbert damping.
+// Same-parity sites are non-adjacent -> each writes only its own site and
+// reads opposite-parity neighbours, so no intra-dispatch race. fp32 mirror of
+// ses::spinlattice_step, compared within tolerance. CONTRACT: vkcheck
+// check_spin_mf.
 import complex;
 import spin;
 

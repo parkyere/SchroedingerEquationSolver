@@ -25,7 +25,8 @@ import ses.grid;
 // sweep, one compute dispatch per (phase / sweep_x / sweep_y) with a
 // compute-to-compute barrier between every dispatch (all alias state_ in place).
 // relax() adds cosh/sinh imaginary-time sweeps + a fused norm reduce->rescale
-// (norm_peak/norm_finalize/scale_buf). fp32, bit-faithful to the CPU oracle.
+// (norm_peak/norm_finalize/scale_buf). fp32 mirror of the double CPU oracle,
+// compared within tolerance (not bitwise).
 // CONTRACT: vkcheck check_lattice2d_step / check_lattice2d_relax.
 
 

@@ -31,7 +31,8 @@ float den_clamped(int3 p) {
     return den[flat_at(p)];
 }
 
-// central-difference gradient; one-sided at the walls via index clamping
+// clamped central difference (as ses::mc_detail::gradient): at a wall it is
+// (f[1] - f[0]) / (2h), half the one-sided slope
 float3 gradient_at(int3 p) {
     return float3(
         (den_clamped(p + int3(1, 0, 0)) - den_clamped(p - int3(1, 0, 0))) /

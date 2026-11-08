@@ -1,4 +1,5 @@
-// Absorbing boundary: m a REAL R32 mask (interior 1, cos^2 taper to 0 at walls).
+// Absorbing boundary: psi *= m, m a REAL R32 per-step mask (interior 1), e.g.
+// the 3D cos^2 taper to 0 at the walls or the 2D quadratic CAP exp(-w dt).
 import complex;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Complex, Std430DataLayout> psi;

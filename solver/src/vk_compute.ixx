@@ -22,9 +22,11 @@ export import ses.vk.device;
 
 export namespace ses_vk {
 
-// Contract: every 1D compute shader declares local_size_x = kWorkgroupSize
-// (fused reductions use kFusedWorkgroup). Dispatch counts come from
-// group_count so a shader-side change cannot silently under-dispatch.
+// Contract: every element-wise 1D compute shader declares local_size_x =
+// kWorkgroupSize (spin_fused_gate and the spin_mf_* site kernels use
+// kFusedWorkgroup) and is dispatched via group_count with that constant.
+// Nothing reads the SPIR-V local size back: a shader-side numthreads change
+// must be mirrored here by hand, or it silently mis-dispatches.
 inline constexpr std::uint32_t kWorkgroupSize = 256;
 inline constexpr std::uint32_t kFusedWorkgroup = 64;
 inline constexpr std::uint64_t kFenceTimeoutNs = 10ull * 1000 * 1000 * 1000;
@@ -232,8 +234,8 @@ public:
 private:
     bool add_pool(DeviceContext& ctx) {
         VkDescriptorPoolSize sizes[5] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storage_ > 0 ? storage_ : 1},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniform_ > 0 ? uniform_ : 1},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
              dynamic_ > 0 ? dynamic_ : 1},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, images_ > 0 ? images_ : 1},
