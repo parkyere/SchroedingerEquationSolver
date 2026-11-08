@@ -2219,6 +2219,9 @@ private:
     bool flow_was_on_ = false;       // enable-edge detect -> one reset dispatch
     // Occupancy skipping + self-shadow.
     // Aux volume sides + workgroup sides; mirror the *.comp.slang numthreads.
+    // kOccSize is also spelled 32.0 in volume.frag.slang's skip_len: the skip
+    // is conservative only while it is at most one occupancy cell (the
+    // occ_dilate halo), so change both together.
     static constexpr std::uint32_t kOccSize = 32;     // occupancy cells/axis
     static constexpr std::uint32_t kShadowSize = 64;  // shadow texels/axis
     static constexpr std::uint32_t kDilateGroup = 4;  // occ_dilate.comp

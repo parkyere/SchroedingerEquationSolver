@@ -87,6 +87,8 @@ float4 main(FSIn input) : SV_Target {
     psi_tex.GetDimensions(tw, th, tdp);
     float3 ext = ubo.box_max.xyz - ubo.box_min.xyz;
     // Empty-space skip: jump a block where occupancy is empty; fine-march at original step elsewhere.
+    // 32.0 = the host's kOccSize (vk_render.ixx): one occupancy cell, the most
+    // the occ_dilate halo keeps conservative -- change both together.
     float skip_len = min(min(ext.x, ext.y), ext.z) / 32.0;
 
     float3 C = float3(0.0, 0.0, 0.0);
