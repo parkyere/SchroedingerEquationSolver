@@ -156,6 +156,21 @@ public:
     void run_frame() override {
         // Photon streaks fly in wall-frame time, GPU path or not.
         photon_streaks_.advance_and_build();
+        // Once the device is lost every engine call is a no-op: staying on
+        // the GPU path would redraw the last frame under a running clock.
+        // The CPU takes over from its last copy of psi (the device state
+        // cannot be read back) and the GPU-only modes are disarmed.
+        if (gpu_ok_ && engine_.device_lost()) {
+            std::fprintf(stderr, "%s: GPU device lost -- falling back to CPU\n",
+                         scene_name());
+            gpu_ok_ = false;
+            cpu_is_truth_ = true;
+            pending_gpu_steps_ = 0;
+            decay_on_ = false;  // the jump trials run on the GPU path only
+            after_device_lost();
+            stage_active_view();
+            title_dirty_ = true;
+        }
         if (!use_gpu_path()) {
             return;
         }
@@ -362,6 +377,9 @@ protected:
     virtual double absorber_width() const { return 0.0; }
     virtual void on_gpu_ready() {}
     virtual void after_reset() {}
+    // run_frame, right after it left the GPU path for a lost device: disarm
+    // whatever else only runs there.
+    virtual void after_device_lost() {}
     virtual void service_requests() {}   // run_frame, before stepping
     virtual void before_step_batch(int) {}  // run_frame, before a real-time batch
     virtual void after_step_batch() {}   // run_frame, after a real-time batch

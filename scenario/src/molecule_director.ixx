@@ -369,6 +369,16 @@ protected:
 
     void after_reset() override { free_state_buffers(); }
 
+    // The deflated relax chain and its cached eigenstates live on the device:
+    // nothing of them survives, and a CPU relax would cool toward the ground
+    // under an excited state's label.
+    void after_device_lost() override {
+        fine_polish_ = false;
+        fine_left_ = 0;
+        stepping_ = BaseStepping::RealTime;
+        free_state_buffers();  // gpu_ok_ is already false: flags only
+    }
+
     ses::Field3D ground_seed() const {
         return ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
                                         ses::Vec3d{1.8, 1.8, 1.8},
@@ -640,6 +650,11 @@ protected:
         e1_ = (1.0 / ses::length(e)) * e;
         engine_.set_two_center_potential(R, rotor_.n);
         rebuild_markers();
+    }
+
+    void after_device_lost() override {
+        abort_flush();  // the atlas flush is GPU-only as well
+        MoleculeDirectorBase::after_device_lost();
     }
 
     void after_reset() override {
