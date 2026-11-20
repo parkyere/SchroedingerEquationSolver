@@ -1,5 +1,6 @@
-// RED: relax weight tables must equal their defining formulas bitwise --
-// so the GPU relax path consumes these TESTED tables instead of re-deriving.
+// RED: relax weight tables must equal their defining formulas to 4 ULP
+// (EXPECT_DOUBLE_EQ; re-evaluated in this translation unit) -- so the GPU
+// relax path consumes these TESTED tables instead of re-deriving.
 
 
 #include <gtest/gtest.h>

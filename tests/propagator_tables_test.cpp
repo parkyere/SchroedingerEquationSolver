@@ -1,5 +1,7 @@
 // RED: expose phase tables + dt so the GPU engine consumes tested tables.
-// Oracle: entries == defining formulas via same public blocks (wavenumbers, potential), bitwise.
+// Oracle: entries == defining formulas via the same public blocks (wavenumbers,
+// potential), to 4 ULP (EXPECT_DOUBLE_EQ: the formula is re-evaluated in this
+// translation unit, where the compiler may contract it differently).
 
 
 #include <gtest/gtest.h>
