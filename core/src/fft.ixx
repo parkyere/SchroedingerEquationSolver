@@ -117,6 +117,9 @@ template <class BaseOf>
 inline void strided_line_pass(std::vector<std::complex<double>>& a,
                               std::vector<std::vector<std::complex<double>>>& scratch,
                               int lines, int len, int stride, BaseOf&& base_of) {
+    if (len < 2) {
+        return;  // a unit axis is its own transform (the 2D scenes' nz = 1)
+    }
     const std::vector<std::complex<double>> w =
         fft_twiddles(static_cast<std::size_t>(len));
     parallel_ranges(lines, [&](int worker, int begin, int end) {
@@ -156,7 +159,7 @@ inline void fft(Field3D& f) {
         throw std::invalid_argument("ses::fft: size must be a power of two");
     }
 
-    {
+    if (nx > 1) {
         const std::vector<std::complex<double>> w =
             fft_twiddles(static_cast<std::size_t>(nx));
         parallel_for(nz * ny, [&](int m) {
