@@ -367,6 +367,9 @@ public:
         if (solving()) {
             return;
         }
+        if (mode_ == BaseViewMode::Cloud && !surface_available()) {
+            return;
+        }
         mode_ = (mode_ == BaseViewMode::Cloud) ? BaseViewMode::Surface : BaseViewMode::Cloud;
         // Re-stage the newly selected mode: its data may be stale (tick stages
         // only the active mode).
@@ -420,9 +423,7 @@ public:
                              "decay stays off\n");
                 return;
             }
-            if (mode_ != BaseViewMode::Cloud) {
-                mode_ = BaseViewMode::Cloud;  // jump trials run on the GPU path only
-            }
+            force_cloud_view();  // jump trials run on the GPU path only
             if (!atom_.prepare_manifold_cache(engine_, kBaseGammaDisplay)) {
                 return;
             }
@@ -440,9 +441,7 @@ public:
         if (!gpu_ok_ || solving()) {
             return;
         }
-        if (mode_ != BaseViewMode::Cloud) {
-            mode_ = BaseViewMode::Cloud;
-        }
+        force_cloud_view();
         if (!atom_.prepare_manifold_cache(engine_, kBaseGammaDisplay)) {
             return;
         }
@@ -463,9 +462,7 @@ public:
         if (!gpu_ok_ || solving() || !atom_.radial_ready()) {
             return;
         }
-        if (mode_ != BaseViewMode::Cloud) {
-            mode_ = BaseViewMode::Cloud;
-        }
+        force_cloud_view();
         if (!superpose_manifold(
                 kepler_coefficients(kKeplerNBar, kKeplerSigmaN))) {
             return;
@@ -483,9 +480,7 @@ public:
             return;  // the drive runs on the GPU path only
         }
         if (laser_pol_ == LaserPol::Off) {
-            if (mode_ != BaseViewMode::Cloud) {
-                mode_ = BaseViewMode::Cloud;
-            }
+            force_cloud_view();
             if (!manifold_ready()) {
                 return;
             }
@@ -1182,9 +1177,7 @@ private:
         if (!gpu_ok_ || solving()) {
             return;  // deflation runs on the GPU path only
         }
-        if (mode_ != BaseViewMode::Cloud) {
-            mode_ = BaseViewMode::Cloud;
-        }
+        force_cloud_view();
         if (!manifold_ready() || !ensure_relax_tables()) {
             return;
         }

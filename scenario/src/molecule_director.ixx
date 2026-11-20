@@ -250,9 +250,7 @@ protected:
         if (!ensure_relax_tables()) {
             return;
         }
-        if (mode_ != BaseViewMode::Cloud) {
-            mode_ = BaseViewMode::Cloud;
-        }
+        force_cloud_view();
         deflate_.clear();
         for (int i = 0; i < k; ++i) {
             deflate_.push_back(buf_[i]);

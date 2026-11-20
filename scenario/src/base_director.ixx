@@ -231,6 +231,9 @@ public:
     }
 
     void toggle_view_mode() override {
+        if (mode_ == BaseViewMode::Cloud && !surface_available()) {
+            return;
+        }
         mode_ = (mode_ == BaseViewMode::Cloud) ? BaseViewMode::Surface
                                                : BaseViewMode::Cloud;
         if (mode_ == BaseViewMode::Surface) {
@@ -760,6 +763,27 @@ protected:
                                                readback_buf_[2 * i + 1]};
         }
         return f;
+    }
+
+    // Surface needs the GPU extraction buffers whenever psi lives on the GPU
+    // (no CPU mesh is kept current there). False = they could not be had
+    // (VRAM): the caller stays in Cloud instead of drawing an empty surface.
+    bool surface_available() {
+        if (!gpu_ok_ || engine_.mc_prepare(kMcMaxTris)) {
+            return true;
+        }
+        std::fprintf(stderr, "surface view: GPU surface buffers unavailable "
+                             "-- staying in the cloud view\n");
+        return false;
+    }
+
+    // GPU-only modes force the Cloud view; the surface buffers (~175 MB) go
+    // with it instead of lingering until the next Tab or scene switch.
+    void force_cloud_view() {
+        if (mode_ != BaseViewMode::Cloud) {
+            mode_ = BaseViewMode::Cloud;
+            engine_.release_mc();
+        }
     }
 
     void stage_active_view() {
