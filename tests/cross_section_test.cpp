@@ -111,6 +111,35 @@ TEST(SliceShade, ReModeIsDivergingBySign) {
     EXPECT_NEAR(zero.col.b, 0.03, 1e-12);
 }
 
+// inv_peak = 1/peak density normalizes the three maps: the density scales
+// LINEARLY with it, the real amplitude with its SQUARE ROOT. At inv_peak = 1
+// (every other test here) the two are indistinguishable; slice.frag mirrors
+// both lines and has no GPU oracle. Peak density 1/4 -> inv_peak 4.
+TEST(SliceShade, PeakScalesDensityLinearlyAndAmplitudeByItsRoot) {
+    const double inv_peak = 4.0;
+    // |psi|^2 = 1/16 -> dens = 1/4 -> alpha = 0.45 + 0.5/4
+    const ses::SliceShade dens = ses::slice_shade(
+        ses::SliceMap::Density, std::complex<double>{0.25, 0.0}, inv_peak);
+    const ses::Rgb m = ses::magnitude_color(0.25);
+    EXPECT_NEAR(dens.col.r, m.r, 1e-12);
+    EXPECT_NEAR(dens.col.g, m.g, 1e-12);
+    EXPECT_NEAR(dens.col.b, m.b, 1e-12);
+    EXPECT_NEAR(dens.alpha, 0.575, 1e-12);
+    // Re psi = 1/4 -> r = 1/4 * sqrt(4) = 1/2 -> alpha = 0.45 + 0.5/2
+    const ses::SliceShade re = ses::slice_shade(
+        ses::SliceMap::Real, std::complex<double>{0.25, 0.0}, inv_peak);
+    EXPECT_NEAR(re.alpha, 0.70, 1e-12);
+    EXPECT_NEAR(re.col.r, 0.03 + (1.0 - 0.03) * 0.5, 1e-12);
+    // phase map: bright = sqrt(dens) = 1/2 -> alpha 0.70, tint 0.625
+    const ses::SliceShade ph = ses::slice_shade(
+        ses::SliceMap::Phase, std::complex<double>{0.0, 0.25}, inv_peak);
+    const ses::Rgb wheel = ses::phase_color(std::atan2(0.25, 0.0));
+    EXPECT_NEAR(ph.alpha, 0.70, 1e-12);
+    EXPECT_NEAR(ph.col.r, wheel.r * 0.625, 1e-12);
+    EXPECT_NEAR(ph.col.g, wheel.g * 0.625, 1e-12);
+    EXPECT_NEAR(ph.col.b, wheel.b * 0.625, 1e-12);
+}
+
 TEST(SliceShade, PhaseModeTintsThePhaseWheelByMagnitude) {
     const double mag = std::sqrt(0.25);  // dens = 0.25, bright = sqrt(dens) = 0.5
     const std::complex<double> psi{0.0, mag};

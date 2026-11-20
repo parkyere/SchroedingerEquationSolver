@@ -79,6 +79,29 @@ TEST(Spin, MeasurementCollapsesOntoTheAxis) {
     EXPECT_NEAR(pb.x * r + pb.y * r + pb.z * r, -1.0, 1e-12);
 }
 
+// The outcome flips exactly at the Born probability p = (1 + n.s) / 2: a draw
+// just below p reads +n, just above reads -n. (u = 0 / 0.999 and eigenstates
+// alone would pass with any p strictly between.)
+TEST(Spin, MeasurementThresholdIsTheBornProbability) {
+    struct Case {
+        double nx, ny, nz, p;
+    };
+    const double r = 1.0 / std::sqrt(3.0);
+    const Case cases[] = {
+        {r, r, r, 0.5 * (1.0 + r)},                       // n.s = 1/sqrt 3
+        {-0.5, std::sqrt(3.0) / 2.0, 0.0, 0.25},          // n.s = -1/2
+        {0.0, 0.0, 1.0, 0.5},                             // n.s = 0
+    };
+    for (const Case& c : cases) {
+        ses::Spinor below = plus_x();
+        EXPECT_EQ(ses::spin_measure(below, c.nx, c.ny, c.nz, c.p - 1e-9), +1)
+            << "p = " << c.p;
+        ses::Spinor above = plus_x();
+        EXPECT_EQ(ses::spin_measure(above, c.nx, c.ny, c.nz, c.p + 1e-9), -1)
+            << "p = " << c.p;
+    }
+}
+
 TEST(Spin, PiPulseRefocusesTheDetunedEnsemble) {
     const int kSpins = 64;
     const double tau = 8.0;

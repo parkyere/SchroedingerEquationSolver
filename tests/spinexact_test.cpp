@@ -265,4 +265,27 @@ TEST(SpinExact, MeasurementCollapsesASite) {
                 1e-12);
 }
 
+// The exact measurement's threshold is the site's Born probability
+// P(up) = (1 + <sigma_z>) / 2, here 3/4 and 1/4; the other sites of the
+// product state keep their arrows through the collapse.
+TEST(SpinExact, MeasurementThresholdIsTheSiteBornProbability) {
+    const double s60 = std::sqrt(3.0) / 2.0;
+    for (const double sz : {0.5, -0.5}) {
+        const double p_up = 0.5 * (1.0 + sz);
+        for (const double du : {-1e-9, 1e-9}) {
+            ses::SpinLattice l = product_updown(-1);
+            l.s[3] = ses::spinor_from_bloch(s60, 0.0, sz);
+            l.s[7] = ses::spinor_from_bloch(0.0, 1.0, 0.0);
+            ses::SpinState16 s = ses::exact_from_product(l);
+            const int want = du < 0.0 ? +1 : -1;
+            EXPECT_EQ(ses::exact_measure_z(s, 3, p_up + du), want)
+                << "P(up) = " << p_up << ", du = " << du;
+            EXPECT_NEAR(ses::exact_site_bloch(s, 3).z, static_cast<double>(want),
+                        1e-12);
+            EXPECT_NEAR(ses::exact_site_bloch(s, 7).y, 1.0, 1e-12);
+            EXPECT_NEAR(norm2(s), 1.0, 1e-12);
+        }
+    }
+}
+
 }  // namespace

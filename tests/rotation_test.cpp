@@ -130,6 +130,19 @@ TEST(RotateAxis, AboutYConservesNormAndLeavesAYSymmetricFieldInvariant) {
     EXPECT_LT(max_abs_diff(f, before), 2e-3);
 }
 
+// Right-handed about +y turns z toward x, so a blob on +x moves toward -z.
+// The y-symmetric field above is blind to that sign.
+TEST(RotateAxis, AboutYRotatesInTheZXPlaneRightHanded) {
+    const Grid3D g = cube(16.0, 64);
+    Field3D f = blob(g, 4.0, 0.0, 1.5);
+    const double theta = 0.6;
+    ses::rotate_axis(f, 1, theta);
+    const ses::Vec3d r = ses::mean_position(f);
+    EXPECT_NEAR(r.x, 4.0 * std::cos(theta), 2e-2);
+    EXPECT_NEAR(r.y, 0.0, 1e-6);
+    EXPECT_NEAR(r.z, -4.0 * std::sin(theta), 2e-2);
+}
+
 TEST(RotateZ, ComposesAdditively) {
     const Grid3D g = cube(16.0, 64);
     Field3D a = blob(g, 3.0, 1.0, 1.6);

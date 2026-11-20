@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 #include <vector>
 import ses.imaginary_time;
 import ses.observables;
@@ -29,15 +30,17 @@ const Grid3D kGrid = cube(-12.0, 12.0, 32);
 struct Relaxed {
     Field3D psi;
     double energy;
+    double seed_energy;  // <H> of the Gaussian the relaxation started from
 };
 
 Relaxed relax_hydrogen(double a) {
     const std::vector<double> v = ses::soft_coulomb_potential(kGrid, 1.0, a, Vec3d{});
     Field3D psi = ses::gaussian_wavepacket(kGrid, Vec3d{}, Vec3d{1.3, 1.3, 1.3}, Vec3d{});
+    const double e_seed = ses::mean_energy(psi, v);
     ses::ImaginaryTimePropagator3D relaxer{kGrid, v, 0.02};
     relaxer.relax(psi, 750);  // tau = 15
     const double e = ses::mean_energy(psi, v);
-    return Relaxed{psi, e};
+    return Relaxed{psi, e, e_seed};
 }
 
 const Relaxed& hydrogen_a1() {
@@ -49,6 +52,24 @@ TEST(Hydrogen3, GroundStateEnergyWithinVariationalWindow) {
     const double e0 = hydrogen_a1().energy;
     EXPECT_GT(e0, -0.5);  // above the exact bare -1/r ground state
     EXPECT_LT(e0, -0.1);
+}
+
+// The seed alone already sits inside that window and is spherical and
+// centred, so the tests around this one would pass with relax() deleted.
+// What the relaxation must do: go below its seed (variational; measured
+// -0.25489 -> -0.27491) and stay put under more imaginary time (tau = 5
+// more moves E by 3e-5: converged to the 1e-4 the gate asks).
+TEST(Hydrogen3, RelaxationLowersTheSeedEnergyAndConverges) {
+    const Relaxed& r = hydrogen_a1();
+    std::printf("hydrogen3 a=1: seed E %.5f -> relaxed E %.5f\n", r.seed_energy,
+                r.energy);
+    EXPECT_LT(r.energy, r.seed_energy - 0.015);
+    const std::vector<double> v =
+        ses::soft_coulomb_potential(kGrid, 1.0, 1.0, Vec3d{});
+    Field3D more = r.psi;
+    ses::ImaginaryTimePropagator3D relaxer{kGrid, v, 0.02};
+    relaxer.relax(more, 250);  // tau = 5 more
+    EXPECT_NEAR(ses::mean_energy(more, v), r.energy, 1e-4);
 }
 
 TEST(Hydrogen3, EnergyIncreasesWithSoftening) {

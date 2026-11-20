@@ -167,6 +167,33 @@ TEST(LadderRungStable, GroundAnnihilationStillRefuses) {
     }
 }
 
+// The other branch: psi is NOT the claimed eigenstate (the caller's
+// classifier was wrong). a-dag (|3> + |4>)/sqrt 2 = (2|4> + sqrt5 |5>)/3 has
+// overlap^2 4/9 < 1/2 with the oracle |4>, so the honest raw result must
+// stand -- bit for bit, with its counting norm 9/2 -- instead of being
+// replaced by the oracle of a level the state is not in.
+TEST(LadderRungStable, AMisclassifiedInputKeepsTheRawResult) {
+    ses::Field1D mix = ses::ho_eigenstate(kGrid, kOmega, 3);
+    const ses::Field1D four = ses::ho_eigenstate(kGrid, kOmega, 4);
+    for (int i = 0; i < mix.size(); ++i) {
+        mix[i] += four[i];
+    }
+    ses::normalize(mix);
+    ses::Field1D raw = mix;
+    const double raw_norm2 = ses::ladder_raise(raw, kOmega);
+    ses::Field1D psi = mix;
+    const double norm2 =
+        ses::ladder_rung_stable(psi, kOmega, 3, ses::Rung::Raise);
+    EXPECT_NEAR(norm2, 4.5, 1e-6);
+    EXPECT_EQ(norm2, raw_norm2);
+    EXPECT_LT(overlap_sq(four, psi), 0.5);
+    int differing = 0;
+    for (int i = 0; i < psi.size(); ++i) {
+        differing += psi[i] != raw[i] ? 1 : 0;
+    }
+    EXPECT_EQ(differing, 0);
+}
+
 // RED: ho_level_cap(grid, omega) -- largest level whose Hermite oracle is
 // still faithful (discrete energy within 0.1% of (n+1/2)w). Box-limited at
 // soft omega, Nyquist-limited at stiff omega, far above the raw cap.
