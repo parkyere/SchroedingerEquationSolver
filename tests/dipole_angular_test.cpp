@@ -218,7 +218,11 @@ TEST(TesseralE1, SignedFactorMatchesNumeric3DIntegralWithSign) {
 }
 
 TEST(TesseralE1, FactorizedEinsteinAReproducesTextbook2pLifetime) {
-    // Bare -1/r solve (app's table source) vs textbook A(2p->1s) = 1.5155e-8 /au (tau = 1.6 ns).
+    // Bare -1/r solve (the app's table source) against the closed forms of the
+    // SAME model, an infinitely heavy proton: omega = 3/8, the radial integral
+    // 128 sqrt(6) / 243, and A(2p->1s) = (2/3)^8 alpha^3 = 1.51623e-8 /au
+    // (tau = 1.6 ns). The handbook 1.5155e-8 carries the reduced mass, which
+    // this solve does not model.
     const auto [rg, vr] = ses_test::bare_hydrogen_radial();
     const ses::RadialState s1 =
         ses::radial_eigenstate(rg, ses::radial_hamiltonian(rg, vr, 0), 0);
@@ -228,7 +232,18 @@ TEST(TesseralE1, FactorizedEinsteinAReproducesTextbook2pLifetime) {
     const double omega = p2.energy - s1.energy;
     const double a = ses::einstein_a(
         omega, rint * rint * ses::tesseral_e1_sq(0, 0, 1, 0));
-    EXPECT_NEAR(a, 1.5155e-8, 2e-11);
+    // What is left is the hard wall at 20 Bohr, which folds the 2p tail back
+    // in: omega +2.2e-6, the integral +2.2e-4, A +4.7e-4 (the same to 1e-5 at
+    // 2x and 4x the radial samples; a 30 Bohr box at the same step reads
+    // A -8e-6). Each gate is about twice its reading.
+    const double rint_exact = 128.0 * std::sqrt(6.0) / 243.0;
+    const double a_exact = std::pow(2.0 / 3.0, 8) *
+                           ses::kFineStructureConstant *
+                           ses::kFineStructureConstant *
+                           ses::kFineStructureConstant;
+    EXPECT_NEAR(omega, 0.375, 5e-6);
+    EXPECT_NEAR(rint, rint_exact, 5e-4 * rint_exact);
+    EXPECT_NEAR(a, a_exact, 1e-3 * a_exact);
 }
 
 }  // namespace

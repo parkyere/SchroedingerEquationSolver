@@ -74,34 +74,60 @@ TEST(DipoleDrive, ResonantCoherentLadderAndSelectionRule) {
     const double w0 = 1.0;
     const Grid3D g = cube(-8.0, 8.0, 32);
     const std::vector<double> v = ses::harmonic_potential(g, w0, Vec3d{});
-    const double dt = 0.05;
-    const ses::SplitOperator3D prop{g, v, dt};
 
     const Field3D ground = ses_test::harmonic_state(g, w0, -1);
     const Field3D excited_z = ses_test::harmonic_state(g, w0, 2);
     const Field3D excited_y = ses_test::harmonic_state(g, w0, 1);
 
     const double e0 = 0.2;
-    const int steps = 283;  // lands near a sin(w0 t) maximum
-    const double t = steps * dt;
 
-    Field3D psi = ground;
-    ses::driven_step(psi, prop, DipoleDrive{Vec3d{0.0, 0.0, 1.0}, e0, w0}, 0.0, steps);
+    // Ehrenfest is exact for a quadratic + linear V: z(t), p(t) below are the
+    // classical orbit from rest, and the state is the coherent state riding on
+    // it, |alpha|^2 = w0 z^2 / 2 + p^2 / (2 w0) -- counter-rotating term
+    // included (the rotating-wave (e0 t)^2 / (8 w0) reads 3.2e-3 low here,
+    // 1.2e-3 in p0).
+    struct Deviation {
+        double z;
+        double p0;
+        double p1;
+        double p_y;
+        double norm;
+    };
+    auto run = [&](int refine) {
+        const double dt = 0.05 / refine;
+        const int steps = 283 * refine;  // lands near a sin(w0 t) maximum
+        const double t = steps * dt;
+        const ses::SplitOperator3D prop{g, v, dt};
+        Field3D psi = ground;
+        ses::driven_step(psi, prop, DipoleDrive{Vec3d{0.0, 0.0, 1.0}, e0, w0},
+                         0.0, steps);
+        const double z = -(e0 / (2.0 * w0)) * t * std::sin(w0 * t);
+        const double p = -(e0 / (2.0 * w0)) *
+                         (std::sin(w0 * t) + w0 * t * std::cos(w0 * t));
+        const double alpha_sq = 0.5 * w0 * z * z + 0.5 * p * p / w0;
+        return Deviation{
+            ses::mean_position(psi).z - z,
+            population(ground, psi) - std::exp(-alpha_sq),
+            population(excited_z, psi) - alpha_sq * std::exp(-alpha_sq),
+            population(excited_y, psi), ses::norm_sq(psi)};
+    };
 
-    // Ehrenfest exact for quadratic+linear V -> this closed form is the exact oracle.
-    const double expected_z = -(e0 / (2.0 * w0)) * t * std::sin(w0 * t);
-    EXPECT_NEAR(ses::mean_position(psi).z, expected_z, 0.02);
+    // What is left is the Strang error of the driven step: 5.0e-4 in z and
+    // 1.1e-4 in the Poisson populations at dt = 0.05 (gates about twice that)...
+    const Deviation coarse = run(1);
+    EXPECT_LT(std::abs(coarse.z), 1e-3);
+    EXPECT_LT(std::abs(coarse.p0), 3e-4);
+    EXPECT_LT(std::abs(coarse.p1), 3e-4);
+    // ...and it is second order: a quarter at dt / 2 (measured 3.98, 3.99, 4.02).
+    const Deviation fine = run(2);
+    EXPECT_LT(std::abs(fine.z), std::abs(coarse.z) / 3.0);
+    EXPECT_LT(std::abs(fine.p0), std::abs(coarse.p0) / 3.0);
+    EXPECT_LT(std::abs(fine.p1), std::abs(coarse.p1) / 3.0);
 
-    // coherent-state Poisson populations
-    const double alpha_sq = std::pow(e0 * t / (2.0 * std::sqrt(2.0 * w0)), 2.0);
-    const double p0_expected = std::exp(-alpha_sq);
-    const double p1_expected = alpha_sq * std::exp(-alpha_sq);
-    EXPECT_NEAR(population(ground, psi), p0_expected, 0.06);
-    EXPECT_NEAR(population(excited_z, psi), p1_expected, 0.06);
-
-    // Selection rule: z-drive cannot populate the y state (<1_y|z|0> = 0 by symmetry).
-    EXPECT_LT(population(excited_y, psi), 1e-4);
-    EXPECT_NEAR(ses::norm_sq(psi), 1.0, 1e-10);
+    // Selection rule: z-drive cannot populate the y state (<1_y|z|0> = 0 by
+    // symmetry -- exactly, so only rounding is left: measured 1.6e-31).
+    EXPECT_LT(coarse.p_y, 1e-20);
+    EXPECT_NEAR(coarse.norm, 1.0, 1e-10);
 }
 
 }  // namespace

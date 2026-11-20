@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <vector>
 import ses.vec;
 import ses.photon_display;
 
@@ -65,6 +66,36 @@ TEST(PhotonFlightPool, OverflowEvictsTheMostSpentFlight) {
     }
     EXPECT_FALSE(saw_01);
     EXPECT_TRUE(saw_05);
+}
+
+// "Most spent" is the largest age / total, not the largest age: a young flight
+// of a short streak is nearer its end than an old flight of a long one.
+TEST(PhotonFlightPool, OverflowEvictsByFractionSpentNotByAge) {
+    ses::PhotonFlightPool pool;
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.1, 400);  // long
+    for (int t = 0; t < 30; ++t) {
+        pool.advance();
+    }
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.2, 40);  // short
+    for (int t = 0; t < 30; ++t) {
+        pool.advance();  // long: 60 / 400 = 0.15   short: 30 / 40 = 0.75
+    }
+    for (int i = 2; i < ses::kMaxPhotonFlights; ++i) {
+        pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1},
+                   10.0 + static_cast<double>(i), 100);
+    }
+    ASSERT_EQ(pool.count(), ses::kMaxPhotonFlights);
+    pool.spawn(ses::PhotonRecord{Vec3d{0.0, 0.0, 1.0}, +1}, 0.5, 100);
+    bool saw_long = false;
+    bool saw_short = false;
+    for (int i = 0; i < pool.count(); ++i) {
+        const ses::PhotonFlightPool::Flight* f = pool.active(i);
+        ASSERT_NE(f, nullptr);
+        saw_long = saw_long || f->delta_e == 0.1;
+        saw_short = saw_short || f->delta_e == 0.2;
+    }
+    EXPECT_TRUE(saw_long) << "the oldest flight is only 15% spent";
+    EXPECT_FALSE(saw_short) << "the 75%-spent flight is the one to go";
 }
 
 TEST(PhotonFlightPool, AdvanceExpiresFlightsPastTheirTotal) {
@@ -164,6 +195,56 @@ TEST(PhotonStreak, HelixTwistSenseFollowsHelicity) {
         for (std::size_t i = 0; i + 1 < body; ++i) {
             const double cross = v[i].x * v[i + 1].y - v[i].y * v[i + 1].x;
             EXPECT_LT(lam * cross, 0.0);
+        }
+    }
+}
+
+// Off the pole the helix lives in the (theta_hat, phi_hat) frame of the
+// emission direction: transverse to n, radius R, phase 0 along theta_hat at
+// the head, and the same screw sense about n as on the z axis -- also in the
+// lower hemisphere, where a frame built from |n_z| would turn the other way.
+TEST(PhotonStreak, TiltedDirectionsKeepTheFrameAndTheScrewSense) {
+    const double de = 0.375;
+    const double sh = 0.5 * ses::photon_travel(de);
+    struct Dir {
+        double theta;
+        double phi;
+    };
+    for (const Dir d : {Dir{0.6, 0.9}, Dir{1.3, -2.2}, Dir{2.4, 0.4},
+                        Dir{2.9, 3.0}, Dir{1.5707963267948966, 1.0}}) {
+        const Vec3d n{std::sin(d.theta) * std::cos(d.phi),
+                      std::sin(d.theta) * std::sin(d.phi), std::cos(d.theta)};
+        const Vec3d th{std::cos(d.theta) * std::cos(d.phi),
+                       std::cos(d.theta) * std::sin(d.phi), -std::sin(d.theta)};
+        for (const int lam : {+1, -1}) {
+            const auto v =
+                ses::photon_streak_vertices(ses::PhotonRecord{n, lam}, de, 0.5);
+            ASSERT_EQ(v.size(),
+                      static_cast<std::size_t>(ses::kPhotonStreakPoints));
+            const std::size_t body = v.size() - 1;
+            std::vector<Vec3d> tr(body);  // transverse parts
+            double prev_s = -1.0;
+            for (std::size_t i = 0; i < body; ++i) {
+                const double s = ses::dot(v[i], n);
+                EXPECT_GT(s, prev_s);
+                prev_s = s;
+                tr[i] = v[i] - s * n;
+                EXPECT_NEAR(ses::length(tr[i]), ses::kPhotonStreakRadius, 1e-9)
+                    << "theta " << d.theta << " phi " << d.phi;
+            }
+            // Head: axial sh, transverse +R theta_hat.
+            EXPECT_NEAR(ses::dot(v[body - 1], n), sh, 1e-9);
+            EXPECT_NEAR(ses::length(tr[body - 1] -
+                                    ses::kPhotonStreakRadius * th),
+                        0.0, 1e-9)
+                << "theta " << d.theta << " phi " << d.phi;
+            // Screw sense about n: -lam, as on the pole.
+            for (std::size_t i = 0; i + 1 < body; ++i) {
+                EXPECT_LT(lam * ses::dot(ses::cross(tr[i], tr[i + 1]), n), 0.0);
+            }
+            // Tip on the axis.
+            const Vec3d tip = v.back();
+            EXPECT_NEAR(ses::length(tip - ses::dot(tip, n) * n), 0.0, 1e-9);
         }
     }
 }
