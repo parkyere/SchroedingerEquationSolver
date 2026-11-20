@@ -480,6 +480,19 @@ public:
         }
     }
 
+    // Key 1 and M leave the Relaxing mode the atlas flush runs in: end the
+    // flush properly, or "(flushing...)" and prepared() == false stay for
+    // good and the deflation buffers + the 134 MB table V are held until the
+    // next selection.
+    void do_set_real_time() override {
+        abort_flush();
+        MoleculeDirectorBase::do_set_real_time();
+    }
+    void measure_now() override {
+        abort_flush();
+        MoleculeDirectorBase::measure_now();
+    }
+
     double default_camera_azimuth() const override { return 0.35; }
     double default_camera_elevation() const override { return 0.28; }
     double default_camera_distance() const override { return 95.0; }

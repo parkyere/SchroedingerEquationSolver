@@ -309,6 +309,13 @@ public:
             return;  // the startup atlas build owns the GPU state
         }
         spectro_ev_.clear();
+        // A fresh draw: the previous state's photon tally, last jump and
+        // measurement outcomes describe a state that no longer exists.
+        photon_count_ = 0;
+        last_jump_.clear();
+        last_measure_.clear();
+        last_measured_index_ = -2;
+        last_partial_outcome_ = -99;
         sim_ = make_simulation();
         stepping_ = BaseStepping::RealTime;
         free_deflation_buffers();
