@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
+#include <cstddef>
 #include <vector>
 import ses.imaginary_time;
 import ses.observables;
@@ -50,6 +52,41 @@ TEST(ImaginaryTime, FindsSoftCoulombBoundState) {
     EXPECT_LT(e0, -0.5);
     EXPECT_NEAR(e0, -0.6698, 1e-3);   // literature value
     EXPECT_NEAR(ses::mean_position(psi), 0.0, 1e-6);
+}
+
+// relax() IS the Strang step of the public blocks -- half weight, transform,
+// kinetic weight, inverse, half weight, renormalize -- bit for bit. Pins the
+// result ahead of a change in how the propagator holds its FFT tables.
+TEST(ImaginaryTime, RelaxIsTheStrangStepOfThePublicBlocksBitwise) {
+    const std::vector<double> v = ses::harmonic_potential(kGrid, 1.0, 0.0);
+    const double dtau = 0.005;
+    const int steps = 7;
+    Field1D psi = ses::gaussian_wavepacket(kGrid, 1.0, 2.0, 0.3);
+    Field1D ref = psi;
+    const ImaginaryTimePropagator1D relaxer{kGrid, v, dtau};
+    relaxer.relax(psi, steps);
+
+    const auto weight = [](double th) { return std::exp(th); };
+    const std::vector<double> half =
+        ses::build_half_potential_table(v, dtau, weight);
+    const std::vector<double> kin =
+        ses::build_kinetic_table(kGrid, 1.0, dtau, weight);
+    std::vector<std::complex<double>>& a = ref.data();
+    for (int s = 0; s < steps; ++s) {
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            a[i] = half[i] * a[i];
+        }
+        ses::fft(a);
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            a[i] = kin[i] * a[i];
+        }
+        ses::ifft(a);
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            a[i] = half[i] * a[i];
+        }
+        ses::normalize(ref);
+    }
+    EXPECT_EQ(psi.data(), ref.data());
 }
 
 }  // namespace
