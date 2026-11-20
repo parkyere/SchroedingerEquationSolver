@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstddef>
 #include <numbers>
+#include <stdexcept>
+#include <vector>
 import ses.grid;
 import ses.fft;
 import ses.field;
@@ -96,6 +98,20 @@ TEST(Fft3, ParsevalEnergyIdentity) {
         freq_energy += std::norm(v);
     }
     EXPECT_NEAR(time_energy, freq_energy / 64.0, 1e-10);
+}
+
+// Same contract in 3D: a non-power-of-two axis throws with the field intact.
+TEST(Fft3, InverseOfARejectedSizeLeavesTheFieldUntouched) {
+    const ses::Grid3D g{ses::Grid1D{0.0, 6.0, 6}, ses::Grid1D{0.0, 4.0, 4},
+                        ses::Grid1D{0.0, 4.0, 4}};
+    ses::Field3D f{g};
+    for (std::size_t c = 0; c < f.data().size(); ++c) {
+        f.data()[c] = std::complex<double>{1.0 + static_cast<double>(c),
+                                           0.5 - static_cast<double>(c)};
+    }
+    const std::vector<std::complex<double>> before = f.data();
+    EXPECT_THROW(ses::ifft(f), std::invalid_argument);
+    EXPECT_EQ(f.data(), before);
 }
 
 }  // namespace

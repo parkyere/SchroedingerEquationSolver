@@ -186,4 +186,15 @@ TEST(PhotonStreak, TipIsOnAxisAheadAndTailAnchorsAtTheNucleus) {
     EXPECT_GE(done.back().z, ses::photon_travel(0.375));
 }
 
+// A vanishing photon energy unrolls an unbounded tail (lambda ~ 1/dE): the
+// frame count must saturate, not overflow the int it is returned in (the
+// overflow came back as 0 or a negative count).
+TEST(PhotonStreak, AVanishingEnergySaturatesTheFlightFrames) {
+    for (const double de : {1e-9, 1e-12, 1e-300}) {
+        EXPECT_GT(ses::photon_flight_frames(de), ses::kPhotonFlightTicks) << de;
+    }
+    EXPECT_GE(ses::photon_flight_frames(1e-12), ses::photon_flight_frames(1e-9));
+    EXPECT_EQ(ses::photon_flight_frames(1e-300), ses::photon_flight_frames(1e-200));
+}
+
 }  // namespace

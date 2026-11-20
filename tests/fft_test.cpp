@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <numbers>
+#include <stdexcept>
 #include <vector>
 import ses.fft;
 
@@ -157,6 +158,17 @@ TEST(Fft, ParsevalEnergyIdentity) {
         freq_energy += std::norm(z);
     }
     EXPECT_NEAR(time_energy, freq_energy / 16.0, 1e-10);
+}
+
+// A size ifft cannot handle must be refused BEFORE the buffer is touched: the
+// conjugation identity conjugates first, and a throw from the forward
+// transform would hand the caller back a conjugated array.
+TEST(Fft, InverseOfARejectedSizeLeavesTheInputUntouched) {
+    std::vector<std::complex<double>> a{{1.0, 2.0},  {3.0, -4.0}, {5.0, 6.0},
+                                        {-7.0, 8.0}, {9.0, 1.0},  {2.0, -3.0}};
+    const std::vector<std::complex<double>> before = a;
+    EXPECT_THROW(ses::ifft(a), std::invalid_argument);
+    EXPECT_EQ(a, before);
 }
 
 }  // namespace
