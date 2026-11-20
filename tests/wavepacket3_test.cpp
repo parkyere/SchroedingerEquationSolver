@@ -4,7 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
 #include <cstddef>
+#include <numbers>
 #include <vector>
 import ses.observables;
 import ses.grid;
@@ -28,6 +30,45 @@ const Grid3D kGrid = cube(-10.0, 10.0, 64);
 const Vec3d kR0{1.0, -2.0, 0.5};
 const Vec3d kSigma{0.8, 1.0, 1.2};
 const Vec3d kK0{1.5, 0.0, -1.0};
+
+// The 3D packet is the per-cell closed form, bit for bit: a cheaper
+// construction (per-axis tables, pool threads) must keep every cell's value.
+TEST(GaussianWavepacket3, EqualsThePerCellClosedFormBitwise) {
+    const Grid3D g{Grid1D{-6.0, 6.0, 24}, Grid1D{-5.0, 7.0, 20},
+                   Grid1D{-4.0, 4.0, 16}};
+    const Vec3d r0{0.7, -1.1, 0.3};
+    const Vec3d sigma{1.3, 0.9, 1.7};
+    const Vec3d k0{0.8, -0.4, 1.9};
+    const auto envelope = [](double u, double u0, double s) {
+        return std::pow(2.0 * std::numbers::pi * s * s, -0.25) *
+               std::exp(-(u - u0) * (u - u0) / (4.0 * s * s));
+    };
+    Field3D ref{g};
+    for (int k = 0; k < g.z.n; ++k) {
+        for (int j = 0; j < g.y.n; ++j) {
+            for (int i = 0; i < g.x.n; ++i) {
+                const double x = g.x.coord(i);
+                const double y = g.y.coord(j);
+                const double z = g.z.coord(k);
+                const double env = envelope(x, r0.x, sigma.x) *
+                                   envelope(y, r0.y, sigma.y) *
+                                   envelope(z, r0.z, sigma.z);
+                const double phase = k0.x * x + k0.y * y + k0.z * z;
+                ref(i, j, k) = std::complex<double>{env * std::cos(phase),
+                                                    env * std::sin(phase)};
+            }
+        }
+    }
+    ses::normalize(ref);
+    const Field3D psi = ses::gaussian_wavepacket(g, r0, sigma, k0);
+    std::size_t differing = 0;
+    for (std::size_t c = 0; c < psi.data().size(); ++c) {
+        if (psi.data()[c] != ref.data()[c]) {
+            ++differing;
+        }
+    }
+    EXPECT_EQ(differing, 0u) << "of " << psi.data().size() << " cells";
+}
 
 TEST(GaussianWavepacket3, IsNormalized) {
     const Field3D psi = ses::gaussian_wavepacket(kGrid, kR0, kSigma, kK0);
