@@ -148,7 +148,7 @@ inline int sample_povm_index(const Field3D& psi, double sigma_m, double u) {
 inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) noexcept {
     const Grid3D& g = psi.grid();
     const double inv4s2 = 1.0 / (4.0 * sigma_m * sigma_m);
-    for_each_cell(g, [&](int i, int j, int k) {
+    parallel_for_each_cell(g, [&](int i, int j, int k) {
         const double dx = g.x.coord(i) - center.x;
         const double dy = g.y.coord(j) - center.y;
         const double dz = g.z.coord(k) - center.z;

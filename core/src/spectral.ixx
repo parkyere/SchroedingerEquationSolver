@@ -36,9 +36,11 @@ template <class Elem>
 auto build_half_potential_table(const std::vector<double>& v, double scale,
                                 Elem&& elem) {
     std::vector<decltype(elem(0.0))> table(v.size());
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        table[i] = elem(-0.5 * v[i] * scale);
-    }
+    // elem is a pure map (unit_phase / exp): each entry on its own.
+    parallel_for(static_cast<int>(v.size()), [&](int i) {
+        const std::size_t s = static_cast<std::size_t>(i);
+        table[s] = elem(-0.5 * v[s] * scale);
+    });
     return table;
 }
 
@@ -59,7 +61,7 @@ auto build_kinetic_table(const Grid3D& g, double mass, double scale, Elem&& elem
     const std::vector<double> ky = wavenumbers(g.y);
     const std::vector<double> kz = wavenumbers(g.z);
     std::vector<decltype(elem(0.0))> table(static_cast<std::size_t>(g.size()));
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         const double kxx = kx[static_cast<std::size_t>(i)];
         const double kyy = ky[static_cast<std::size_t>(j)];
         const double kzz = kz[static_cast<std::size_t>(k)];

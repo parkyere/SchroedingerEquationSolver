@@ -361,32 +361,27 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
         return ys[static_cast<std::size_t>(i)] * (1.0 - frac) +
                ys[static_cast<std::size_t>(i + 1)] * frac;
     };
-    for (int k = 0; k < g.z.n; ++k) {
-        const double z = g.z.coord(k);
-        for (int j = 0; j < g.y.n; ++j) {
-            const double y = g.y.coord(j);
-            for (int i = 0; i < g.x.n; ++i) {
-                const Vec3d r{g.x.coord(i), y, z};
-                const Vec3d da = r - na;
-                const Vec3d db = r - nb;
-                const double rA = std::sqrt(dot(da, da));
-                const double rB = std::sqrt(dot(db, db));
-                double xi = (rA + rB) / R;
-                double eta = (rA - rB) / R;
-                xi = std::max(1.0, xi);
-                eta = std::clamp(eta, -1.0, 1.0);
-                double ang = 1.0;
-                if (o.m > 0) {
-                    const double phi = std::atan2(dot(r, e2), dot(r, e1));
-                    ang = partner == 0 ? std::cos(o.m * phi)
-                                       : std::sin(o.m * phi);
-                }
-                const double val = interp(o.xi, o.lambda, xi, true) *
-                                   interp(o.eta, o.M, eta, false) * ang;
-                f(i, j, k) = std::complex<double>{val, 0.0};
-            }
+    // Each cell on its own (the scene samples up to 24 members per orbital
+    // selection at 256^3): rows run on the pool, values as in a serial scan.
+    parallel_for_each_cell(g, [&](int i, int j, int k) {
+        const Vec3d r{g.x.coord(i), g.y.coord(j), g.z.coord(k)};
+        const Vec3d da = r - na;
+        const Vec3d db = r - nb;
+        const double rA = std::sqrt(dot(da, da));
+        const double rB = std::sqrt(dot(db, db));
+        double xi = (rA + rB) / R;
+        double eta = (rA - rB) / R;
+        xi = std::max(1.0, xi);
+        eta = std::clamp(eta, -1.0, 1.0);
+        double ang = 1.0;
+        if (o.m > 0) {
+            const double phi = std::atan2(dot(r, e2), dot(r, e1));
+            ang = partner == 0 ? std::cos(o.m * phi) : std::sin(o.m * phi);
         }
-    }
+        const double val = interp(o.xi, o.lambda, xi, true) *
+                           interp(o.eta, o.M, eta, false) * ang;
+        f(i, j, k) = std::complex<double>{val, 0.0};
+    });
     const double nrm = norm_sq(f);
     if (nrm > 0.0) {
         const double inv = 1.0 / std::sqrt(nrm);

@@ -26,7 +26,7 @@ inline std::vector<double> diamagnetic_potential(std::vector<double> v,
     if (c == 0.0) {
         return v;
     }
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         const double coord[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
         double perp2 = 0.0;
         for (int a = 0; a < 3; ++a) {

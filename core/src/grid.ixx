@@ -3,6 +3,7 @@ module;
 #include <cmath>
 #include <type_traits>
 export module ses.grid;
+import ses.parallel;
 
 
 // Periodic grid (required by the split-operator Fourier propagator): xmax aliases
@@ -54,6 +55,25 @@ void for_each_cell(const Grid3D& g, Fn&& fn) {
             }
         }
     }
+}
+
+// for_each_cell for bodies that only read shared data and WRITE THEIR OWN
+// cell (table fills, in-place maps): the x-rows run on the pool, so every
+// cell gets the value the serial scan gives, for any pool width. Never for
+// a reduction -- there the scan order above is the contract.
+template <class Fn>
+void parallel_for_each_cell(const Grid3D& g, Fn&& fn) {
+    parallel_for(g.y.n * g.z.n, [&](int row) {
+        const int k = row / g.y.n;
+        const int j = row % g.y.n;
+        for (int i = 0; i < g.x.n; ++i) {
+            if constexpr (std::is_invocable_v<Fn&, int, int, int, int>) {
+                fn(i, j, k, g.flat(i, j, k));
+            } else {
+                fn(i, j, k);
+            }
+        }
+    });
 }
 
 }  // namespace ses

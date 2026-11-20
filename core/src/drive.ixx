@@ -24,7 +24,7 @@ struct DipoleDrive {
 inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, double dt) noexcept {
     const double theta = d.amplitude * std::cos(d.omega * t) * 0.5 * dt;
     const Grid3D& g = psi.grid();
-    for_each_cell(g, [&](int i, int j, int k) {
+    parallel_for_each_cell(g, [&](int i, int j, int k) {
         const double u = d.axis.x * g.x.coord(i) + d.axis.y * g.y.coord(j) +
                          d.axis.z * g.z.coord(k);
         const double ang = -theta * u;

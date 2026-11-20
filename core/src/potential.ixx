@@ -38,7 +38,7 @@ inline std::vector<double> soft_coulomb_potential(const Grid1D& g, double Z, dou
 
 inline std::vector<double> harmonic_potential(const Grid3D& g, double omega, Vec3d c) {
     std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         const double dx = g.x.coord(i) - c.x;
         const double dy = g.y.coord(j) - c.y;
         const double dz = g.z.coord(k) - c.z;
@@ -50,7 +50,7 @@ inline std::vector<double> harmonic_potential(const Grid3D& g, double omega, Vec
 
 inline std::vector<double> soft_coulomb_potential(const Grid3D& g, double Z, double a, Vec3d c) {
     std::vector<double> v(static_cast<std::size_t>(g.size()));
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         const double dx = g.x.coord(i) - c.x;
         const double dy = g.y.coord(j) - c.y;
         const double dz = g.z.coord(k) - c.z;
@@ -104,7 +104,7 @@ inline std::vector<double> tilted_potential(std::vector<double> v,
     for (int p = 0; p < ax.n; ++p) {
         tilt[static_cast<std::size_t>(p)] = e0 * ax.coord(p);
     }
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         const int idx[3] = {i, j, k};
         v[static_cast<std::size_t>(flat)] +=
             tilt[static_cast<std::size_t>(idx[axis])];
@@ -356,7 +356,7 @@ inline std::vector<double> absorbing_mask(const Grid3D& g, double width) {
     const std::vector<double> my = absorbing_mask(g.y, width);
     const std::vector<double> mz = absorbing_mask(g.z, width);
     std::vector<double> m(static_cast<std::size_t>(g.size()));
-    for_each_cell(g, [&](int i, int j, int k, int flat) {
+    parallel_for_each_cell(g, [&](int i, int j, int k, int flat) {
         m[static_cast<std::size_t>(flat)] = mx[static_cast<std::size_t>(i)] *
                                             my[static_cast<std::size_t>(j)] *
                                             mz[static_cast<std::size_t>(k)];
