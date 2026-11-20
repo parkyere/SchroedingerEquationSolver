@@ -4,6 +4,7 @@ module;
 #include <cmath>
 #include <complex>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -72,16 +73,21 @@ public:
     BouncerApi* bouncer() override { return this; }
 
     // Two-stage ITP anneal: fine polish clears the coarse dtau's Trotter
-    // bias (corral rule).
+    // bias (corral rule). Potential and seed are fixed, so the result is the
+    // same every time: anneal once, then Reset / key 2 restore it (they used
+    // to re-run 2 x 3000 steps, ~0.5 s of frozen UI per press).
     void relax_ground() override {
-        const ses::ImaginaryTimePropagator1D coarse{grid1d_, potential_,
-                                                    kBo1dItpCoarseDtau};
-        const ses::ImaginaryTimePropagator1D fine{grid1d_, potential_,
-                                                  kBo1dItpFineDtau};
-        ses::Field1D psi = ses::gaussian_wavepacket(grid1d_, 3.0, 1.5, 0.0);
-        coarse.relax(psi, kBo1dItpIters);
-        fine.relax(psi, kBo1dItpIters);
-        set_state(std::move(psi));
+        if (!ground_) {
+            const ses::ImaginaryTimePropagator1D coarse{grid1d_, potential_,
+                                                        kBo1dItpCoarseDtau};
+            const ses::ImaginaryTimePropagator1D fine{grid1d_, potential_,
+                                                      kBo1dItpFineDtau};
+            ses::Field1D psi = ses::gaussian_wavepacket(grid1d_, 3.0, 1.5, 0.0);
+            coarse.relax(psi, kBo1dItpIters);
+            fine.relax(psi, kBo1dItpIters);
+            ground_ = std::move(psi);
+        }
+        set_state(*ground_);
         e1_soft_ = energy();  // measured soft-floor E1 (title truth)
         sim_time_ = 0.0;
         pending_steps_ = 0;
@@ -137,6 +143,7 @@ private:
     }
 
     double e1_soft_ = 0.0;  // relaxed <H>: soft-floor E1
+    std::optional<ses::Field1D> ground_;  // the annealed ground, built once
 };
 
 }  // namespace ses_shell

@@ -311,12 +311,10 @@ protected:
                 eng_.upload_state(psi_.data());
                 eng_dirty_ = false;
             }
-            int left = n;
-            while (left > 0) {
-                const int c = std::min(left, 8);
-                eng_.step(c, {.absorb = true});  // damp_ applied each step
-                left -= c;
-            }
+            // One batch: the engine applies damp_ after every step, and
+            // nothing is read between chunks (8-step chunks only added a
+            // fenced submit per chunk at high dial settings).
+            eng_.step(n, {.absorb = true});
             eng_.readback(rb_);
             unpack_interleaved(rb_.data(), psi_.data());
             ses::normalize(psi_);  // display/confinement copy (GPU state left as is)
