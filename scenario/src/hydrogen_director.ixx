@@ -403,15 +403,19 @@ public:
     // Relax into z-aligned 2p: the z-odd seed keeps the flow in the odd-parity
     // sector, so it converges deterministically.
     void relax_to_excited() override {
-        start_excited_relax(make_axis_odd_seed(2), "2p", false);
+        start_excited_relax([this] { return make_axis_odd_seed(2); }, "2p",
+                            false);
     }
 
     // Relax into 2s. The 2p triplet is deflated too (2s sits ABOVE it) --
     // see start_excited_relax.
     void relax_to_2s() override {
         start_excited_relax(
-            ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
-                                     ses::Vec3d{4.0, 4.0, 4.0}, ses::Vec3d{}),
+            [this] {
+                return ses::gaussian_wavepacket(sim_.grid(), ses::Vec3d{},
+                                                ses::Vec3d{4.0, 4.0, 4.0},
+                                                ses::Vec3d{});
+            },
             "2s", true);
     }
 
@@ -1179,7 +1183,11 @@ private:
     // Launcher for the excited relaxation demos (keys 3/4). FOOTGUN: deflate
     // EVERY state below the target -- with only 1s removed, fp32 parity
     // leakage grows exponentially until the on-screen "2s" morphs into 2p.
-    void start_excited_relax(const ses::Field3D& seed, const char* label,
+    // make_seed() is called only once the relax is certain to start: the
+    // seed is a 268 MB field, and a refused key 3/4 (no GPU, atlas still
+    // building, no manifold) used to build it first and stall for nothing.
+    template <class MakeSeed>
+    void start_excited_relax(MakeSeed&& make_seed, const char* label,
                              bool deflate_p_triplet) {
         if (!gpu_ok_ || solving()) {
             return;  // deflation runs on the GPU path only
@@ -1209,7 +1217,7 @@ private:
             free_deflation_buffers();
             return;
         }
-        sim_.set_psi(seed);
+        sim_.set_psi(make_seed());
         cpu_is_truth_ = true;
         relax_label_ = label;
         relax_plateau_ = 0;
@@ -1220,16 +1228,12 @@ private:
     ses::Field3D make_axis_odd_seed(int axis) const {  // 0 = x, 1 = y, 2 = z
         const ses::Grid3D& g = sim_.grid();
         ses::Field3D seed{g};
-        for (int k = 0; k < g.z.n; ++k) {
-            for (int j = 0; j < g.y.n; ++j) {
-                for (int i = 0; i < g.x.n; ++i) {
-                    const double c[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
-                    const double env = std::exp(
-                        -(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) / (4.0 * 2.0 * 2.0));
-                    seed(i, j, k) = std::complex<double>{c[axis] * env, 0.0};
-                }
-            }
-        }
+        ses::parallel_for_each_cell(g, [&](int i, int j, int k) {
+            const double c[3] = {g.x.coord(i), g.y.coord(j), g.z.coord(k)};
+            const double env = std::exp(
+                -(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) / (4.0 * 2.0 * 2.0));
+            seed(i, j, k) = std::complex<double>{c[axis] * env, 0.0};
+        });
         ses::normalize(seed);
         return seed;
     }
