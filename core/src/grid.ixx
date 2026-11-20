@@ -24,8 +24,14 @@ struct Grid1D {
 
 // Nearest lattice index to x (uniform axis: arithmetic, no scan); clamped.
 inline int nearest_index(const Grid1D& g, double x) {
-    const int i = static_cast<int>(std::round((x - g.xmin) / g.spacing()));
-    return std::clamp(i, 0, g.n - 1);
+    // Clamp as a double: casting an out-of-range value (or NaN) to int is
+    // undefined, and x86's INT_MIN result sent +1e300 to cell 0.
+    const double r = std::round((x - g.xmin) / g.spacing());
+    if (!(r > 0.0)) {
+        return 0;  // below the axis, or NaN
+    }
+    const double last = static_cast<double>(g.n - 1);
+    return r >= last ? g.n - 1 : static_cast<int>(r);
 }
 
 // Flat layout x-fastest: x-lines contiguous for the 3D FFT, and matches the

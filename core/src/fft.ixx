@@ -88,6 +88,11 @@ inline void fft(std::vector<std::complex<double>>& a) { fft(a.data(), a.size());
 // twiddle table: the hot 1D propagators keep one across steps instead of
 // recomputing n/2 sin/cos pairs per call.
 inline void ifft(std::complex<double>* a, std::size_t n, const std::complex<double>* w) {
+    // Refuse before touching a: fft() would throw on the already-conjugated
+    // buffer and hand it back that way.
+    if ((n & (n - 1)) != 0) {
+        throw std::invalid_argument("ses::ifft: size must be a power of two");
+    }
     for (std::size_t i = 0; i < n; ++i) {
         a[i] = conj(a[i]);
     }
@@ -177,6 +182,12 @@ inline void fft(Field3D& f) {
 // (disjoint -> bitwise identical to serial).
 inline void ifft(Field3D& f) {
     std::vector<std::complex<double>>& a = f.data();
+    const Grid3D& g = f.grid();
+    // Refuse before touching f (see the 1D ifft).
+    if (((g.x.n & (g.x.n - 1)) | (g.y.n & (g.y.n - 1)) |
+         (g.z.n & (g.z.n - 1))) != 0) {
+        throw std::invalid_argument("ses::ifft: size must be a power of two");
+    }
     const int n = static_cast<int>(a.size());
     parallel_for(n, [&](int i) {
         a[static_cast<std::size_t>(i)] = conj(a[static_cast<std::size_t>(i)]);

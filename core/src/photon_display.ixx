@@ -44,10 +44,16 @@ inline double photon_travel(double delta_e) noexcept {
 // Flight lifetime in frames: Lyman-alpha (2p->1s) = kPhotonFlightTicks (2 s),
 // every other photon flies at the SAME display speed (frames scale with
 // travel).
+// A vanishing delta_e unrolls an unbounded tail (lambda ~ 1/dE): the count
+// saturates at kPhotonMaxFlightFrames instead of overflowing its int.
+inline constexpr int kPhotonMaxFlightFrames = 1'000'000'000;
+
 inline int photon_flight_frames(double delta_e) noexcept {
-    return static_cast<int>(
-        std::lround(kPhotonFlightTicks * photon_travel(delta_e) /
-                    photon_travel(kPhotonRefDeltaE)));
+    const double frames = kPhotonFlightTicks * photon_travel(delta_e) /
+                          photon_travel(kPhotonRefDeltaE);
+    return frames < static_cast<double>(kPhotonMaxFlightFrames)
+               ? static_cast<int>(std::lround(frames))
+               : kPhotonMaxFlightFrames;
 }
 
 // Photon flash: linear decay, peak capped at 1/3 (full bright hurt the eye).
