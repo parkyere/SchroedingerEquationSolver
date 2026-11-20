@@ -27,6 +27,36 @@ Grid3D make_grid(int nx, int ny, int nz) {
     return Grid3D{Grid1D{0.0, 1.0, nx}, Grid1D{0.0, 1.0, ny}, Grid1D{0.0, 1.0, nz}};
 }
 
+// The public 1D kernel along x, then y, then z (gather, transform, scatter).
+std::vector<std::complex<double>> per_axis_reference(const Field3D& f) {
+    const Grid3D& g = f.grid();
+    std::vector<std::complex<double>> a = f.data();
+    const int n[3] = {g.x.n, g.y.n, g.z.n};
+    const int stride[3] = {1, g.x.n, g.x.n * g.y.n};
+    for (int axis = 0; axis < 3; ++axis) {
+        const std::size_t len = static_cast<std::size_t>(n[axis]);
+        const std::vector<std::complex<double>> w = ses::fft_twiddles(len);
+        std::vector<std::complex<double>> line(len);
+        const int o1 = (axis + 1) % 3;
+        const int o2 = (axis + 2) % 3;
+        for (int q = 0; q < n[o2]; ++q) {
+            for (int p = 0; p < n[o1]; ++p) {
+                const std::size_t base =
+                    static_cast<std::size_t>(p * stride[o1] + q * stride[o2]);
+                const std::size_t step = static_cast<std::size_t>(stride[axis]);
+                for (std::size_t m = 0; m < len; ++m) {
+                    line[m] = a[base + m * step];
+                }
+                ses::fft(line.data(), len, w.data());
+                for (std::size_t m = 0; m < len; ++m) {
+                    a[base + m * step] = line[m];
+                }
+            }
+        }
+    }
+    return a;
+}
+
 TEST(Fft3, DcConcentratesAtOriginBin) {
     Field3D f{make_grid(8, 4, 2)};
     for (std::complex<double>& v : f.data()) {
@@ -112,6 +142,32 @@ TEST(Fft3, InverseOfARejectedSizeLeavesTheFieldUntouched) {
     const std::vector<std::complex<double>> before = f.data();
     EXPECT_THROW(ses::ifft(f), std::invalid_argument);
     EXPECT_EQ(f.data(), before);
+}
+
+// The 3D transform IS the 1D kernel per axis, bit for bit -- also on the planar
+// grids of the 2D scenes (nz = 1) and on any other grid with a unit axis,
+// where that axis has nothing to transform.
+TEST(Fft3, EqualsThePerAxisKernelBitwiseAlsoWithUnitAxes) {
+    const int shapes[][3] = {
+        {8, 4, 2}, {16, 8, 1}, {16, 1, 8}, {1, 8, 16}, {1, 1, 8}, {8, 1, 1}};
+    for (const auto& sh : shapes) {
+        Field3D f{make_grid(sh[0], sh[1], sh[2])};
+        for (int idx = 0; idx < f.size(); ++idx) {
+            const double t = static_cast<double>(idx);
+            f.data()[static_cast<std::size_t>(idx)] = std::complex<double>{
+                std::sin(0.7 * t) + 0.01 * t, std::cos(1.9 * t)};
+        }
+        const std::vector<std::complex<double>> want = per_axis_reference(f);
+        const Field3D original = f;
+        ses::fft(f);
+        EXPECT_EQ(f.data(), want)
+            << sh[0] << " x " << sh[1] << " x " << sh[2];
+        // ...and the inverse still undoes it on the same shapes.
+        ses::ifft(f);
+        for (std::size_t c = 0; c < f.data().size(); ++c) {
+            EXPECT_NEAR(std::abs(f.data()[c] - original.data()[c]), 0.0, kTol);
+        }
+    }
 }
 
 }  // namespace
