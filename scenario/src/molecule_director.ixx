@@ -776,9 +776,20 @@ private:
         }
         for (int i = 0; i < k; ++i) {
             const int h = engine_.create_state_buffer(synth_member(i).data());
-            if (h >= 0) {
-                flush_deflate_.push_back(h);
+            if (h < 0) {
+                // EVERY lower member must be in the set (hydrogen's deflation
+                // footgun): with one missing (a 134 MB VRAM miss) the flush
+                // would slide toward it under this member's label. Show the
+                // member as sampled instead.
+                std::fprintf(stderr,
+                             "h2+: deflation buffer %d of %d could not be "
+                             "created -- showing the sampled orbital unflushed\n",
+                             i + 1, k);
+                finish_flush(false);
+                flushed_ = true;
+                return;
             }
+            flush_deflate_.push_back(h);
         }
         flush_left_ = ses::kH2plusAtlasFlushSteps;
         flushed_ = false;
