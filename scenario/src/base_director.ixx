@@ -769,6 +769,9 @@ protected:
             }
             stage_volume();
             volume_dirty_ = true;
+            // The picture changed: without this the CPU path never resets
+            // the accumulation or rebuilds the occupancy/shadow volumes.
+            volume_written_ = true;
         } else {
             if (gpu_ok_) {
                 mc_dirty_ = true;

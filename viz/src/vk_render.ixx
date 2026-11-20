@@ -1954,13 +1954,18 @@ private:
         }
         if (!upload_image(fallback_tex_.img, psi_staging.data(),
                           psi_staging.size() * sizeof(float), {nx, ny, nz},
-                          first) &&
-            first) {
-            // Never written, still UNDEFINED: drop it, so nothing samples it
-            // and the next call starts the layout chain from UNDEFINED again
-            // (it was re-transitioned as SHADER_READ_ONLY).
-            ctx_->destroy_image(&fallback_tex_);
+                          first)) {
+            if (first) {
+                // Never written, still UNDEFINED: drop it, so nothing samples
+                // it and the next call starts the layout chain from UNDEFINED
+                // again (it was re-transitioned as SHADER_READ_ONLY).
+                ctx_->destroy_image(&fallback_tex_);
+            }
+            return;
         }
+        // Same view, new field: the occupancy/shadow volumes built from the
+        // old one would let rays skip the cloud's new position.
+        aux_valid_ = false;
     }
 
     // Point the psi bindings (raymarch, particle advection, occupancy/shadow)
