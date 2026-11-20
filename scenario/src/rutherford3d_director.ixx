@@ -66,6 +66,15 @@ public:
     }
     double z() const override { return z_; }
     void refire() override { reset_simulation(); }
+    // The panel's "Fire alpha (2)": the base key 2 is Relax, which this scene
+    // refuses (no bound target), so the advertised hotkey did nothing.
+    bool handle_key(char key) override {
+        if (key == '2') {
+            refire();
+            return true;
+        }
+        return BaseDirector::handle_key(key);
+    }
     double turning_point() const override {
         return kRu3dZProj * z_ / energy_;
     }
