@@ -110,6 +110,7 @@ public:
         }
         psi_ = std::move(next);
         eng_dirty_ = true;  // psi_ replaced on the CPU: re-upload before stepping
+        peak_ = 0.0;  // a new state: measure() snaps the normalizer to it
         measure();
         trail_.clear();
         push_trail();
@@ -318,24 +319,22 @@ private:
         antipode_dist_ = -1.0;
         closure_dist_ = -1.0;
         trail_.clear();
+        peak_ = 0.0;  // a fresh packet: measure() snaps the normalizer to it
         measure();
         push_trail();
         rebuild_orbit_overlay();
-        double pk = 0.0;
-        for (int j = 0; j < kLd2dN; ++j) {
-            for (int i = 0; i < kLd2dN; ++i) {
-                pk = std::max(pk, std::norm(psi_(i, j, 0)));
-            }
-        }
-        peak_ = pk;
         eng_dirty_ = true;  // psi_ rebuilt on the CPU: re-upload before stepping
         dirt_.mark_all_dirty();
     }
 
+    // Centroid, energy and the display normalizer in one pass. peak_ follows
+    // the density like the other 2D scenes (rises at once, decays by
+    // kPeakDecay per call), so a breathing packet keeps its brightness.
     void measure() {
         double mx = 0.0;
         double my = 0.0;
         double den = 0.0;
+        double pk = 0.0;
         double e_hop = 0.0;
         double e_site = 0.0;
         const double hx = phys_grid_.x.spacing();
@@ -346,6 +345,7 @@ private:
             for (int i = 0; i < kLd2dN; ++i) {
                 const std::complex<double> z = psi_(i, j, 0);
                 const double w = std::norm(z);
+                pk = std::max(pk, w);
                 mx += phys_grid_.x.coord(i) * w;
                 my += phys_grid_.y.coord(j) * w;
                 den += w;
@@ -367,6 +367,7 @@ private:
         mean_[0] = mx / den;
         mean_[1] = my / den;
         energy_ = (e_hop + e_site) / den;
+        peak_ = std::max(pk, kPeakDecay * peak_);
     }
 
     void record_crossings() {

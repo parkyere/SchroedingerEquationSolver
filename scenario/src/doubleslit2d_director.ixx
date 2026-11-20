@@ -420,10 +420,16 @@ private:
             static_cast<float>(5.0 * flux_ / (2.0 * pi));
         put(xs, 0.0f, 0.0f);
         put(xs, 0.0f, len);
-        const float back = len - 0.18f * len - std::copysign(0.6f, len);
-        put(xs - 0.8f, 0.0f, back);
+        // Head: 0.6 + 0.18 |len| long, 0.8 half-wide -- but never longer than
+        // the shaft, and scaled down with it, so no flux draws no arrowhead.
+        const float mag = std::abs(len);
+        const float full = 0.6f + 0.18f * mag;
+        const float head = std::min(full, mag);
+        const float back = len - std::copysign(head, len);
+        const float barb = 0.8f * head / full;
+        put(xs - barb, 0.0f, back);
         put(xs, 0.0f, len);
-        put(xs + 0.8f, 0.0f, back);
+        put(xs + barb, 0.0f, back);
 
         plate_curve_ = {static_cast<float>(kDs2dScreenX),
                         -static_cast<float>(kDs2dBoxY - kDs2dAbsorb), 0.0f,
