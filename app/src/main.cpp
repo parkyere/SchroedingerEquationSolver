@@ -201,6 +201,14 @@ public:
             fatal_shell_error("render resources",
                               "ses_vk renderer initialization failed");
         }
+        // On Wayland the surface has no size of its own: the swapchain takes
+        // the window's pixel size.
+        int win_w = 0;
+        int win_h = 0;
+        SDL_GetWindowSizeInPixels(window_, &win_w, &win_h);
+        presenter_.set_window_extent(
+            static_cast<std::uint32_t>(std::max(win_w, 0)),
+            static_cast<std::uint32_t>(std::max(win_h, 0)));
         if (!presenter_.init(vk_ctx_, surface_, k_blit_vert_spv,
                              k_blit_vert_spv_size, k_blit_frag_spv,
                              k_blit_frag_spv_size)) {
@@ -573,6 +581,10 @@ private:
                     request_exit(exit_code_);
                     break;
                 case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                    // data1 x data2 = the new size in pixels
+                    presenter_.set_window_extent(
+                        static_cast<std::uint32_t>(std::max(e.window.data1, 0)),
+                        static_cast<std::uint32_t>(std::max(e.window.data2, 0)));
                     presenter_.request_resize();
                     break;
                 case SDL_EVENT_KEY_DOWN:

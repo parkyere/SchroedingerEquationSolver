@@ -97,6 +97,14 @@ public:
 
     void request_resize() { resize_requested_ = true; }
 
+    // The window's size in pixels. A surface may have no size of its own
+    // (Wayland reports currentExtent = 0xFFFFFFFF: the swapchain decides);
+    // the swapchain then takes this one. Give it before init() and whenever
+    // the pixel size changes; where the surface has a size it is ignored.
+    void set_window_extent(std::uint32_t w, std::uint32_t h) {
+        window_extent_ = {w, h};
+    }
+
     // Call at loop top, before the frame's compute: the FIFO/vsync backpressure
     // wait overlaps the sim batch + scene render instead of trailing as dead time.
     // Idempotent until present() consumes the image; false when minimized/mid-rebuild.
@@ -482,11 +490,53 @@ private:
                VK_SUCCESS;
     }
 
+    // OPAQUE is the wish, not a guarantee: some surfaces offer only inherit
+    // or pre-multiplied, and an unsupported bit fails the swapchain create.
+    static VkCompositeAlphaFlagBitsKHR pick_composite_alpha(
+        VkCompositeAlphaFlagsKHR supported) {
+        for (const VkCompositeAlphaFlagBitsKHR want :
+             {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+              VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+              VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+              VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
+            if ((supported & want) != 0) {
+                return want;
+            }
+        }
+        return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    }
+
     bool create_swapchain() {
         VkSurfaceCapabilitiesKHR caps{};
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx_->phys_dev, surface_,
-                                                  &caps);
+        const VkResult cr = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            ctx_->phys_dev, surface_, &caps);
+        if (cr != VK_SUCCESS) {
+            // Zeroed caps would read as "minimized" for good; say it (once
+            // per streak) and let the caller retry.
+            if (!caps_failure_reported_) {
+                std::fprintf(stderr, "vk: surface capabilities %s\n",
+                             ses_vk::vk_result_str(cr));
+                caps_failure_reported_ = true;
+            }
+            return false;
+        }
+        caps_failure_reported_ = false;
         extent_ = caps.currentExtent;
+        if (extent_.width == 0xFFFFFFFFu) {
+            // The surface leaves its size to the swapchain (Wayland): take the
+            // window's, inside the surface's limits. No window size yet reads
+            // as minimized (extent 0) until set_window_extent() gives one.
+            if (window_extent_.width == 0 || window_extent_.height == 0) {
+                extent_ = {0, 0};
+            } else {
+                extent_.width =
+                    std::clamp(window_extent_.width, caps.minImageExtent.width,
+                               caps.maxImageExtent.width);
+                extent_.height = std::clamp(window_extent_.height,
+                                            caps.minImageExtent.height,
+                                            caps.maxImageExtent.height);
+            }
+        }
         if (extent_.width == 0 || extent_.height == 0) {
             return true;  // minimized: present() skips until resize
         }
@@ -506,7 +556,7 @@ private:
         sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         sci.preTransform = caps.currentTransform;
-        sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        sci.compositeAlpha = pick_composite_alpha(caps.supportedCompositeAlpha);
         sci.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // vsync, always available
         sci.clipped = VK_TRUE;
         if (vkCreateSwapchainKHR(ctx_->device, &sci, nullptr, &swapchain_) !=
@@ -609,6 +659,8 @@ private:
     std::uint32_t acquired_idx_ = 0;  // valid while acquired_
     bool acquired_ = false;
     bool resize_requested_ = false;
+    VkExtent2D window_extent_{};  // the shell's pixel size (set_window_extent)
+    bool caps_failure_reported_ = false;
 };
 
 // --dump-frame: SceneRenderer image (RGBA8, SHADER_READ_ONLY_OPTIMAL) -> host BMP.
