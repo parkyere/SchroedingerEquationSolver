@@ -48,6 +48,23 @@ TEST(HoSpectrum, OneDEigenstateIsOneLineAndCoherentReconstructs) {
     EXPECT_NEAR(mean / tot, ses::mean_energy(coh, v), 0.01);
 }
 
+// Each line is the projection onto the Hermite-Gauss oracle of its level,
+// bit for bit: the strip may be computed any cheaper way that keeps that.
+TEST(HoSpectrum, OneDLinesAreTheEigenstateProjectionsBitwise) {
+    const ses::Grid1D g{-60.0, 60.0, 4096};
+    const double omega = 0.25;
+    ses::Field1D psi = ses::gaussian_wavepacket(g, 5.5, 1.1, 0.4);  // squeezed, moving
+    const auto lines = ses::ho1d_spectrum(psi, omega, 12.0);
+    ASSERT_EQ(lines.size(), 48u);  // (n + 1/2) w <= 12
+    for (std::size_t n = 0; n < lines.size(); ++n) {
+        const ses::Field1D basis =
+            ses::ho_eigenstate(g, omega, static_cast<int>(n));
+        EXPECT_EQ(lines[n].first, (static_cast<double>(n) + 0.5) * omega);
+        EXPECT_EQ(lines[n].second, std::norm(ses::inner_product(basis, psi)))
+            << "level " << n;
+    }
+}
+
 TEST(HoSpectrum, FockDarwinGroundIsOneLineAndBReconstructs) {
     const ses::Grid3D g{ses::Grid1D{-20.0, 20.0, 128},
                         ses::Grid1D{-20.0, 20.0, 128},
