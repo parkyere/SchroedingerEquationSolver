@@ -102,11 +102,13 @@ set(SES_SCENARIO_TESTS
     bouncer1d_test.cpp
     carpet1d_test.cpp
     corral2d_director_test.cpp
+    doubleslit2d_director_test.cpp
     doublewell1d_director_test.cpp
     harmonic1d_director_test.cpp
     landau2d_director_test.cpp
     qdot2d_director_test.cpp
     qpc2d_test.cpp
+    rutherford3d_director_test.cpp
     spin_director_test.cpp
     time_scale_realtime_test.cpp
 )
