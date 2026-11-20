@@ -767,7 +767,10 @@ private:
             distance_ == acc_prev_.distance && in.peak == acc_prev_.peak &&
             view_.absorbance == acc_prev_.absorbance && in.flash == 0.0f &&
             acc_prev_.flash == 0.0f && in.cloud == acc_prev_.cloud &&
-            plane == acc_prev_.plane;
+            plane == acc_prev_.plane &&
+            // A flow toggle (F) redraws the streaks even on a paused frame;
+            // averaged in, it would fade in at 1/N or be skipped once converged.
+            in.flow == acc_prev_.flow;
         // Overlay polylines (1D phasor curves, photon streaks); queried BEFORE
         // the accumulation gate: in-flight curves must break the freeze.
         const int nov = std::min(director_->overlay_curve_count(),
@@ -788,7 +791,7 @@ private:
         in.volume_changed =
             volume_written || view_.absorbance != acc_prev_.absorbance;
         acc_prev_ = {azimuth_, elevation_, distance_, in.peak, view_.absorbance,
-                     in.flash, in.cloud, plane};
+                     in.flash, in.cloud, plane, in.flow};
         const int nmk = std::min(director_->marker_count(),
                                  ses_vk::SceneRenderer::kMaxMarkers);
         for (int m = 0; m < nmk; ++m) {
@@ -873,6 +876,7 @@ private:
         float flash = 0.0f;
         bool cloud = true;
         PlaneState plane;
+        bool flow = false;
     } acc_prev_;
     long long frame_index_ = 0;
     ses::ViewState view_;  // flow tracers (F) + fog absorbance ([ ])

@@ -314,7 +314,7 @@ void draw_hydrogen_panel(ShellT& shell, UiState& ui, ses_shell::HydrogenApi& hy)
 
     if (ImGui::Button("Pause (Space)")) shell.toggle_pause();
     ImGui::SameLine();
-    if (ImGui::Button("Face z (Z)")) shell.snap_camera_z();
+    if (ImGui::Button("Face z")) shell.snap_camera_z();
     ImGui::SameLine();
     if (ImGui::Button("Cloud/Surface (Tab)")) shell.toggle_view_mode();
 
