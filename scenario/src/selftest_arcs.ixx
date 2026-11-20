@@ -706,6 +706,7 @@ void register_verification_arcs(ShellT* the_shell) {
                     double phi_prev = 0.0;
                     double phi_acc = 0.0;
                     double t0 = -1.0;
+                    double t_last = -1.0;  // sim time of the last probe
                     double r_lo = 1e9;
                     double r_hi = 0.0;
                     double z_hi = 0.0;
@@ -721,19 +722,24 @@ void register_verification_arcs(ShellT* the_shell) {
                     ob->r_hi = std::max(ob->r_hi, r);
                     ob->z_hi =
                         std::max(ob->z_hi, std::abs(shell->hy()->mean_z()));
+                    const double t = shell->director().sim_time();
                     if (ob->t0 < 0.0) {
-                        ob->t0 = shell->director().sim_time();
+                        ob->t0 = t;
                     } else {
                         double d = phi - ob->phi_prev;
                         while (d > pi) d -= 2.0 * pi;
                         while (d < -pi) d += 2.0 * pi;
                         ob->phi_acc += d;
                     }
+                    ob->t_last = t;
                     ob->phi_prev = phi;
                 });
                 shell->sched().after(90000, [shell, name, ob, probe] {
                     shell->sched().cancel(probe);
-                    const double dt = shell->director().sim_time() - ob->t0;
+                    // The phase stops accumulating at the LAST probe: measure
+                    // the time to there, not to this deadline (up to one
+                    // 1.5 s probe period later -- the rate read 1-2 % low).
+                    const double dt = ob->t_last - ob->t0;
                     const double n_bar = kKeplerNBar;
                     const double w_pred = 1.0 / (n_bar * n_bar * n_bar);
                     const double rate = dt > 0.0 ? ob->phi_acc / dt : 0.0;
