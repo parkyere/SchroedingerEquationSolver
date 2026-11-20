@@ -170,6 +170,9 @@ public:
     bool gpu_ok() const override { return false; }
 
     void run_frame() override {
+        if (gpu_ready_ && (gpu_.device_lost() || gpu_mf_.device_lost())) {
+            leave_gpu_after_device_loss();
+        }
         if (pending_steps_ > 0) {
             const int n = pending_steps_;
             pending_steps_ = 0;
@@ -411,6 +414,20 @@ private:
             lat_.s[static_cast<std::size_t>(i)] =
                 ses::spinor_from_bloch(d.x, d.y, d.z);
         }
+    }
+
+    // The device is gone and its calls are no-ops: without this the last
+    // arrows would be replayed forever. Carry on from them on the CPU. Exact
+    // mode restarts as their product state (the 2^16 amplitudes cannot be
+    // read back any more) -- the conversion set_exact() does between modes.
+    void leave_gpu_after_device_loss() {
+        lat_from_bloch();  // the engines' last host-side Bloch vectors
+        gpu_ready_ = false;
+        if (exact_mode_) {
+            exact_ = ses::exact_from_product(lat_);
+        }
+        note_ = "GPU lost: continuing on the CPU from the last arrows";
+        title_dirty_ = true;
     }
 
     void push_exact_to_gpu() {

@@ -250,6 +250,10 @@ protected:
     }
 
     void do_steps(int n) override {
+        if (eng_ok_ && eng_.device_lost()) {
+            // The engine is a no-op now; psi_ is its last good readback.
+            eng_ok_ = false;
+        }
         if (relaxing_) {
             // Disc projection between chunks makes prep the closed-corral
             // Dirichlet problem; without it the leaky fence drains relax into

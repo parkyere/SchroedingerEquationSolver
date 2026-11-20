@@ -209,6 +209,10 @@ protected:
     }
 
     void do_steps(int n) override {
+        if (eng_ok_ && eng_.device_lost()) {
+            // The engine is a no-op now; psi_ is its last good readback.
+            eng_ok_ = false;
+        }
         if (eng_ok_) {
             if (eng_dirty_) {
                 eng_.upload_state(psi_.data());

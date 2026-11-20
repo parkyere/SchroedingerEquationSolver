@@ -160,6 +160,10 @@ public:
             pending_steps_ = 0;
             // Chunk so trail + antipode/closure records get finer
             // granularity than one time-scaled batch.
+            if (eng_ok_ && eng_.device_lost()) {
+                // The engine is a no-op now; psi_ is its last good download.
+                eng_ok_ = false;
+            }
             if (eng_ok_ && eng_dirty_) {
                 eng_.upload(psi_.data());
                 eng_dirty_ = false;

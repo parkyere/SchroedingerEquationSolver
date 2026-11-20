@@ -134,7 +134,11 @@ protected:
     // ---- GPU propagator seam (derived route do_steps here when active) ----
     // set_lattice is void: an allocation failure leaves an engine with no
     // buffers, so only a built lattice takes the propagation (else CPU).
-    bool gpu_active() const { return gpu_lattice_ok_ && gpu_.ready(); }
+    // Not after a device loss: the engine's calls turn into no-ops and psi_
+    // (the last good download) would be replayed forever -- the CPU resumes.
+    bool gpu_active() const {
+        return gpu_lattice_ok_ && gpu_.ready() && !gpu_.device_lost();
+    }
     virtual void on_gpu_ready() {}  // push potential + field once the device is up
     void gpu_set_lattice(const std::vector<double>& v, double dt) {
         if (gpu_lattice_ok_) {

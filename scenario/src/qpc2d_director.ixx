@@ -180,6 +180,10 @@ protected:
     // does the propagation; the CAP edits psi_ on the CPU each step (contract
     // parity), so re-upload before the next GPU step.
     void do_steps(int n) override {
+        if (eng_ok_ && eng_.device_lost()) {
+            // The engine is a no-op now; psi_ is its last good readback.
+            eng_ok_ = false;
+        }
         if (eng_ok_) {
             if (eng_dirty_) {
                 eng_.upload_state(psi_.data());

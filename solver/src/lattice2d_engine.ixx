@@ -92,6 +92,9 @@ public:
     }
 
     bool ready() const { return ready_ && n_cells_ > 0; }
+    // A failed submit or copy latches this on the shared context; every later
+    // call here is then a silent no-op, so the caller must leave the GPU path.
+    bool device_lost() const { return ctx_ != nullptr && ctx_->device_lost; }
 
     // (Re)build all lattice-sized buffers + the Strang coefficients for a grid,
     // on-site potential, and dt. Links default to 1 (set_uniform_field adds a

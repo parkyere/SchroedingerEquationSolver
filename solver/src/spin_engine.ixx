@@ -306,6 +306,9 @@ public:
     }
 
     bool ready() const { return ready_; }
+    // A failed submit or copy latches this on the shared context; every later
+    // call here is then a silent no-op, so the caller must leave the GPU path.
+    bool device_lost() const { return ctx_ != nullptr && ctx_->device_lost; }
     std::size_t dim() const { return dim_; }
 
     // Host UBO writes only, no GPU dispatch.
@@ -875,6 +878,9 @@ public:
     }
 
     bool ready() const { return ready_; }
+    // A failed submit or copy latches this on the shared context; every later
+    // call here is then a silent no-op, so the caller must leave the GPU path.
+    bool device_lost() const { return ctx_ != nullptr && ctx_->device_lost; }
 
     void set_params(double bx, double by, double bz, double j, double alpha,
                     double dt) {
