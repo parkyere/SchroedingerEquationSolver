@@ -28,17 +28,20 @@ public:
     ImaginaryTimePropagator1D(const Grid1D& g, const std::vector<double>& potential,
                               double dtau)
         : half_v_(build_half_potential_table(potential, dtau, itp_detail::exp_weight)),
-          kinetic_(build_kinetic_table(g, 1.0, dtau, itp_detail::exp_weight)) {
+          kinetic_(build_kinetic_table(g, 1.0, dtau, itp_detail::exp_weight)),
+          twiddles_(fft_twiddles(static_cast<std::size_t>(g.n))) {
         assert(static_cast<int>(potential.size()) == g.n);
     }
 
     void relax(Field1D& psi, int nsteps) const {
         assert(psi.data().size() == half_v_.size());
+        std::complex<double>* a = psi.data().data();
+        const std::size_t n = psi.data().size();
         for (int s = 0; s < nsteps; ++s) {
             apply_weight(half_v_, psi.data());
-            fft(psi.data());
+            fft(a, n, twiddles_.data());
             apply_weight(kinetic_, psi.data());
-            ifft(psi.data());
+            ifft(a, n, twiddles_.data());
             apply_weight(half_v_, psi.data());
             normalize(psi);
         }
@@ -54,6 +57,10 @@ private:
 
     std::vector<double> half_v_;
     std::vector<double> kinetic_;
+    // One table for every step, as in SplitOperator1D: a relax step used to
+    // rebuild n/2 sin/cos pairs twice (the 1D oscillator's photon-loss step
+    // calls relax(psi, 1) on 65 536 points).
+    std::vector<std::complex<double>> twiddles_;
 };
 
 class ImaginaryTimePropagator3D {
