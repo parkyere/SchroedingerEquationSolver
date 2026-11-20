@@ -208,12 +208,20 @@ inline Field1D ho_eigenstate(const Grid1D& g, double omega, int n) {
 inline std::vector<std::pair<double, double>> ho1d_spectrum(
     const Field1D& psi, double omega, double e_max) {
     std::vector<std::pair<double, double>> lines;
+    // ONE scaled chain walked a level at a time: ho_eigenstate(n) per line
+    // rebuilt levels 0..n each time, O(n^2) rungs for the strip. The
+    // recurrence is per point, so each basis is bitwise ho_eigenstate's.
+    const Grid1D& g = psi.grid();
+    ladder_detail::ScaledChain chain{g, omega};
+    Field1D basis{g};
     for (int n = 0;; ++n) {
         const double e = (n + 0.5) * omega;
         if (e > e_max) {
             break;
         }
-        const Field1D basis = ho_eigenstate(psi.grid(), omega, n);
+        chain.advance_to(n);
+        parallel_for(g.n, [&](int i) { basis[i] = chain.value(i); });
+        normalize(basis);
         lines.emplace_back(e, std::norm(inner_product(basis, psi)));
     }
     return lines;
