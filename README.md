@@ -65,8 +65,8 @@ Pick at boot with `--scene <name>` or live from the panel's scene combo.
 1D scenes draw ψ as a white **phasor curve** (radius ∝ \|ψ\|², twist = phase)
 over a phase-colored \|ψ\|² band with the potential in red. The STM-style 2D
 scenes (corral, qdot, billiard, qpc) lift \|ψ\|² into a tilted height-map
-surface with phase-colored relief; doubleslit and landau render their plane as
-a cloud. The spin scenes place one Bloch sphere per spin.
+surface with phase-colored relief, and so does carpet1d, whose plane is
+position × time; doubleslit and landau render their plane as a cloud. The spin scenes place one Bloch sphere per spin.
 
 ## Layout
 
