@@ -24,6 +24,12 @@ export namespace ses_shell {
 
 class SwapchainPresenter {
 public:
+    SwapchainPresenter() = default;
+    // Owns raw Vulkan handles (released by release()): a copy would free
+    // them twice.
+    SwapchainPresenter(const SwapchainPresenter&) = delete;
+    SwapchainPresenter& operator=(const SwapchainPresenter&) = delete;
+
     // Surface owned by the caller (SDL); everything else owned by the presenter.
     bool init(ses_vk::DeviceContext& ctx, VkSurfaceKHR surface,
               const unsigned char* vert_spv, std::size_t vert_size,
