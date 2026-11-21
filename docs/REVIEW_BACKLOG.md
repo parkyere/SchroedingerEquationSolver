@@ -47,9 +47,19 @@ for any testable logic.
 
 - **[verify] Device-loss fallbacks (2026-11-20).** Every director now leaves
   the GPU path on the frame after `device_lost` latches (2D scenes, spins, and
-  the 3D base family via `BaseDirector::run_frame` / `after_device_lost`). All
+  the 3D base family via `BaseDirector::run_frame` / `after_device_lost`; H2+
+  also returns its rotor to the boot axis, the only one the CPU steps in). All
   compile-checked only -- a loss cannot be provoked without a device. The
   vkcheck fault seam (`ctx.fault`) could drive a director-level check.
+
+- **[decision] The fallback is not visible: the renderer shares the latch.**
+  `SceneRenderer::render` opens its frame with `OneShot::begin`, which refuses
+  once `device_lost` is set; the presenter keeps presenting, so after a latch
+  the panel and title follow the CPU simulation while the scene image stays
+  the last frame -- for hydrogen's older fallback as well. The latch is also set by a fence TIMEOUT (a slow GPU
+  on a long batch, 2026-10-09 A), where the device is alive. Options: latch per
+  owner (engine vs renderer) so a compute failure leaves drawing intact,
+  re-create the device, or say "GPU lost" on screen and stop the clock.
 
 - **[low, deferred] Extract a `MeasurementEngine`** from `HydrogenDirector`
   (`run_partial_measure` / `rebuild_psi_from` / `sin_partner`, ~140
@@ -326,9 +336,7 @@ for any testable logic.
   계약(현재 23개 중 2개만), 해석적 우물 스펙트럼, 구면조화함수 점값 표.
 - `radial_test.cpp` `SoftCoreAtomMatchesThe3DSolver`의 참조값은 이 프로젝트의 다른
   실행에서 읽은 숫자(외부 유도 없음) → regression lock으로 명시.
-- `// RED:` 머리말 54개 파일, "bitwise"라 쓰고 `EXPECT_DOUBLE_EQ`(4 ULP)를 쓰는
-  `propagator_tables_test`/`imaginary_tables_test` 주석, `complex_test`의 플래그
-  이름 주석(계약이 아닌 플래그를 적음).
+- `// RED:` 머리말 54개 파일, `complex_test`의 플래그 이름 주석(계약이 아닌 플래그를 적음).
 
 ## 2026-11-07 재검수 — 미해결 항목 (수정분은 git log 참조)
 
@@ -393,8 +401,9 @@ for any testable logic.
   `nearest_index`는 수정됨, 여기는 범위 밖 점의 보간 가중치 계약부터 정해야 함);
   `rotate_axis`/`MagneticPropagator3D`/`tilted_potential`/`diamagnetic_potential`의 axis
   0..2 전제가 주석뿐; `fft`/`itp`/`rotation`/`sampling`/`measurement`의 `*_detail`이
-  export됨; nz = 1 평면 FFT의 무의미한 z 패스; `ImaginaryTimePropagator1D::relax`의
-  twiddle 재구축.
+  export됨; 1D 관측량(`mean_energy`/`mean_momentum`/`energy_variance`)과 `ladder`의
+  미분은 호출마다 FFT twiddle 표를 다시 만든다(65 536점에서 호출당 ~0.45 ms —
+  harmonic1d 광자 손실 스텝의 ~6 %; 전파기 쪽은 2026-11-21에 표를 멤버로 옮김).
 - **[solver]** `EngineKernels`의 32개 (ptr, size) 수동 쌍 + 62개 대입 + fft switch.
 - **[viz]** `SceneRenderer` 2.2k줄·~90 멤버, `destroy()`가 29개 메모를 손으로 리셋;
   `create_aux_image`가 `create_storage_image_3d`를 실패 정리 없이 재구현;
@@ -430,7 +439,7 @@ for any testable logic.
 스타일·주석·modern-C++·보일러플레이트 위주의 LOW/NIT 후보 434건을 파일 단위
 배치로 적대적 검증했다: 244건 반박, 190건 유지. 유지분을 HEAD와 다시 대조한 결과
 130건은 그 사이클에서 고쳤다(git log). 남은 60건을 같은 결함끼리 묶어 범주별로 57줄에
-적었고, 2026-11-20에 그중 14줄을 더 고쳐 43줄이 남았다.
+적었고, 2026-11-20/21에 그중 17줄을 더 고쳐 40줄이 남았다.
 
 **정확성·견고성**
 - **[core/shader]** `marching_cubes.ixx` `mc_detail::gradient`와 `mc_emit.comp` `gradient_at`이 벽에서 인덱스만 clamp하고 2h로 나눔 — 벽 한 칸 띠의 법선 성분이 한쪽 차분의 절반(표시 전용) → `heightfield.ixx`처럼 clamp된 축은 h로 나누고 CPU·GPU 동시 수정(vkcheck가 CPU↔GPU 법선 비교).
@@ -449,9 +458,6 @@ for any testable logic.
 - **[tests]** `rotor_test` `quarter_turn`이 kick마다 `regularized_coulomb_potential`(셀·중심마다 `sine_integral`, 32³에서 65,536회)을 다시 만들고 `kick()`이 새 위상 테이블을 할당 — ~11.6k회 재구축이 F의 RotorEhrenfest 50 s의 주원인 → `band_limited_coulomb`의 1D 반경 테이블(보간)로 퍼텐셜을 만들고 위상 버퍼 재사용.
 
 **테스트·오라클**
-- **[tests]** `dipole_angular_test` `FactorizedEinsteinAReproducesTextbook2pLifetime`이 무한질량 bare −1/r 해를 환산질량 교과서 값 1.5155e-8과 비교 — 정확값 (2/3)^8 α³ = 1.51623e-8이 7.3e-12(허용 2e-11의 37%) 떨어져 예산을 모델 밖 물리가 잠식 → 기준을 (2/3)^8 α³로, 허용 오차는 격자 오차로 유도.
-- **[tests]** `drive_test` `ResonantCoherentLadderAndSelectionRule`이 스스로 exact라 부르는 Ehrenfest 폐형식(|z| ~ 1.41)에 0.02, p0 = p1 ~ e^-1에 절대 0.06(~16%)을 오차 예산 없이 건다(반회전항 보정은 p0에 ~1e-3) → 측정 편차로 허용 오차를 좁히고 근거를 주석으로.
-- **[tests]** `photon_display_test` 스트릭 테스트가 모두 n = ẑ라 `photon_streak_vertices`의 극 분기(phi = 0)만 타서 실제 방출 방향의 (θ̂, φ̂) 틀과 n_z < 0 감김 방향이 미검증; `OverflowEvictsTheMostSpentFlight`는 total이 전부 100이라 age/total 순위가 최고령 축출과 구별 안 됨 → 기울어진 n·서로 다른 total로 단언.
 - **[tests]** `molecular_seed_test`의 `SigmaGIsEvenAndNodeless`는 노름·x=0 평면 가중치만, `PiUyIsOddUnderYReflection`은 j=16 마디 평면만 보아 이름의 짝/홀 패리티를 검사하지 않음(y-짝이며 y=0에서 0인 함수도 통과) → `SigmaUIsOddUnderXReflection`의 거울 루프로 패리티 단언(`molecular_orbital_seed` 삭제 시 불필요).
 - **[vkcheck]** corral의 평면 GPU relax 경로(512²×1, m* = 0.38 테이블의 `relax_step`/`relax_deflated_step`)에 오라클 없음 — `check_engine_relax`/`_deflation`은 8³ 입방·m = 1만 검사(디렉터 주석은 정정됨) → `check_engine_planar_mass` 격자로 relax·deflation vs `ImaginaryTimePropagator3D` 검사 추가.
 
