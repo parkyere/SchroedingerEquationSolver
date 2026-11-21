@@ -144,8 +144,9 @@ inline int sample_povm_index(const Field3D& psi, double sigma_m, double u) {
 }
 
 // Same amplitude convention as gaussian_wavepacket (4 sigma^2, not 2), so
-// Gaussian x Gaussian posteriors stay analytic.
-inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) noexcept {
+// Gaussian x Gaussian posteriors stay analytic. Not noexcept: the mask is
+// applied on the worker pool, and a pool region can throw.
+inline void collapse_wavepacket(Field3D& psi, Vec3d center, double sigma_m) {
     const Grid3D& g = psi.grid();
     const double inv4s2 = 1.0 / (4.0 * sigma_m * sigma_m);
     parallel_for_each_cell(g, [&](int i, int j, int k) {

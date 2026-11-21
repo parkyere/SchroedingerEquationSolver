@@ -27,6 +27,9 @@ export namespace ses {
 // read-only table per axis, cheaper than a per-thread cache.
 inline std::vector<std::complex<double>> fft_twiddles(std::size_t n) {
     std::vector<std::complex<double>> w(n / 2);
+    if (w.empty()) {
+        return w;  // n = 0 or 1: nothing to tabulate (and no 2 pi / 0)
+    }
     const double ang = -2.0 * std::numbers::pi / static_cast<double>(n);
     for (std::size_t j = 0; j < n / 2; ++j) {
         const double th = ang * static_cast<double>(j);
@@ -92,6 +95,9 @@ inline void ifft(std::complex<double>* a, std::size_t n, const std::complex<doub
     // buffer and hand it back that way.
     if ((n & (n - 1)) != 0) {
         throw std::invalid_argument("ses::ifft: size must be a power of two");
+    }
+    if (n == 0) {
+        return;  // nothing to transform (0 passes the power-of-two test)
     }
     for (std::size_t i = 0; i < n; ++i) {
         a[i] = conj(a[i]);
@@ -192,6 +198,9 @@ inline void ifft(Field3D& f) {
         throw std::invalid_argument("ses::ifft: size must be a power of two");
     }
     const int n = static_cast<int>(a.size());
+    if (n == 0) {
+        return;  // an empty field: nothing to transform, no 1 / 0
+    }
     parallel_for(n, [&](int i) {
         a[static_cast<std::size_t>(i)] = conj(a[static_cast<std::size_t>(i)]);
     });

@@ -21,7 +21,8 @@ struct DipoleDrive {
     double omega{};
 };
 
-inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, double dt) noexcept {
+// Not noexcept: the fill runs on the worker pool, and a pool region can throw.
+inline void apply_dipole_halfkick(Field3D& psi, const DipoleDrive& d, double t, double dt) {
     const double theta = d.amplitude * std::cos(d.omega * t) * 0.5 * dt;
     const Grid3D& g = psi.grid();
     parallel_for_each_cell(g, [&](int i, int j, int k) {
