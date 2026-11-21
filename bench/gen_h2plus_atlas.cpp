@@ -25,7 +25,8 @@ constexpr double kFixedR = 1.875;
 // Live profile y sampled at the uniform cell centres xs (spacing dx) ->
 // its value at the loader's n_out end-inclusive nodes over [lo_edge,
 // hi_edge]: linear between live centres, linearly extrapolated over the
-// half-cell between the outermost centre and the edge.
+// half-cell between the outermost centre and the edge. Right for a smooth
+// profile (m = 0); see resample_profile for m > 0.
 std::vector<double> resample(const std::vector<double>& xs,
                              const std::vector<double>& y, double lo_edge,
                              double hi_edge, int n_out) {
@@ -44,6 +45,40 @@ std::vector<double> resample(const std::vector<double>& xs,
         out[static_cast<std::size_t>(i)] =
             y[static_cast<std::size_t>(lo)] * (1.0 - f) +
             y[static_cast<std::size_t>(lo + 1)] * f;
+    }
+    return out;
+}
+
+// m > 0: the profile goes like w^(m/2) at its axis end, w = xi^2 - 1
+// (radial) or 1 - eta^2 -- a square root for m = 1, which a straight line
+// across the edge half-cell misses (it left Lambda(1) of 1pi_u at a quarter
+// of the profile's peak and turned the sign of the m >= 3 ends). So the
+// SMOOTH part y / w^(m/2) is resampled and the factor put back at the nodes;
+// the nodes on an axis end are then exactly the zeros the functions have
+// there. m = 0 is resample() itself.
+std::vector<double> resample_profile(const std::vector<double>& xs,
+                                     const std::vector<double>& y,
+                                     double lo_edge, double hi_edge, int n_out,
+                                     int m, bool radial) {
+    if (m == 0) {
+        return resample(xs, y, lo_edge, hi_edge, n_out);
+    }
+    const auto weight = [radial](double x) {
+        return radial ? x * x - 1.0 : 1.0 - x * x;
+    };
+    std::vector<double> smooth(y.size(), 0.0);
+    for (std::size_t i = 0; i < y.size() && i < xs.size(); ++i) {
+        smooth[i] = y[i] / std::pow(weight(xs[i]), 0.5 * m);  // centres: w > 0
+    }
+    std::vector<double> out = resample(xs, smooth, lo_edge, hi_edge, n_out);
+    const double d_out = (hi_edge - lo_edge) / (n_out - 1);
+    for (int i = 0; i < n_out; ++i) {
+        const bool axis_end = i == 0 || (!radial && i == n_out - 1);
+        const double x = lo_edge + i * d_out;
+        out[static_cast<std::size_t>(i)] =
+            axis_end ? 0.0
+                     : out[static_cast<std::size_t>(i)] *
+                           std::pow(std::max(0.0, weight(x)), 0.5 * m);
     }
     return out;
 }
@@ -138,8 +173,11 @@ int main(int argc, char** argv) {
                 if (k < counts[static_cast<std::size_t>(i)]) {
                     const ses::H2plusOrbital& o =
                         perR[static_cast<std::size_t>(i)][static_cast<std::size_t>(k)];
-                    prof = radial ? resample(o.xi, o.lambda, 1.0, xi_edge(o), kProf)
-                                  : resample(o.eta, o.M, -1.0, 1.0, kProf);
+                    prof = radial ? resample_profile(o.xi, o.lambda, 1.0,
+                                                     xi_edge(o), kProf, o.m,
+                                                     true)
+                                  : resample_profile(o.eta, o.M, -1.0, 1.0,
+                                                     kProf, o.m, false);
                 }
                 for (int p = 0; p < kProf; ++p) {
                     std::fprintf(f, "%s%.8e", p ? "," : "",

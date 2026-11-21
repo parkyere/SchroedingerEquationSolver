@@ -209,6 +209,40 @@ inline double radial_p2(double A, int m, double R, int n_xi, double xi_max,
     return p2;
 }
 
+// ys / w(xs)^(m/2) with w = xi^2 - 1 (radial) or 1 - eta^2: the part of an
+// m > 0 profile that stays smooth at its axis end, where the profile itself
+// goes like w^(m/2) (a square root for m = 1). A node ON the end (w = 0: the
+// baked tables are end-inclusive) takes the cubic through its four
+// neighbours -- whatever the table holds there is not used. Cubic, not a
+// line: the baked xi nodes are 0.17 apart and the smooth part of 1pi_u falls
+// by a fifth over the first interval (a line read 6 % low at xi = 1).
+inline std::vector<double> smooth_part(const std::vector<double>& xs,
+                                       const std::vector<double>& ys, int m,
+                                       bool radial) {
+    constexpr double kOnTheEnd = 1e-9;
+    const std::size_t n = std::min(xs.size(), ys.size());
+    const auto weight = [radial](double x) {
+        return radial ? x * x - 1.0 : 1.0 - x * x;
+    };
+    std::vector<double> s(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) {
+        const double w = weight(xs[i]);
+        if (w > kOnTheEnd) {
+            s[i] = ys[i] / std::pow(w, 0.5 * m);
+        }
+    }
+    if (n >= 5) {
+        if (!(weight(xs[0]) > kOnTheEnd)) {
+            s[0] = 4.0 * s[1] - 6.0 * s[2] + 4.0 * s[3] - s[4];
+        }
+        if (!(weight(xs[n - 1]) > kOnTheEnd)) {
+            s[n - 1] = 4.0 * s[n - 2] - 6.0 * s[n - 3] + 4.0 * s[n - 4] -
+                       s[n - 5];
+        }
+    }
+    return s;
+}
+
 }  // namespace spheroidal_detail
 
 // Solve one H2+ orbital at internuclear R.
@@ -361,6 +395,23 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
         return ys[static_cast<std::size_t>(i)] * (1.0 - frac) +
                ys[static_cast<std::size_t>(i + 1)] * frac;
     };
+    // m > 0: the orbital is rho^m e^{i m phi} times a smooth function, and
+    //     (xi^2 - 1)(1 - eta^2) = (2 rho / R)^2.
+    // Lambda and M themselves cannot be interpolated across their axis ends
+    // (a square root for m = 1, and the end value is zero, not what a table
+    // of cell centres clamps to), so the tables carry their smooth parts and
+    // the factor comes back per cell as Re / Im of ((2/R)(u + i v))^m, with
+    // (u, v) the coordinates across the axis: exactly zero ON the axis for
+    // both partners, and no atan2. m = 0 reads the tables as they are.
+    std::vector<double> lam_smooth;
+    std::vector<double> m_smooth;
+    if (o.m > 0) {
+        lam_smooth = spheroidal_detail::smooth_part(o.xi, o.lambda, o.m, true);
+        m_smooth = spheroidal_detail::smooth_part(o.eta, o.M, o.m, false);
+    }
+    const std::vector<double>& lam_tab = o.m > 0 ? lam_smooth : o.lambda;
+    const std::vector<double>& m_tab = o.m > 0 ? m_smooth : o.M;
+    const double two_over_r = 2.0 / R;
     // Each cell on its own (the scene samples up to 24 members per orbital
     // selection at 256^3): rows run on the pool, values as in a serial scan.
     parallel_for_each_cell(g, [&](int i, int j, int k) {
@@ -375,11 +426,19 @@ inline Field3D synthesize_h2plus(const Grid3D& g, const H2plusOrbital& o,
         eta = std::clamp(eta, -1.0, 1.0);
         double ang = 1.0;
         if (o.m > 0) {
-            const double phi = std::atan2(dot(r, e2), dot(r, e1));
-            ang = partner == 0 ? std::cos(o.m * phi) : std::sin(o.m * phi);
+            const double u = two_over_r * dot(r, e1);
+            const double v = two_over_r * dot(r, e2);
+            double re = 1.0;
+            double im = 0.0;
+            for (int q = 0; q < o.m; ++q) {  // (re + i im) *= (u + i v)
+                const double t = re * u - im * v;
+                im = re * v + im * u;
+                re = t;
+            }
+            ang = partner == 0 ? re : im;
         }
-        const double val = interp(o.xi, o.lambda, xi, true) *
-                           interp(o.eta, o.M, eta, false) * ang;
+        const double val = interp(o.xi, lam_tab, xi, true) *
+                           interp(o.eta, m_tab, eta, false) * ang;
         f(i, j, k) = std::complex<double>{val, 0.0};
     });
     const double nrm = norm_sq(f);
