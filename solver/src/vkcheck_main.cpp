@@ -1938,9 +1938,8 @@ bool check_lattice2d_step(ses_vk::DeviceContext& ctx) {
         ses::Field3D cpu = psi0;
         cpu_prop.step(cpu, 20);
 
-        eng.set_lattice(g, v, dt);
-        eng.set_uniform_field(b);
-        if (!eng.upload(psi0.data())) {
+        if (!eng.set_lattice(g, v, dt) || !eng.set_uniform_field(b) ||
+            !eng.upload(psi0.data())) {
             std::printf("lattice2d step: upload FAIL\n");
             return false;
         }
@@ -1996,9 +1995,8 @@ bool check_lattice2d_relax(ses_vk::DeviceContext& ctx) {
         std::printf("lattice2d relax: engine init FAIL\n");
         return false;
     }
-    eng.set_lattice(g, v, dt);
-    eng.set_uniform_field(b);
-    if (!eng.upload(psi0.data())) {
+    if (!eng.set_lattice(g, v, dt) || !eng.set_uniform_field(b) ||
+        !eng.upload(psi0.data())) {
         std::printf("lattice2d relax: upload FAIL\n");
         return false;
     }
@@ -2050,10 +2048,8 @@ bool check_lattice2d_absorb_solenoid(ses_vk::DeviceContext& ctx) {
         std::printf("lattice2d absorb+solenoid: engine init FAIL\n");
         return false;
     }
-    eng.set_lattice(g, v, dt);
-    eng.set_solenoid(phi, 0.0, 0.0);
-    eng.set_absorber(mask);
-    if (!eng.upload(psi0.data())) {
+    if (!eng.set_lattice(g, v, dt) || !eng.set_solenoid(phi, 0.0, 0.0) ||
+        !eng.set_absorber(mask) || !eng.upload(psi0.data())) {
         std::printf("lattice2d absorber: upload FAIL\n");
         return false;
     }
@@ -3872,12 +3868,11 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
         std::printf("%s: init FAIL\n", name);
         return false;
     }
-    a.set_lattice(g, v, dt);
-    b.set_lattice(g, v, dt);
-    const bool sent = a.upload(psi0.data()) && b.upload(psi0.data());
+    const bool built = a.set_lattice(g, v, dt) && b.set_lattice(g, v, dt);
+    const bool sent = built && a.upload(psi0.data()) && b.upload(psi0.data());
     const std::vector<double> wrong(v.size() * 2, 0.0);  // size mismatch
-    a.set_lattice(g, wrong, dt);  // must be refused
-    const bool still_ready = a.ready();
+    const bool refused = !a.set_lattice(g, wrong, dt);  // must be refused
+    const bool still_ready = refused && a.ready();
     a.step(5);
     b.step(5);
     const bool got_a = a.download();

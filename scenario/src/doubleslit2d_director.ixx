@@ -99,8 +99,8 @@ public:
     void set_flux(double phi) override {
         flux_ = phi;
         prop_->set_solenoid(flux_, solenoid_x(), 0.0);
-        if (eng_ok_) {
-            eng_.set_solenoid(flux_, solenoid_x(), 0.0);
+        if (eng_ok_ && !eng_.set_solenoid(flux_, solenoid_x(), 0.0)) {
+            eng_ok_ = false;  // the device kept the old flux: the CPU has the new
         }
         fire();
         rebuild_props_overlays();  // arrow length encodes Phi
@@ -140,12 +140,12 @@ public:
                       std::int64_t /*free_vram*/) override {
         compute_attempted_ = true;
         if (device_ok && eng_.initialize(ctx)) {
-            eng_.set_lattice(phys_grid_, wallv_, kDs2dDt);
-            // set_lattice is void: on an allocation failure the engine has
-            // no buffers and the CPU propagator keeps the scene.
-            if (eng_.ready()) {
-                eng_.set_solenoid(flux_, solenoid_x(), 0.0);
-                eng_.set_absorber(mask_);
+            // Lattice, links and mask must all be on the device; a refused
+            // one (an allocation or an upload) leaves the CPU propagator the
+            // scene.
+            if (eng_.set_lattice(phys_grid_, wallv_, kDs2dDt) &&
+                eng_.set_solenoid(flux_, solenoid_x(), 0.0) &&
+                eng_.set_absorber(mask_)) {
                 eng_ok_ = true;
                 // A refused upload stays dirty: the first batch sends psi_
                 // again, and leaves the GPU path if that fails too.
@@ -295,14 +295,13 @@ private:
         prop_->set_solenoid(flux_, solenoid_x(), 0.0);
         wallv_ = std::move(v);  // kept for the GPU engine
         if (eng_ok_) {
-            eng_.set_lattice(phys_grid_, wallv_, kDs2dDt);
-            if (eng_.ready()) {
-                eng_.set_solenoid(flux_, solenoid_x(), 0.0);
-                // Re-applied: a same-size set_lattice keeps the old links and
-                // absorber, a resize resets them.
-                eng_.set_absorber(mask_);
-            } else {
-                eng_ok_ = false;  // psi_ is read back every step: CPU resumes
+            // Solenoid and mask re-applied: a same-size set_lattice keeps the
+            // old links and absorber, a resize resets them. Any of the three
+            // refused: psi_ is read back every step, the CPU resumes.
+            if (!(eng_.set_lattice(phys_grid_, wallv_, kDs2dDt) &&
+                  eng_.set_solenoid(flux_, solenoid_x(), 0.0) &&
+                  eng_.set_absorber(mask_))) {
+                eng_ok_ = false;
             }
         }
         rebuild_props_overlays();

@@ -132,8 +132,9 @@ protected:
     virtual void rebuild_display() { rebuild_staging(); }
 
     // ---- GPU propagator seam (derived route do_steps here when active) ----
-    // set_lattice is void: an allocation failure leaves an engine with no
-    // buffers, so only a built lattice takes the propagation (else CPU).
+    // Only a built lattice takes the propagation (else CPU), and a refused
+    // lattice or field leaves the seam for good: the device would step the
+    // old one while prop_ has the new.
     // Not after a device loss: the engine's calls turn into no-ops and psi_
     // (the last good download) would be replayed forever -- the CPU resumes.
     bool gpu_active() const {
@@ -142,13 +143,15 @@ protected:
     virtual void on_gpu_ready() {}  // push potential + field once the device is up
     void gpu_set_lattice(const std::vector<double>& v, double dt) {
         if (gpu_lattice_ok_) {
-            gpu_.set_lattice(phys_grid_, v, dt);
+            if (!gpu_.set_lattice(phys_grid_, v, dt)) {
+                gpu_lattice_ok_ = false;
+            }
             gpu_psi_dirty_ = true;
         }
     }
     void gpu_set_field(double b) {
-        if (gpu_lattice_ok_) {
-            gpu_.set_uniform_field(b);
+        if (gpu_lattice_ok_ && !gpu_.set_uniform_field(b)) {
+            gpu_lattice_ok_ = false;
         }
     }
     // Call after any CPU-side edit of psi_ so the next step re-uploads it.

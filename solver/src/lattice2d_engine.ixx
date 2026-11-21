@@ -99,11 +99,18 @@ public:
     // (Re)build all lattice-sized buffers + the Strang coefficients for a grid,
     // on-site potential, and dt. Links default to 1 (set_uniform_field adds a
     // field). Safe to call repeatedly (dt / potential changes).
-    void set_lattice(const ses::Grid3D& g, const std::vector<double>& potential,
-                     double dt) {
+    //
+    // The setters below return whether the device now holds what was asked
+    // for. False = it still steps with what it had (a refused size leaves the
+    // old lattice ready; a refused upload leaves old tables, links or mask):
+    // the caller's CPU propagator has the new values, so the caller must
+    // leave the GPU path rather than step the two apart.
+    [[nodiscard]] bool set_lattice(const ses::Grid3D& g,
+                                   const std::vector<double>& potential,
+                                   double dt) {
         // Same size contract as set_absorber: mismatch => OOB read below.
         if (static_cast<int>(potential.size()) != g.x.n * g.y.n) {
-            return;
+            return false;
         }
         g_ = g;
         nx_ = g.x.n;
@@ -111,18 +118,19 @@ public:
         const int cells = nx_ * ny_;
         const double tx = 0.5 / (g.x.spacing() * g.x.spacing());
         const double ty = 0.5 / (g.y.spacing() * g.y.spacing());
+        bool ok = true;
         if (cells != n_cells_) {
             free_lattice();
             n_cells_ = cells;
             if (!alloc_lattice(cells)) {
                 free_lattice();  // reclaim the partial alloc; also zeroes n_cells_
-                return;
+                return false;
             }
             allocate_sets();
             const std::vector<std::complex<double>> ones(
                 static_cast<std::size_t>(cells), std::complex<double>{1.0, 0.0});
-            upload_complex(link_x_, ones);
-            upload_complex(link_y_, ones);
+            ok = upload_complex(link_x_, ones) && ok;
+            ok = upload_complex(link_y_, ones) && ok;
         }
         // On-site tables: real-time e^{-i e0 dt/2}, imag-time e^{-e0 dt/2}.
         std::vector<std::complex<double>> hv_rt(static_cast<std::size_t>(cells));
@@ -135,8 +143,8 @@ public:
             hv_it[static_cast<std::size_t>(idx)] =
                 std::complex<double>{std::exp(-0.5 * e0 * dt), 0.0};
         }
-        upload_complex(hv_rt_, hv_rt);
-        upload_complex(hv_it_, hv_it);
+        ok = upload_complex(hv_rt_, hv_rt) && ok;
+        ok = upload_complex(hv_it_, hv_it) && ok;
 
         const NParams np{static_cast<std::uint32_t>(cells), 0, 0, 0};
         write_ubo(*ctx_, phase_ubo_, &np, sizeof(np));
@@ -162,13 +170,14 @@ public:
                     {std::sinh(ty * 0.5 * dt), 0.0});
         write_sweep(sy_it_ubo_[1], 1, std::cosh(ty * dt),
                     {std::sinh(ty * dt), 0.0});
+        return ok;
     }
 
     // Uniform field B along z (Landau gauge A_x = B y): x-links of row j carry
     // e^{-i B hx y_j}, anchored at y = 0. Mirrors PeierlsLattice2D. link_y = 1.
-    void set_uniform_field(double b) {
+    [[nodiscard]] bool set_uniform_field(double b) {
         if (n_cells_ == 0) {
-            return;
+            return false;
         }
         const double bh = b * g_.x.spacing();
         std::vector<std::complex<double>> lx(static_cast<std::size_t>(n_cells_));
@@ -179,14 +188,15 @@ public:
                 lx[static_cast<std::size_t>(j * nx_ + i)] = u;
             }
         }
-        upload_complex(link_x_, lx);
+        return upload_complex(link_x_, lx);
     }
 
     // Localized flux (double-slit solenoid) via the string gauge: x-links on one
     // column above/below (is,js) carry e^{-+i phi}. Mirrors PeierlsLattice2D.
-    void set_solenoid(double phi, double xs, double ys, bool cut_up = true) {
+    [[nodiscard]] bool set_solenoid(double phi, double xs, double ys,
+                                    bool cut_up = true) {
         if (n_cells_ == 0) {
-            return;
+            return false;
         }
         std::vector<std::complex<double>> lx(static_cast<std::size_t>(n_cells_),
                                              std::complex<double>{1.0, 0.0});
@@ -215,18 +225,21 @@ public:
                 }
             }
         }
-        upload_complex(link_x_, lx);
+        return upload_complex(link_x_, lx);
     }
 
     // Real per-step absorbing mask (interior 1; a cos^2 taper or a quadratic
     // CAP exp(-w dt), which is not 0 at the walls) applied after each
     // real-time step. Empty / not-called => no absorber. Not used during relax.
-    void set_absorber(const std::vector<double>& mask) {
+    [[nodiscard]] bool set_absorber(const std::vector<double>& mask) {
         if (n_cells_ == 0 || static_cast<int>(mask.size()) != n_cells_) {
-            return;
+            return false;
         }
-        upload_real(mask_, mask);
+        if (!upload_real(mask_, mask)) {
+            return false;  // has_absorber_ as it was: no mask that never arrived
+        }
         has_absorber_ = true;
+        return true;
     }
     void clear_absorber() { has_absorber_ = false; }
 
@@ -363,8 +376,7 @@ private:
     }
 
     // Pack into staging via `pack`, flush, then staged copy to `dst`.
-    // Returns whether the copy reached the device (the link / mask / table
-    // setters still drop it: 2026-11-07 A in docs/REVIEW_BACKLOG.md).
+    // Returns whether the copy reached the device.
     template <typename Pack>
     bool upload_packed(Buffer& dst, VkDeviceSize bytes, Pack&& pack) {
         if (staging_.mapped == nullptr) {
@@ -388,8 +400,8 @@ private:
                       });
     }
 
-    void upload_real(Buffer& dst, const std::vector<double>& src) {
-        upload_packed(dst, static_cast<VkDeviceSize>(src.size()) * sizeof(float),
+    bool upload_real(Buffer& dst, const std::vector<double>& src) {
+        return upload_packed(dst, static_cast<VkDeviceSize>(src.size()) * sizeof(float),
                       [&src](float* p) {
                           for (std::size_t i = 0; i < src.size(); ++i) {
                               p[i] = static_cast<float>(src[i]);

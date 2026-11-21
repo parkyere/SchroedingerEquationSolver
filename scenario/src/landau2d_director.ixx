@@ -64,8 +64,8 @@ public:
     void set_field(double b) override {
         b_ = std::clamp(b, kLd2dBMin, kLd2dBMax);
         prop_->set_uniform_field(b_);
-        if (eng_ok_) {
-            eng_.set_uniform_field(b_);
+        if (eng_ok_ && !eng_.set_uniform_field(b_)) {
+            eng_ok_ = false;  // the device kept the old field: the CPU has the new
         }
         fire();
     }
@@ -129,16 +129,15 @@ public:
                       std::int64_t /*free_vram*/) override {
         compute_attempted_ = true;
         if (device_ok && eng_.initialize(ctx)) {
-            eng_.set_lattice(
-                phys_grid_,
-                std::vector<double>(
-                    static_cast<std::size_t>(phys_grid_.size()), 0.0),
-                kLd2dDt);
-            // set_lattice is void: on an allocation failure the engine has
-            // no buffers and the CPU propagator keeps the scene.
-            if (eng_.ready()) {
-                eng_.set_uniform_field(b_);
-                eng_.set_absorber(mask_);
+            // Lattice, links and mask must all be on the device; a refused
+            // one (an allocation or an upload) leaves the CPU propagator the
+            // scene.
+            if (eng_.set_lattice(
+                    phys_grid_,
+                    std::vector<double>(
+                        static_cast<std::size_t>(phys_grid_.size()), 0.0),
+                    kLd2dDt) &&
+                eng_.set_uniform_field(b_) && eng_.set_absorber(mask_)) {
                 eng_ok_ = true;
                 // A refused upload stays dirty: the first batch sends psi_
                 // again, and leaves the GPU path if that fails too.
