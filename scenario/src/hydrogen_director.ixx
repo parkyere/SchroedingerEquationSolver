@@ -315,10 +315,17 @@ public:
         drop_relax_tables();
         laser_pol_ = LaserPol::Off;
         fields_.b = 0.0;
+        const bool on_gpu = gpu_ok_;
         upload_field_tables();    // restore the base half-potential
         reset_ionized_tally();
         gpu_time_ = 0.0;
         pending_gpu_steps_ = 0;
+        if (on_gpu && !gpu_ok_) {
+            // That upload failed: leave_gpu_path() has staged the new state
+            // from the CPU already (in Surface a second pass would be a
+            // second 256^3 marching-cubes run).
+            return;
+        }
         if (gpu_ok_ && manifold_ready()) {
             seed_bound_superposition();  // a fresh random draw each reset
         }
@@ -1150,11 +1157,22 @@ private:
     // that only run there, as the CPU-meshing fallback in toggle_view_mode
     // does -- their toggles return early once !gpu_ok_, so they could never
     // be cleared and their labels would stick. The base clears decay_on_.
-    void after_leaving_gpu() override {
+    // On a live device the resident states go back too: the deflation set of
+    // an excited relax (up to four fields) and the jump synthesis scratch.
+    void after_leaving_gpu(bool device_alive) override {
         if (stepping_ == BaseStepping::RelaxingExcited) {
             stepping_ = BaseStepping::Relaxing;  // deflation is GPU-only
         }
         laser_pol_ = LaserPol::Off;
+        if (device_alive) {
+            free_deflation_buffers();
+            if (mcwf_scratch_ >= 0) {
+                engine_.release_state(mcwf_scratch_);
+            }
+        }
+        // Lost device: forgotten, not released (a release would wait on it).
+        relax_deflate_.clear();
+        mcwf_scratch_ = -1;
     }
 
     // One imaginary-time batch: renormalized every step; the ITP estimator gives

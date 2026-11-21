@@ -382,8 +382,10 @@ protected:
     virtual void on_gpu_ready() {}
     virtual void after_reset() {}
     // leave_gpu_path(), right after the flags flipped: disarm whatever else
-    // only runs on the device.
-    virtual void after_leaving_gpu() {}
+    // only runs on the device and, while device_alive, give back the states
+    // the scene keeps resident there (gpu_ok_ is already false: a helper
+    // that asks it will not release anything).
+    virtual void after_leaving_gpu(bool /*device_alive*/) {}
     virtual void service_requests() {}   // run_frame, before stepping
     virtual void before_step_batch(int) {}  // run_frame, before a real-time batch
     virtual void after_step_batch() {}   // run_frame, after a real-time batch
@@ -427,12 +429,29 @@ protected:
     // the view is restaged from the CPU. ONE place: the table-upload
     // failures used to flip the two flags only, with the device-only modes
     // still armed and nothing restaged.
+    //
+    // The upload-failure exits happen on a LIVE device, usually one short of
+    // VRAM, and the restage below makes the renderer allocate a fallback
+    // volume or mesh: what only the GPU path used goes back first -- the
+    // surface buffers (~175 MB), the relax tables (256 MB) and, through the
+    // hook, the scene's resident states. Not on a lost (latched) device:
+    // nothing comes back there and every release would wait on it. The
+    // engine's core (psi, V, the display volumes) stays until the scene
+    // goes: the renderer still has the volume views bound.
     void leave_gpu_path() {
+        if (!gpu_ok_) {
+            return;  // already on the CPU (and the engine may never have been up)
+        }
+        const bool device_alive = !engine_.device_lost();
         gpu_ok_ = false;
         cpu_is_truth_ = true;
         pending_gpu_steps_ = 0;
         decay_on_ = false;  // the jump trials run on the GPU path only
-        after_leaving_gpu();
+        after_leaving_gpu(device_alive);
+        if (device_alive) {
+            engine_.release_mc();
+            engine_.release_relax_tables();
+        }
         stage_active_view();
         title_dirty_ = true;
     }

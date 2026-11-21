@@ -371,12 +371,22 @@ protected:
 
     // The deflated relax chain and its cached eigenstates live on the device:
     // nothing of them is usable from the CPU path, and a CPU relax would cool
-    // toward the ground under an excited state's label.
-    void after_leaving_gpu() override {
+    // toward the ground under an excited state's label. On a live device the
+    // cached states (up to kStates fields) are released here, by hand:
+    // free_state_buffers() asks gpu_ok_, which is already false, and would
+    // only forget the handles.
+    void after_leaving_gpu(bool device_alive) override {
         fine_polish_ = false;
         fine_left_ = 0;
         stepping_ = BaseStepping::RealTime;
-        free_state_buffers();  // gpu_ok_ is already false: flags only
+        if (device_alive) {
+            for (int k = 0; k < kStates; ++k) {
+                if (buf_[k] >= 0) {
+                    engine_.release_state(buf_[k]);
+                }
+            }
+        }
+        free_state_buffers();  // the flags (and the handles, released or lost)
     }
 
     ses::Field3D ground_seed() const {
@@ -661,9 +671,11 @@ protected:
         rebuild_markers();
     }
 
-    void after_leaving_gpu() override {
-        abort_flush();  // the atlas flush is GPU-only as well
-        MoleculeDirectorBase::after_leaving_gpu();
+    void after_leaving_gpu(bool device_alive) override {
+        // The atlas flush is GPU-only as well. Its deflation set and tables
+        // are released on a live device only (see leave_gpu_path).
+        abort_flush(device_alive);
+        MoleculeDirectorBase::after_leaving_gpu(device_alive);
         // The CPU steps in make()'s boot-axis potential and never turns the
         // rotor (the rotated V lived on the device only): put the nuclei
         // back on that axis, as a Reset does, or the markers, the rotor line
@@ -852,13 +864,17 @@ private:
         }
     }
 
-    void finish_flush(bool landed) {
-        for (const int h : flush_deflate_) {
-            engine_.release_state(h);
+    // on_device = false only when the device is lost: the handles are then
+    // forgotten, not released (every release would wait on the dead device).
+    void finish_flush(bool landed, bool on_device = true) {
+        if (on_device) {
+            for (const int h : flush_deflate_) {
+                engine_.release_state(h);
+            }
+            engine_.release_relax_tables();
         }
         flush_deflate_.clear();
         flush_left_ = 0;
-        engine_.release_relax_tables();
         std::vector<double>().swap(flush_v_);  // 134 MB at 256^3: drop it
         if (landed) {
             flush_ = Flush::Landed;
@@ -870,9 +886,9 @@ private:
     // A flush cut short leaves the member where the relaxation got to: not
     // flushing any more, and not on the grid either. A landed member stays
     // landed.
-    void abort_flush() {
+    void abort_flush(bool on_device = true) {
         if (flush_left_ > 0 || !flush_deflate_.empty()) {
-            finish_flush(false);
+            finish_flush(false, on_device);
         }
         if (flush_ == Flush::Running) {
             flush_ = Flush::Sampled;
