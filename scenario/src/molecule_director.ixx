@@ -655,6 +655,23 @@ protected:
     void after_device_lost() override {
         abort_flush();  // the atlas flush is GPU-only as well
         MoleculeDirectorBase::after_device_lost();
+        // The CPU steps in make()'s boot-axis potential and never turns the
+        // rotor (the rotated V lived on the device only): put the nuclei
+        // back on that axis, as a Reset does, or the markers, the rotor line
+        // and E_elec would describe a potential nobody steps in. An orbital
+        // on show was sampled along the old axis -- sample it again along
+        // this one; a random superposition cannot be redrawn, so its label
+        // goes.
+        reset_rotor();
+        rebuild_markers();
+        const bool orbital = !showing_random_ && cur_ >= 0 &&
+                             cur_ < static_cast<int>(atlas_.size());
+        showing_random_ = false;
+        if (orbital) {
+            prepare(cur_);  // CPU path: shown as sampled, no flush
+        } else {
+            cur_ = -1;
+        }
     }
 
     void after_reset() override {

@@ -157,9 +157,12 @@ public:
         // Photon streaks fly in wall-frame time, GPU path or not.
         photon_streaks_.advance_and_build();
         // Once the device is lost every engine call is a no-op: staying on
-        // the GPU path would redraw the last frame under a running clock.
+        // the GPU path would run the clock over a state nothing advances.
         // The CPU takes over from its last copy of psi (the device state
-        // cannot be read back) and the GPU-only modes are disarmed.
+        // cannot be read back) and the GPU-only modes are disarmed. The
+        // renderer shares the latch and stops drawing too (OneShot::begin
+        // refuses), so this keeps the simulation and its readouts alive,
+        // not the picture.
         if (gpu_ok_ && engine_.device_lost()) {
             std::fprintf(stderr, "%s: GPU device lost -- falling back to CPU\n",
                          scene_name());
