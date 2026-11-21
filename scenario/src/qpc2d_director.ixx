@@ -179,25 +179,37 @@ protected:
     // right-of-wall CAP absorption tallied as transmitted fraction. The GPU
     // does the propagation; the CAP edits psi_ on the CPU each step (contract
     // parity), so re-upload before the next GPU step.
+    // The GPU path is left at the first call that fails, with psi_ still the
+    // last state that is known good; the CPU finishes the batch from there.
+    // A refused readback leaves rb_ as it was (empty on the first batch):
+    // never unpack it, and never tally the CAP on a state that did not step.
     void do_steps(int n) override {
         if (eng_ok_ && eng_.device_lost()) {
-            // The engine is a no-op now; psi_ is its last good readback.
             eng_ok_ = false;
         }
-        if (eng_ok_) {
-            if (eng_dirty_) {
-                eng_.upload_state(psi_.data());
+        if (eng_ok_ && eng_dirty_) {
+            if (eng_.upload_state(psi_.data())) {
                 eng_dirty_ = false;
+            } else {
+                eng_ok_ = false;
             }
-            for (int s = 0; s < n; ++s) {
-                eng_.step(1);
-                eng_.readback(rb_);
-                unpack_interleaved(rb_.data(), psi_.data());
-                apply_cap_and_tally();
-                eng_.upload_state(psi_.data());  // psi_ damped: re-sync
+        }
+        int left = n;
+        while (eng_ok_ && left > 0) {
+            eng_.step(1);
+            if (!eng_.readback(rb_)) {
+                eng_ok_ = false;
+                break;
             }
-        } else {
-            for (int s = 0; s < n; ++s) {
+            unpack_interleaved(rb_.data(), psi_.data());
+            apply_cap_and_tally();
+            --left;
+            if (!eng_.upload_state(psi_.data())) {  // psi_ damped: re-sync
+                eng_ok_ = false;  // the damped psi_ is the truth; the CPU goes on
+            }
+        }
+        if (!eng_ok_) {
+            for (int s = 0; s < left; ++s) {
                 prop_->step(psi_, 1);
                 apply_cap_and_tally();
             }

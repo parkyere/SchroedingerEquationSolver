@@ -249,9 +249,12 @@ protected:
         rebuild_surface(psi_, kCr2dSurfH, kCr2dMeshStride);
     }
 
+    // The GPU path is left at the first call that fails, with psi_ still the
+    // last state that is known good; the CPU finishes the batch from there.
+    // A refused readback leaves rb_ as it was (empty on the first batch):
+    // never unpack it.
     void do_steps(int n) override {
         if (eng_ok_ && eng_.device_lost()) {
-            // The engine is a no-op now; psi_ is its last good readback.
             eng_ok_ = false;
         }
         if (relaxing_) {
@@ -261,25 +264,37 @@ protected:
             // the leaky H, unprojected.
             const int chunk = fine_ ? 100 : 20;  // tau ~ 0.5 / 1.0 per cut
             int left = 4 * n;  // relax gets 4x the tick budget (the wait)
-            if (eng_ok_ && ensure_gpu_relax_tables() && sync_gpu_deflation()) {
-                if (eng_dirty_) {
-                    eng_.upload_state(psi_.data());
+            bool gpu = eng_ok_ && ensure_gpu_relax_tables() &&
+                       sync_gpu_deflation();
+            if (gpu && eng_dirty_) {
+                if (eng_.upload_state(psi_.data())) {
                     eng_dirty_ = false;
+                } else {
+                    gpu = false;
+                    eng_ok_ = false;
                 }
-                while (left > 0) {
-                    const int c = std::min(left, chunk);
-                    if (defl_.empty()) {
-                        eng_.relax_step(c);
-                    } else {
-                        eng_.relax_deflated_step(defl_, c);
-                    }
-                    eng_.readback(rb_);
-                    unpack_interleaved(rb_.data(), psi_.data());
-                    project_disc();  // CPU Dirichlet cut + renorm
-                    eng_.upload_state(psi_.data());  // re-sync the projection
-                    left -= c;
+            }
+            while (gpu && left > 0) {
+                const int c = std::min(left, chunk);
+                if (defl_.empty()) {
+                    eng_.relax_step(c);
+                } else {
+                    eng_.relax_deflated_step(defl_, c);
                 }
-            } else {
+                if (!eng_.readback(rb_)) {
+                    gpu = false;
+                    eng_ok_ = false;
+                    break;
+                }
+                unpack_interleaved(rb_.data(), psi_.data());
+                project_disc();  // CPU Dirichlet cut + renorm
+                left -= c;
+                if (!eng_.upload_state(psi_.data())) {  // re-sync the projection
+                    gpu = false;  // the projected psi_ is the truth
+                    eng_ok_ = false;
+                }
+            }
+            if (!gpu) {
                 std::vector<const ses::Field3D*> lower;
                 lower.reserve(captured_.size());
                 for (const ses::Field3D& s : captured_) {
@@ -310,19 +325,28 @@ protected:
             return;
         }
         // Damp (fence + open boundary); the surviving norm = 1 - escaped fraction.
-        if (eng_ok_) {
-            if (eng_dirty_) {
-                eng_.upload_state(psi_.data());
+        if (eng_ok_ && eng_dirty_) {
+            if (eng_.upload_state(psi_.data())) {
                 eng_dirty_ = false;
+            } else {
+                eng_ok_ = false;
             }
+        }
+        bool stepped = false;
+        if (eng_ok_) {
             // One batch: the engine applies damp_ after every step, and
             // nothing is read between chunks (8-step chunks only added a
             // fenced submit per chunk at high dial settings).
             eng_.step(n, {.absorb = true});
-            eng_.readback(rb_);
-            unpack_interleaved(rb_.data(), psi_.data());
-            ses::normalize(psi_);  // display/confinement copy (GPU state left as is)
-        } else {
+            if (eng_.readback(rb_)) {
+                unpack_interleaved(rb_.data(), psi_.data());
+                ses::normalize(psi_);  // display/confinement copy (GPU state left as is)
+                stepped = true;
+            } else {
+                eng_ok_ = false;  // psi_ is the state before this batch
+            }
+        }
+        if (!stepped) {
             for (int s2 = 0; s2 < n; ++s2) {
                 prop_->step(psi_, 1);
                 ses::parallel_for(static_cast<int>(damp_.size()), [&](int i) {

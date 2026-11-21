@@ -153,15 +153,18 @@ protected:
     }
     // Call after any CPU-side edit of psi_ so the next step re-uploads it.
     void gpu_mark_dirty() { gpu_psi_dirty_ = true; }
-    void gpu_step(int n) {
+    // False = the engine did not deliver: psi_ is untouched (still the state
+    // before the batch), the GPU path is left for good, and the caller runs
+    // the batch on the CPU.
+    [[nodiscard]] bool gpu_step(int n) {
         gpu_sync_up();
         gpu_.step(n);
-        gpu_sync_down();
+        return gpu_sync_down();
     }
-    void gpu_relax(int n) {
+    [[nodiscard]] bool gpu_relax(int n) {
         gpu_sync_up();
         gpu_.relax(n);
-        gpu_sync_down();
+        return gpu_sync_down();
     }
 
     void mark_fired() {
@@ -240,9 +243,16 @@ private:
             gpu_psi_dirty_ = false;
         }
     }
-    void gpu_sync_down() {
-        gpu_.download();
+    // A download that did not happen leaves state() showing the staging
+    // buffer's last use -- an upload of psi, of the link phases or of the
+    // mask -- so it is never unpacked.
+    bool gpu_sync_down() {
+        if (!gpu_.download()) {
+            gpu_lattice_ok_ = false;
+            return false;
+        }
         unpack_interleaved(gpu_.state(), psi_.data());
+        return true;
     }
 };
 

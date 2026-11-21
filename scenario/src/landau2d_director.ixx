@@ -170,14 +170,24 @@ public:
             }
             while (n > 0) {
                 const int chunk = std::min(n, 8);
+                bool stepped = false;
                 if (eng_ok_) {
                     eng_.step(chunk);  // GPU applies the edge absorber per step
-                    eng_.download();
-                    unpack_interleaved(eng_.state(), psi_.data());
-                    // contained orbit never reaches the frame absorber, so the
-                    // GPU norm stays ~1; normalize the display/measure copy only.
-                    ses::normalize(psi_);
-                } else {
+                    if (eng_.download()) {
+                        unpack_interleaved(eng_.state(), psi_.data());
+                        // contained orbit never reaches the frame absorber, so
+                        // the GPU norm stays ~1; normalize the display/measure
+                        // copy only.
+                        ses::normalize(psi_);
+                        stepped = true;
+                    } else {
+                        // Nothing came down: state() would show the staging
+                        // buffer's last use, not psi. psi_ is still the state
+                        // before this chunk; the CPU takes it from here.
+                        eng_ok_ = false;
+                    }
+                }
+                if (!stepped) {
                     // Mask after EVERY step, like the GPU path (once per
                     // chunk absorbed 8x less at the edges).
                     for (int s = 0; s < chunk; ++s) {

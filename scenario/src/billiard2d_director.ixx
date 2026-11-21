@@ -208,28 +208,37 @@ protected:
         rebuild_surface(psi_, kBl2dSurfH, kBl2dMeshStride);
     }
 
+    // The GPU path is left at the first call that fails, with psi_ still the
+    // last state that is known good; the CPU finishes the batch from there.
+    // A refused upload must not be followed by a readback (the device holds
+    // the OLD state), and a refused readback leaves rb_ as it was -- empty
+    // on the first batch, the previous chunk's later: never unpack it.
     void do_steps(int n) override {
         if (eng_ok_ && eng_.device_lost()) {
-            // The engine is a no-op now; psi_ is its last good readback.
             eng_ok_ = false;
         }
-        if (eng_ok_) {
-            if (eng_dirty_) {
-                eng_.upload_state(psi_.data());
+        if (eng_ok_ && eng_dirty_) {
+            if (eng_.upload_state(psi_.data())) {
                 eng_dirty_ = false;
+            } else {
+                eng_ok_ = false;
             }
-            int left = n;
-            while (left > 0) {
-                const int chunk = std::min(left, 4);  // sample every 4 steps (4x/tick at x1)
-                eng_.step(chunk);
-                eng_.readback(rb_);
-                unpack_interleaved(rb_.data(), psi_.data());
-                accumulate_occupancy();
-                ++avg_steps_;  // one time-average sample per chunk
-                left -= chunk;
+        }
+        int left = n;
+        while (eng_ok_ && left > 0) {
+            const int chunk = std::min(left, 4);  // sample every 4 steps (4x/tick at x1)
+            eng_.step(chunk);
+            if (!eng_.readback(rb_)) {
+                eng_ok_ = false;
+                break;
             }
-        } else {
-            for (int s = 0; s < n; ++s) {
+            unpack_interleaved(rb_.data(), psi_.data());
+            accumulate_occupancy();
+            ++avg_steps_;  // one time-average sample per chunk
+            left -= chunk;
+        }
+        if (!eng_ok_) {
+            for (int s = 0; s < left; ++s) {
                 prop_->step(psi_, 1);
                 accumulate_occupancy();
                 ++avg_steps_;  // one sample per step

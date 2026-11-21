@@ -240,12 +240,23 @@ public:
     }
 
     // state_ -> host; caller reads state() as interleaved re/im fp32.
-    void download() {
+    // False = nothing was copied: state() then still shows whatever went
+    // through the staging buffer LAST -- the previous download, or an upload
+    // of psi, of the link phases or of the absorber mask (they share it). A
+    // caller must not read state() after a false.
+    [[nodiscard]] bool download() {
+        if (n_cells_ == 0) {
+            return false;
+        }
         const VkDeviceSize bytes =
             static_cast<VkDeviceSize>(n_cells_) * 2 * sizeof(float);
-        copy_sync(*ctx_, state_.buf, staging_.buf, bytes, CopyDir::to_host);
+        if (!copy_sync(*ctx_, state_.buf, staging_.buf, bytes,
+                       CopyDir::to_host)) {
+            return false;
+        }
         vmaInvalidateAllocation(ctx_->allocator, staging_.alloc, 0,
                                 VK_WHOLE_SIZE);
+        return true;
     }
 
     const float* state() const {

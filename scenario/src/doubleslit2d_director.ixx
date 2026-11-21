@@ -360,14 +360,24 @@ private:
             eng_dirty_ = false;
         }
         for (int s = 0; s < n; ++s) {
+            bool stepped = false;
             if (eng_ok_) {
                 // GPU step + edge CAP (no renorm: norm = electron on stage).
                 // Read back every step for the screen integral; the CAP is on
                 // the GPU so the state stays in sync -- no re-upload.
                 eng_.step(1);
-                eng_.download();
-                unpack_interleaved(eng_.state(), psi_.data());
-            } else {
+                if (eng_.download()) {
+                    unpack_interleaved(eng_.state(), psi_.data());
+                    stepped = true;
+                } else {
+                    // Nothing came down: state() would show the staging
+                    // buffer's last use (possibly the solenoid's link phases
+                    // or the mask). psi_ is still the state before this
+                    // step; the CPU takes it from here.
+                    eng_ok_ = false;
+                }
+            }
+            if (!stepped) {
                 prop_->step(psi_);
                 ses::parallel_for(kDs2dNy, [&](int j) {
                     const std::size_t row = static_cast<std::size_t>(j) *

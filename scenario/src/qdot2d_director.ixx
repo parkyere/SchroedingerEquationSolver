@@ -324,9 +324,7 @@ protected:
             return;
         }
         if (relaxing_) {
-            if (gpu_active()) {
-                gpu_relax(4 * n);
-            } else {
+            if (!(gpu_active() && gpu_relax(4 * n))) {
                 prop_->relax(psi_, 4 * n);
             }
             const double e = prop_->energy(psi_);
@@ -346,9 +344,7 @@ protected:
         int left = n;
         while (left > 0) {
             const int chunk = std::min(left, 8);
-            if (gpu_active()) {
-                gpu_step(chunk);
-            } else {
+            if (!(gpu_active() && gpu_step(chunk))) {
                 prop_->step(psi_, chunk);
             }
             sim_time_ += chunk * kQd2dDt;

@@ -1942,7 +1942,10 @@ bool check_lattice2d_step(ses_vk::DeviceContext& ctx) {
         eng.set_uniform_field(b);
         eng.upload(psi0.data());
         eng.step(20);
-        eng.download();
+        if (!eng.download()) {
+            std::printf("lattice2d step: download FAIL\n");
+            return false;
+        }
         const float* out = eng.state();
 
         const ErrStats cmp = compare_interleaved(out, cpu.data());
@@ -1994,7 +1997,10 @@ bool check_lattice2d_relax(ses_vk::DeviceContext& ctx) {
     eng.set_uniform_field(b);
     eng.upload(psi0.data());
     eng.relax(30);
-    eng.download();
+    if (!eng.download()) {
+        std::printf("lattice2d relax: download FAIL\n");
+        return false;
+    }
     const float* out = eng.state();
 
     const ErrStats cmp = compare_interleaved(out, cpu.data());
@@ -2043,7 +2049,10 @@ bool check_lattice2d_absorb_solenoid(ses_vk::DeviceContext& ctx) {
     eng.set_absorber(mask);
     eng.upload(psi0.data());
     eng.step(20);
-    eng.download();
+    if (!eng.download()) {
+        std::printf("lattice2d absorber: download FAIL\n");
+        return false;
+    }
     const float* out = eng.state();
 
     const ErrStats cmp = compare_interleaved(out, cpu.data());
@@ -3863,10 +3872,11 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
     const bool still_ready = a.ready();
     a.step(5);
     b.step(5);
-    a.download();
-    b.download();
+    const bool got_a = a.download();
+    const bool got_b = b.download();
     const std::size_t n = static_cast<std::size_t>(g.size()) * 2;
-    const bool equal = std::equal(a.state(), a.state() + n, b.state());
+    const bool equal = got_a && got_b &&
+                       std::equal(a.state(), a.state() + n, b.state());
     a.destroy();
     b.destroy();
     const bool pass = still_ready && equal;
