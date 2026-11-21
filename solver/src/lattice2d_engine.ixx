@@ -101,10 +101,12 @@ public:
     // field). Safe to call repeatedly (dt / potential changes).
     //
     // The setters below return whether the device now holds what was asked
-    // for. False = it still steps with what it had (a refused size leaves the
-    // old lattice ready; a refused upload leaves old tables, links or mask):
-    // the caller's CPU propagator has the new values, so the caller must
-    // leave the GPU path rather than step the two apart.
+    // for. False = it does not: a refused size leaves the old lattice ready;
+    // a failed allocation on a resize leaves no lattice at all (ready()
+    // false); a refused upload leaves old tables, links or mask -- or, after
+    // a resize, ones never written. The caller's CPU propagator has the new
+    // values, so the caller must leave the GPU path rather than step the two
+    // apart.
     [[nodiscard]] bool set_lattice(const ses::Grid3D& g,
                                    const std::vector<double>& potential,
                                    double dt) {

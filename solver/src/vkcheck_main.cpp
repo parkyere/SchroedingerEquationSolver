@@ -3869,7 +3869,12 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
         return false;
     }
     const bool built = a.set_lattice(g, v, dt) && b.set_lattice(g, v, dt);
-    const bool sent = built && a.upload(psi0.data()) && b.upload(psi0.data());
+    if (!built) {
+        // No lattice: step() below would dispatch through sets never wired.
+        std::printf("%s: set_lattice FAIL\n", name);
+        return false;
+    }
+    const bool sent = a.upload(psi0.data()) && b.upload(psi0.data());
     const std::vector<double> wrong(v.size() * 2, 0.0);  // size mismatch
     const bool refused = !a.set_lattice(g, wrong, dt);  // must be refused
     const bool still_ready = refused && a.ready();

@@ -783,6 +783,11 @@ protected:
     // buffer). On failure the GPU path is abandoned and the CPU becomes the
     // truth -- never a silently stale potential on the device.
     bool upload_potential_tables() {
+        // An in-flight async batch reads the potential buffer and the upload
+        // has no ordering against it: drain first (Rutherford's reset came
+        // here without doing so; hydrogen's field tables and the molecule
+        // geometry drain at their own call sites).
+        engine_.wait_async();
         if (engine_.set_potential(sim_.potential())) {
             return true;
         }
