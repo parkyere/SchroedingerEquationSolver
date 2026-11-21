@@ -231,12 +231,14 @@ public:
     void clear_absorber() { has_absorber_ = false; }
 
     // Same size contract as set_absorber: a larger psi would write past the
-    // staging mapping and copy past state_.
-    void upload(const std::vector<std::complex<double>>& psi) {
+    // staging mapping and copy past state_. False = the device still holds
+    // the state it had: the caller must not step and read THAT back as the
+    // psi it meant to send.
+    [[nodiscard]] bool upload(const std::vector<std::complex<double>>& psi) {
         if (n_cells_ == 0 || static_cast<int>(psi.size()) != n_cells_) {
-            return;
+            return false;
         }
-        upload_complex(state_, psi);
+        return upload_complex(state_, psi);
     }
 
     // state_ -> host; caller reads state() as interleaved re/im fp32.
@@ -361,19 +363,22 @@ private:
     }
 
     // Pack into staging via `pack`, flush, then staged copy to `dst`.
+    // Returns whether the copy reached the device (the link / mask / table
+    // setters still drop it: 2026-11-07 A in docs/REVIEW_BACKLOG.md).
     template <typename Pack>
-    void upload_packed(Buffer& dst, VkDeviceSize bytes, Pack&& pack) {
+    bool upload_packed(Buffer& dst, VkDeviceSize bytes, Pack&& pack) {
         if (staging_.mapped == nullptr) {
-            return;  // alloc_lattice failed: nothing to write into
+            return false;  // alloc_lattice failed: nothing to write into
         }
         pack(static_cast<float*>(staging_.mapped));
         vmaFlushAllocation(ctx_->allocator, staging_.alloc, 0, VK_WHOLE_SIZE);
-        copy_sync(*ctx_, staging_.buf, dst.buf, bytes, CopyDir::to_device);
+        return copy_sync(*ctx_, staging_.buf, dst.buf, bytes,
+                         CopyDir::to_device);
     }
 
-    void upload_complex(Buffer& dst,
+    bool upload_complex(Buffer& dst,
                         const std::vector<std::complex<double>>& src) {
-        upload_packed(dst,
+        return upload_packed(dst,
                       static_cast<VkDeviceSize>(src.size()) * 2 * sizeof(float),
                       [&src](float* p) {
                           for (std::size_t i = 0; i < src.size(); ++i) {

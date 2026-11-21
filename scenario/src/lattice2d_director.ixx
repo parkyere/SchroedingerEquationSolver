@@ -157,12 +157,16 @@ protected:
     // before the batch), the GPU path is left for good, and the caller runs
     // the batch on the CPU.
     [[nodiscard]] bool gpu_step(int n) {
-        gpu_sync_up();
+        if (!gpu_sync_up()) {
+            return false;
+        }
         gpu_.step(n);
         return gpu_sync_down();
     }
     [[nodiscard]] bool gpu_relax(int n) {
-        gpu_sync_up();
+        if (!gpu_sync_up()) {
+            return false;
+        }
         gpu_.relax(n);
         return gpu_sync_down();
     }
@@ -237,11 +241,18 @@ private:
     // psi_ is GPU-resident during evolution; upload only after a CPU edit,
     // download once per gpu_step/gpu_relax batch for the CPU-built
     // heightfield display + energy.
-    void gpu_sync_up() {
-        if (gpu_psi_dirty_) {
-            gpu_.upload(psi_.data());
-            gpu_psi_dirty_ = false;
+    // A refused upload leaves the device on the OLD state: nothing may be
+    // stepped and read back from it as if it were psi_.
+    bool gpu_sync_up() {
+        if (!gpu_psi_dirty_) {
+            return true;
         }
+        if (!gpu_.upload(psi_.data())) {
+            gpu_lattice_ok_ = false;
+            return false;
+        }
+        gpu_psi_dirty_ = false;
+        return true;
     }
     // A download that did not happen leaves state() showing the staging
     // buffer's last use -- an upload of psi, of the link phases or of the

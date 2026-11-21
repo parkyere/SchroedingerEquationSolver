@@ -146,9 +146,10 @@ public:
             if (eng_.ready()) {
                 eng_.set_solenoid(flux_, solenoid_x(), 0.0);
                 eng_.set_absorber(mask_);
-                eng_.upload(psi_.data());
                 eng_ok_ = true;
-                eng_dirty_ = false;
+                // A refused upload stays dirty: the first batch sends psi_
+                // again, and leaves the GPU path if that fails too.
+                eng_dirty_ = !eng_.upload(psi_.data());
             }
         }
     }
@@ -356,8 +357,13 @@ private:
             eng_ok_ = false;
         }
         if (eng_ok_ && eng_dirty_) {
-            eng_.upload(psi_.data());
-            eng_dirty_ = false;
+            // A refused upload leaves the device on the OLD wave: stepping
+            // and downloading that would put it over the new packet.
+            if (eng_.upload(psi_.data())) {
+                eng_dirty_ = false;
+            } else {
+                eng_ok_ = false;
+            }
         }
         for (int s = 0; s < n; ++s) {
             bool stepped = false;

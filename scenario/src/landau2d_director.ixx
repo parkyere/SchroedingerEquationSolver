@@ -139,9 +139,10 @@ public:
             if (eng_.ready()) {
                 eng_.set_uniform_field(b_);
                 eng_.set_absorber(mask_);
-                eng_.upload(psi_.data());
                 eng_ok_ = true;
-                eng_dirty_ = false;
+                // A refused upload stays dirty: the first batch sends psi_
+                // again, and leaves the GPU path if that fails too.
+                eng_dirty_ = !eng_.upload(psi_.data());
             }
         }
     }
@@ -165,8 +166,13 @@ public:
                 eng_ok_ = false;
             }
             if (eng_ok_ && eng_dirty_) {
-                eng_.upload(psi_.data());
-                eng_dirty_ = false;
+                // A refused upload leaves the device on the OLD state:
+                // stepping and downloading that would put it over psi_.
+                if (eng_.upload(psi_.data())) {
+                    eng_dirty_ = false;
+                } else {
+                    eng_ok_ = false;
+                }
             }
             while (n > 0) {
                 const int chunk = std::min(n, 8);

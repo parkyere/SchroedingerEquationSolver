@@ -1940,7 +1940,10 @@ bool check_lattice2d_step(ses_vk::DeviceContext& ctx) {
 
         eng.set_lattice(g, v, dt);
         eng.set_uniform_field(b);
-        eng.upload(psi0.data());
+        if (!eng.upload(psi0.data())) {
+            std::printf("lattice2d step: upload FAIL\n");
+            return false;
+        }
         eng.step(20);
         if (!eng.download()) {
             std::printf("lattice2d step: download FAIL\n");
@@ -1995,7 +1998,10 @@ bool check_lattice2d_relax(ses_vk::DeviceContext& ctx) {
     }
     eng.set_lattice(g, v, dt);
     eng.set_uniform_field(b);
-    eng.upload(psi0.data());
+    if (!eng.upload(psi0.data())) {
+        std::printf("lattice2d relax: upload FAIL\n");
+        return false;
+    }
     eng.relax(30);
     if (!eng.download()) {
         std::printf("lattice2d relax: download FAIL\n");
@@ -2047,7 +2053,10 @@ bool check_lattice2d_absorb_solenoid(ses_vk::DeviceContext& ctx) {
     eng.set_lattice(g, v, dt);
     eng.set_solenoid(phi, 0.0, 0.0);
     eng.set_absorber(mask);
-    eng.upload(psi0.data());
+    if (!eng.upload(psi0.data())) {
+        std::printf("lattice2d absorber: upload FAIL\n");
+        return false;
+    }
     eng.step(20);
     if (!eng.download()) {
         std::printf("lattice2d absorber: download FAIL\n");
@@ -3865,8 +3874,7 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
     }
     a.set_lattice(g, v, dt);
     b.set_lattice(g, v, dt);
-    a.upload(psi0.data());
-    b.upload(psi0.data());
+    const bool sent = a.upload(psi0.data()) && b.upload(psi0.data());
     const std::vector<double> wrong(v.size() * 2, 0.0);  // size mismatch
     a.set_lattice(g, wrong, dt);  // must be refused
     const bool still_ready = a.ready();
@@ -3875,7 +3883,7 @@ bool check_lattice2d_size_guard(ses_vk::DeviceContext& ctx) {
     const bool got_a = a.download();
     const bool got_b = b.download();
     const std::size_t n = static_cast<std::size_t>(g.size()) * 2;
-    const bool equal = got_a && got_b &&
+    const bool equal = sent && got_a && got_b &&
                        std::equal(a.state(), a.state() + n, b.state());
     a.destroy();
     b.destroy();
