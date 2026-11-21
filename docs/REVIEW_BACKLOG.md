@@ -45,21 +45,55 @@ for any testable logic.
   build. Needs one launch with `SDL_VIDEODRIVER=wayland`, including a window
   resize and a minimize/restore.
 
-- **[verify] Device-loss fallbacks (2026-11-20).** Every director now leaves
-  the GPU path on the frame after `device_lost` latches (2D scenes, spins, and
-  the 3D base family via `BaseDirector::run_frame` / `after_device_lost`; H2+
-  also returns its rotor to the boot axis, the only one the CPU steps in). All
-  compile-checked only -- a loss cannot be provoked without a device. The
-  vkcheck fault seam (`ctx.fault`) could drive a director-level check.
+- **[verify] Leaving the GPU path (2026-11-20/21).** Every director leaves it
+  on the frame after `device_lost` latches, and at the first upload / readback
+  / download that fails (2D scenes: each step loop finishes its batch on the
+  CPU from the last good `psi_`; spins; the 3D base family through
+  `BaseDirector::leave_gpu_path` and its `after_leaving_gpu` hook, which the
+  potential / field-table / state upload failures share; H2+ also returns its
+  rotor to the boot axis, the only one the CPU steps in). All compile-checked
+  only -- a failure cannot be provoked without a device. The vkcheck fault seam
+  (`ctx.fault`) could drive a director-level check.
 
-- **[decision] The fallback is not visible: the renderer shares the latch.**
-  `SceneRenderer::render` opens its frame with `OneShot::begin`, which refuses
-  once `device_lost` is set; the presenter keeps presenting, so after a latch
-  the panel and title follow the CPU simulation while the scene image stays
-  the last frame -- for hydrogen's older fallback as well. The latch is also set by a fence TIMEOUT (a slow GPU
-  on a long batch, 2026-10-09 A), where the device is alive. Options: latch per
-  owner (engine vs renderer) so a compute failure leaves drawing intact,
-  re-create the device, or say "GPU lost" on screen and stop the clock.
+- **[decision] After the `device_lost` latch the fallback is not visible.**
+  `SceneRenderer::render` returns at once when the latch is set (2026-11-21;
+  before, it ran its uploads first and failed at `OneShot::begin`), and the
+  presenter keeps presenting: the panel and title follow the CPU simulation
+  while the scene image stays the last frame -- for hydrogen's older fallback
+  as well -- and the 3D scenes grind 256^3 CPU steps on the UI thread for a
+  picture nobody sees. Proposed direction (external review, 2026-11-21; not
+  implemented -- it needs a device and an app build to check): split by
+  CAUSE, not by owner.
+  - A real `VK_ERROR_DEVICE_LOST` takes every queue of the `VkDevice` with it,
+    so a latch per owner (engine vs renderer) cannot bring drawing back: stop
+    the clock, say "GPU lost" in the panel/title, and do not step on the CPU.
+  - A fence TIMEOUT (a slow GPU on a long batch, 2026-10-09 A) leaves the
+    device alive, yet sets the same latch and takes the renderer down with
+    the engine. Do not latch `device_lost` for it; the engine then needs a
+    "stalled" state of its own, because the one-shot command buffer is still
+    pending and must not be reset.
+  - Allocation / upload failures already leave the device alive and unlatched:
+    the directors go to the CPU and the renderer draws it (the Surface view
+    and the device-only modes follow since 2026-11-21).
+
+- **[accuracy] H2+ m > 0 orbitals next to the bond axis (2026-11-21).** The
+  sampling now goes through the smooth parts and the axis is an exact node,
+  but two resolutions remain. (1) The baked table has 256 uniform xi nodes up
+  to 43.7, i.e. 0.17 apart, and the smooth part of 1pi_u falls by a fifth
+  over the first interval (`Spheroidal.BakedPiUIsTheLivePiUOnTheGrid`: 1.6 %
+  of the peak in the first cells off the internuclear segment) -- a graded
+  xi grid, dense near 1, would fix it. (2) The live finite-difference solve
+  has a slowly decaying boundary layer at the axis ends for ODD m, radial
+  and angular: Lambda / sqrt(xi^2 - 1) of 1pi_u runs 17 % and 2.4 % high at
+  its first two centres, M / sqrt(1 - eta^2) 8.6 % high at 1 - |eta| = 0.008,
+  2.2 % at 0.031, 1 % at 0.063, 0.4 % at 0.16 (review, against an exact
+  associated-Legendre expansion; even m is exact to 1e-4). It is baked into
+  every m = 1 row and bounds the cone about the axis beyond the nuclei at
+  ~9 %. Cure: solve for the smooth part (Lambda = (xi^2 - 1)^(m/2) f, same
+  in eta), regenerate, and pin it with the Legendre oracle; `smooth_part`'s
+  hold-the-neighbour rule for odd-m eta ends can then go back to the cubic.
+  (Also: the generator prints xi_max with %.8e, so the loader's xi nodes sit
+  5e-9 off the generator's -- harmless at the table's nine digits.)
 
 - **[low, deferred] Extract a `MeasurementEngine`** from `HydrogenDirector`
   (`run_partial_measure` / `rebuild_psi_from` / `sin_partner`, ~140
@@ -329,7 +363,7 @@ for any testable logic.
 - **다중 관심사 테스트**(`potential_test` 412-458, `lattice2d_test` 208-262·376-446,
   `molecule_test` 32-83 …)와 근거 없는 허용 오차(`lattice2d_test` 0.4/0.15/0.2,
   `corral2d_test` 0.6×/2×, `rotor_test` 30..42)는 항목별 분리·유도.
-- **빠진 음성 테스트**: `Grid1D{n<=0}`, 빈 벡터 `fft`, `absorbing_mask(width > box)`,
+- **빠진 음성 테스트**: `Grid1D{n<=0}`, `absorbing_mask(width > box)`,
   `photon_flight_frames(de<=0)`, `bound_states_1d(count > n)`, `Scheduler::cancel(unknown)`,
   `every(period<=0)`, `ho_eigenstate(n<0)`.
 - `TEST_P` 후보: 디렉터 레지스트리 전체에 대한 pacing/`set_real_time`/`handle_key`
@@ -347,10 +381,17 @@ for any testable logic.
 
 ### A. 정확성·견고성
 - **[solver] `Lattice2DEngine`/`SpinEngine`의 void API가 제출·복사 실패를 버린다**
-  (`submit_and_wait`, `copy_sync` 결과 무시). 디렉터들은 2026-11-20부터 다음 프레임에
-  `device_lost()`를 보고 CPU로 강등하지만, 실패한 그 프레임은 여전히 직전 다운로드를 다시
-  쓰고 sim_time을 진행한다(spins 정확 모드는 마지막 화살표의 곱상태로 재시작). 남은 계약:
-  엔진 API를 `[[nodiscard]] bool`로 바꿔 실패한 호출 자리에서 강등.
+  (`submit_and_wait`, `copy_sync` 결과 무시). 판독 쪽은 2026-11-21에 닫았다:
+  `Lattice2DEngine::download()`는 `[[nodiscard]] bool`이고(실패하면 `state()`는 staging
+  버퍼의 마지막 용도 — psi 업로드·링크 위상·흡수 마스크 — 를 보여 줬다), 2D 디렉터는
+  모든 `upload_state`/`readback`/`download` 결과를 보고 실패한 호출 자리에서 CPU로
+  내려간다(`Lattice2DEngine::upload()`도 bool). 남은 것: `Lattice2DEngine::step`/`relax`와
+  `Engine::step`/`relax_step`/`relax_deflated_step`은 여전히 void라, 래치 없이 실패한
+  스텝(one-shot begin 실패) 뒤의 판독은 진행하지 않은 상태를 돌려주고 그 청크의
+  sim_time·점유/CAP tally만 나아간다(2D 장면 7곳 공통 — 한 번에 같이 바꿀 것);
+  `set_solenoid`/`set_uniform_field`/`set_absorber`/`set_lattice`도 void라 거부된 링크·
+  마스크 업로드 뒤 GPU는 옛 장(場)으로, CPU 전파기는 새 장으로 갈린다; `SpinEngine`
+  쪽은 손대지 않았다(spins 정확 모드는 손실 뒤 마지막 화살표의 곱상태로 재시작).
 - **[scenario] `selftest_scene_wait_running`이 교체 전 디렉터의 시계로 앵커.**
   `request_scene`은 다음 루프 머리에서야 교체하므로 0번째 폴링은 나가는 장면의
   `sim_time`을 앵커로 잡는다(--selftest-scene에서 앵커가 홉마다 누적, 느린 GPU 장면이
@@ -446,7 +487,7 @@ for any testable logic.
 - **[scenario]** `DoubleSlit2DDirector::transmitted_fraction`은 벽 오른쪽의 순간 norm이라 로브가 CAP(x > 50)에 들어가면 패널 'Transmitted'·타이틀 T가 0으로 떨어짐 → qpc처럼 오른쪽 CAP 흡수 누적 tally로(틀린 `init_compute` 주석은 이번에 정정).
 - **[scenario]** `spin_director.ixx` `advect_one`: 컬 반경 √1.4·`kSpFluxR`(≈18.9)인데 재생성 위치 `uni*0.8 − d·kSpFluxR`는 반경 최대 ~34라 재생성의 51-57 %가 구 밖에 놓여 다음 프레임에 다시 무작위 재배치돼 스트릭이 한 프레임 튐(표시 전용) → 재생성을 −d 쪽, d에 수직한 원판(구 안)에서 뽑기.
 - **[solver]** `Engine::bridge_roundtrip`이 `scratch_bridge_` 존재만으로 lazy 블록을 건너뜀: `load_set_` 할당 실패 뒤 재호출은 null `load_set_[vol_display_]`을 바인딩(vkcheck 전용 경로) → `ensure_two_center`처럼 조각별 생성, 준비 플래그는 마지막에.
-- **[solver/scenario]** `Engine`의 오류 반환 API 중 `initialize`만 `[[nodiscard]]`: `molecule_director`의 `after_step_batch`·`after_reset`이 `set_two_center_potential` 실패를 버려 장치 V가 옛 축에 조용히 남음(`bridge_cpu_state`도 `upload_state` 결과를 버림) → `[[nodiscard]]`, 실패 시 CPU 강등.
+- **[solver/scenario]** `Engine`의 오류 반환 API 중 `initialize`만 `[[nodiscard]]`: `molecule_director`의 `after_step_batch`·`after_reset`이 `set_two_center_potential` 실패를 버려 장치 V가 옛 축에 조용히 남음(`bridge_cpu_state`의 `upload_state`는 2026-11-21에 검사) → `[[nodiscard]]`, 실패 시 `leave_gpu_path()`.
 
 **성능**
 - **[app]** `imgui_ui.ixx` `draw_rutherford_panel`의 E/Z와 hydrogen 패널의 E/B 슬라이더가 바뀐 드래그 프레임마다 `set_energy`/`set_z`(256³ 재구축+퍼텐셜 업로드)·`set_efield_e0`/`set_bfield_b`(67 MB `upload_field_tables`)를 호출 → ω 슬라이더처럼 `IsItemDeactivatedAfterEdit`에서 적용(드래그 중엔 UI 값만 유지).
