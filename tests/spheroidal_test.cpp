@@ -369,12 +369,13 @@ TEST(SynthesizeH2plus, PartnersAreEachOthersTurnAboutTheAxis) {
 
 // The baked member must be the live member for m > 0 as well -- also next to
 // the axis, where the profile goes like the square root of the distance from
-// its end. Read through the smooth part the two agree to 1 - overlap = 1.8e-6
+// its end. Read through the smooth part the two agree to 1 - overlap = 2.1e-6
 // and 1.6 % of the peak in the worst cells, the first ones off the
 // internuclear segment (xi = 1.05); gates about 1.5 times that. What is left
 // there is two resolutions, not a convention: the baked xi nodes are 0.17
-// apart, and the live finite-difference solve has its own boundary layer
-// (its smooth part runs 17 % and 2.4 % high at its first two centres).
+// apart, and the live finite-difference solve -- this test's reference -- has
+// its own boundary layer for odd m (its smooth part runs 17 % and 2.4 % high
+// at its first two xi centres, 8.6 % at the first baked eta node).
 // Interpolating Lambda itself, with the end node a linear extrapolation,
 // read 5.6e-5 and 7.0 %.
 TEST(Spheroidal, BakedPiUIsTheLivePiUOnTheGrid) {
