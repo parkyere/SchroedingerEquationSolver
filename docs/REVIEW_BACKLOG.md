@@ -51,9 +51,23 @@ for any testable logic.
   CPU from the last good `psi_`; spins; the 3D base family through
   `BaseDirector::leave_gpu_path` and its `after_leaving_gpu` hook, which the
   potential / field-table / state upload failures share; H2+ also returns its
-  rotor to the boot axis, the only one the CPU steps in). All compile-checked
-  only -- a failure cannot be provoked without a device. The vkcheck fault seam
-  (`ctx.fault`) could drive a director-level check.
+  rotor to the boot axis, the only one the CPU steps in). On a live device the
+  exit gives back what only the GPU path used -- surface buffers, relax
+  tables, the molecule scenes' cached states, hydrogen's deflation set and
+  jump scratch; on a latched one the handles are forgotten instead. All
+  compile-checked only -- a failure cannot be provoked without a device. The
+  vkcheck fault seam (`ctx.fault`) could drive a director-level check.
+
+- **[low] What a scene on the CPU path still holds on the device.** After
+  `leave_gpu_path()` the engine's core stays allocated until the scene is
+  left: psi, V, the phase tables, both display volumes, the flow-velocity
+  volumes, and the atom model's resident states (`AtomModel` has no release).
+  `engine_.destroy()` at the exit would free all of it, but the renderer
+  keeps the volume and velocity views bound and only re-points them when a
+  fallback texture exists (`point_volume_binding`, `point_flow_velocity_
+  binding`): it has to drop those bindings first. Also a policy question
+  left as it was: hydrogen continues an excited relax as a GROUND relax on
+  the CPU (labelled so), the molecule scenes go back to real time.
 
 - **[decision] After the `device_lost` latch the fallback is not visible.**
   `SceneRenderer::render` returns at once when the latch is set (2026-11-21;
@@ -270,8 +284,8 @@ for any testable logic.
   `f16_quantize`(RTE) 또는 RTZ 양자화와의 비트 일치를 요구할 것(RTE 단독은 RTZ 구현에서 거짓 FAIL). `flow_velocity` 커널은 오라클이 전혀 없음.
 - `spin_fused_gate`/`spin_permute`는 베이크·검증되지만 런타임 소비자가 없음("Stage 2/3"
   주석은 정정됨). `check_lattice2d_size_guard`는 거부를 동작으로 이미
-  단언(가드 제거 시 비트 비교 FAIL); 남은 문제는 `set_lattice`가 void라 디렉터가 거부를 모름 →
-  `[[nodiscard]] bool`(2026-11-07 A와 같은 계약).
+  단언(가드 제거 시 비트 비교 FAIL)하고, 2026-11-21부터는 `set_lattice`의 반환값으로도
+  읽는다(디렉터는 거부를 보고 GPU 경로를 떠난다).
 - 13개 raw-kernel 검사가 같은 ~40줄 픽스처를 반복(~600줄) → `KernelFixture`.
 
 ### C. 성능 (측정 근거 있음)
@@ -388,10 +402,12 @@ for any testable logic.
   내려간다(`Lattice2DEngine::upload()`도 bool). 남은 것: `Lattice2DEngine::step`/`relax`와
   `Engine::step`/`relax_step`/`relax_deflated_step`은 여전히 void라, 래치 없이 실패한
   스텝(one-shot begin 실패) 뒤의 판독은 진행하지 않은 상태를 돌려주고 그 청크의
-  sim_time·점유/CAP tally만 나아간다(2D 장면 7곳 공통 — 한 번에 같이 바꿀 것);
-  `set_solenoid`/`set_uniform_field`/`set_absorber`/`set_lattice`도 void라 거부된 링크·
-  마스크 업로드 뒤 GPU는 옛 장(場)으로, CPU 전파기는 새 장으로 갈린다; `SpinEngine`
-  쪽은 손대지 않았다(spins 정확 모드는 손실 뒤 마지막 화살표의 곱상태로 재시작).
+  sim_time·점유/CAP tally만 나아간다(2D 장면 7곳 공통 — 한 번에 같이 바꿀 것; 지금은
+  `device_lost` 래치와 다음 판독이 가려 줄 뿐이라, fence TIMEOUT을 래치에서 떼는 날에는
+  반드시 같이 올려야 한다). `Lattice2DEngine`의 `set_lattice`/`set_uniform_field`/
+  `set_solenoid`/`set_absorber`는 2026-11-21에 `[[nodiscard]] bool`이 됐고 디렉터는 거부된
+  설정에서 GPU 경로를 떠난다. `SpinEngine` 쪽은 손대지 않았다(spins 정확 모드는 손실 뒤
+  마지막 화살표의 곱상태로 재시작).
 - **[scenario] `selftest_scene_wait_running`이 교체 전 디렉터의 시계로 앵커.**
   `request_scene`은 다음 루프 머리에서야 교체하므로 0번째 폴링은 나가는 장면의
   `sim_time`을 앵커로 잡는다(--selftest-scene에서 앵커가 홉마다 누적, 느린 GPU 장면이
