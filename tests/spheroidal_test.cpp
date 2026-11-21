@@ -246,6 +246,166 @@ TEST(Spheroidal, BakedGroundSynthesizesLikeTheLiveSolve) {
     EXPECT_LT(e, -0.5) << "baked ground synthesizes a bound state";
 }
 
+// ---- m > 0: the bond axis is a node ----
+// For m > 0 the orbital goes like rho^m e^{i m phi} at the axis: M(+-1) = 0,
+// Lambda(1) = 0 (as (1 - eta^2)^(m/2), (xi^2 - 1)^(m/2)), and a sampled field
+// is EXACTLY zero on a grid line that is the axis, for both partners.
+
+// A linear extrapolation over the edge half-cell does not land on zero: it
+// leaves 1pi_u's Lambda(1) at a quarter of its peak and turns the sign of the
+// m >= 3 ends.
+TEST(Spheroidal, BakedProfilesOfMAboveZeroVanishAtTheirAxisEnds) {
+    const std::vector<ses::H2plusOrbital> baked = ses::h2plus_atlas_baked(1.875);
+    ASSERT_FALSE(baked.empty());
+    int checked = 0;
+    for (std::size_t k = 0; k < baked.size(); ++k) {
+        const ses::H2plusOrbital& o = baked[k];
+        if (o.m == 0) {
+            continue;
+        }
+        ++checked;
+        EXPECT_EQ(o.M.front(), 0.0) << "orbital " << k << ", m = " << o.m;
+        EXPECT_EQ(o.M.back(), 0.0) << "orbital " << k << ", m = " << o.m;
+        EXPECT_EQ(o.lambda.front(), 0.0) << "orbital " << k << ", m = " << o.m;
+    }
+    EXPECT_GT(checked, 0);
+}
+
+// 32^3 over +-8: x = y = 0 is the grid line i = j = 16, so with the nuclei on
+// z the bond axis runs through cells; x and y share one axis grid, so the
+// grid is symmetric under x <-> y.
+struct AxisRig {
+    Grid3D g{Grid1D{-8.0, 8.0, 32}, Grid1D{-8.0, 8.0, 32},
+             Grid1D{-8.0, 8.0, 32}};
+    double R = 1.875;
+    Vec3d n{0.0, 0.0, 1.0};
+    Vec3d e1{1.0, 0.0, 0.0};
+    std::vector<ses::H2plusOrbital> baked = ses::h2plus_atlas_baked(R);
+    Field3D synth(const ses::H2plusOrbital& o, int partner) const {
+        return ses::synthesize_h2plus(g, o, partner, n, e1);
+    }
+    // The first baked member with this m.
+    const ses::H2plusOrbital& with_m(int m) const {
+        for (const ses::H2plusOrbital& o : baked) {
+            if (o.m == m) {
+                return o;
+            }
+        }
+        return baked.front();
+    }
+};
+
+double peak_abs(const Field3D& f) {
+    double pk = 0.0;
+    for (const std::complex<double>& z : f.data()) {
+        pk = std::max(pk, std::abs(z));
+    }
+    return pk;
+}
+
+TEST(SynthesizeH2plus, MAboveZeroIsExactlyZeroOnTheBondAxis) {
+    const AxisRig rig;
+    ASSERT_FALSE(rig.baked.empty());
+    std::vector<ses::H2plusOrbital> orbs = {rig.with_m(1), rig.with_m(2),
+                                            rig.with_m(3)};
+    ASSERT_EQ(orbs[0].m, 1);
+    ASSERT_EQ(orbs[1].m, 2);
+    ASSERT_EQ(orbs[2].m, 3);
+    // ...and the live solve, whose profiles sit on cell centres.
+    orbs.push_back(ses::h2plus_orbital(rig.R, 1, 0, 0));
+    ASSERT_TRUE(orbs.back().valid);
+    for (const ses::H2plusOrbital& o : orbs) {
+        for (const int partner : {0, 1}) {
+            const Field3D f = rig.synth(o, partner);
+            ASSERT_GT(peak_abs(f), 0.0);
+            for (int k = 0; k < rig.g.z.n; ++k) {
+                EXPECT_EQ(f(16, 16, k), std::complex<double>{})
+                    << "m = " << o.m << ", partner " << partner << ", k = "
+                    << k;
+            }
+        }
+    }
+}
+
+// The two partners are one function turned by pi / (2m) about the axis. On a
+// grid symmetric under x <-> y that reads as a transposition:
+//   m = 1:  pi_y(x, y) = pi_x(y, x)
+//   m = 2:  x^2 - y^2 is odd under the swap, 2xy even
+//   m = 3:  Im (x + iy)^3 = -Re (y + ix)^3
+// -- and degenerate partners have one energy.
+TEST(SynthesizeH2plus, PartnersAreEachOthersTurnAboutTheAxis) {
+    const AxisRig rig;
+    ASSERT_FALSE(rig.baked.empty());
+    // worst |a(i, j, k) - sign * b(j, i, k)| over the grid, relative to peak
+    const auto mismatch = [&](const Field3D& a, const Field3D& b, double sign) {
+        double worst = 0.0;
+        for (int k = 0; k < rig.g.z.n; ++k) {
+            for (int j = 0; j < rig.g.y.n; ++j) {
+                for (int i = 0; i < rig.g.x.n; ++i) {
+                    worst = std::max(worst,
+                                     std::abs(a(i, j, k) - sign * b(j, i, k)));
+                }
+            }
+        }
+        return worst / peak_abs(a);
+    };
+    const Field3D p1c = rig.synth(rig.with_m(1), 0);
+    const Field3D p1s = rig.synth(rig.with_m(1), 1);
+    EXPECT_LT(mismatch(p1s, p1c, +1.0), 1e-12) << "m = 1";
+    const Field3D p2c = rig.synth(rig.with_m(2), 0);
+    const Field3D p2s = rig.synth(rig.with_m(2), 1);
+    EXPECT_LT(mismatch(p2c, p2c, -1.0), 1e-12) << "m = 2, cos";
+    EXPECT_LT(mismatch(p2s, p2s, +1.0), 1e-12) << "m = 2, sin";
+    const Field3D p3c = rig.synth(rig.with_m(3), 0);
+    const Field3D p3s = rig.synth(rig.with_m(3), 1);
+    EXPECT_LT(mismatch(p3s, p3c, -1.0), 1e-12) << "m = 3";
+
+    const std::vector<double> v = ses::regularized_coulomb_potential(
+        rig.g, 1.0,
+        std::vector<Vec3d>{{0.0, 0.0, 0.5 * rig.R}, {0.0, 0.0, -0.5 * rig.R}});
+    EXPECT_NEAR(ses::mean_energy(p1c, v), ses::mean_energy(p1s, v), 1e-10);
+    EXPECT_NEAR(ses::mean_energy(p3c, v), ses::mean_energy(p3s, v), 1e-10);
+}
+
+// The baked member must be the live member for m > 0 as well -- also next to
+// the axis, where the profile goes like the square root of the distance from
+// its end. Read through the smooth part the two agree to 1 - overlap = 1.8e-6
+// and 1.6 % of the peak in the worst cells, the first ones off the
+// internuclear segment (xi = 1.05); gates about 1.5 times that. What is left
+// there is two resolutions, not a convention: the baked xi nodes are 0.17
+// apart, and the live finite-difference solve has its own boundary layer
+// (its smooth part runs 17 % and 2.4 % high at its first two centres).
+// Interpolating Lambda itself, with the end node a linear extrapolation,
+// read 5.6e-5 and 7.0 %.
+TEST(Spheroidal, BakedPiUIsTheLivePiUOnTheGrid) {
+    const double R = 1.875;
+    const Grid1D ax{-10.0, 10.0, 64};  // h = 0.3125 = the scene's
+    const Grid3D g{ax, ax, ax};
+    const std::vector<ses::H2plusOrbital> baked = ses::h2plus_atlas_baked(R);
+    ASSERT_GT(baked.size(), 2u);
+    const ses::H2plusOrbital& b = baked[2];
+    ASSERT_EQ(b.m, 1);
+    ASSERT_EQ(b.n_eta, 0);
+    ASSERT_EQ(b.n_xi, 0);
+    const ses::H2plusOrbital live = ses::h2plus_orbital(R, 1, 0, 0);
+    ASSERT_TRUE(live.valid);
+    for (const int partner : {0, 1}) {
+        const Field3D pb = ses::synthesize_h2plus(g, b, partner,
+                                                  Vec3d{0.0, 0.0, 1.0},
+                                                  Vec3d{1.0, 0.0, 0.0});
+        const Field3D pl = ses::synthesize_h2plus(g, live, partner,
+                                                  Vec3d{0.0, 0.0, 1.0},
+                                                  Vec3d{1.0, 0.0, 0.0});
+        const double overlap = std::norm(ses::inner_product(pb, pl));
+        double worst = 0.0;
+        for (std::size_t c = 0; c < pb.data().size(); ++c) {
+            worst = std::max(worst, std::abs(pb.data()[c] - pl.data()[c]));
+        }
+        EXPECT_GT(overlap, 1.0 - 3e-6) << "partner " << partner;
+        EXPECT_LT(worst, 2.5e-2 * peak_abs(pl)) << "partner " << partner;
+    }
+}
+
 // ---- atlas flush (CONTRACT for the H2+ scene's prepare(k)) ----
 // A spheroidal orbital SAMPLED on h = 0.3125 is not a grid eigenstate: the
 // cusp's high-k content puts 1sigma_g ~11 mHa above the grid ground with

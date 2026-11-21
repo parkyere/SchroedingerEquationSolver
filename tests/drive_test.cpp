@@ -51,6 +51,16 @@ TEST(DipoleDrive, ZeroAmplitudeMatchesStaticBitwise) {
     EXPECT_EQ(ses_test::max_abs_diff(driven, fixed), 0.0);
 }
 
+// The half-kick fills its cells on the worker pool, and a pool region can
+// throw (its bookkeeping allocates; a body's exception is rethrown): a
+// noexcept here would turn that into std::terminate.
+TEST(DipoleDrive, TheHalfKickDoesNotPromiseNoexcept) {
+    const Grid3D g = cube(-4.0, 4.0, 8);
+    Field3D psi = ses::gaussian_wavepacket(g, Vec3d{}, Vec3d{1.0, 1.0, 1.0}, Vec3d{});
+    const DipoleDrive d{Vec3d{0.0, 0.0, 1.0}, 0.1, 1.0};
+    EXPECT_FALSE(noexcept(ses::apply_dipole_halfkick(psi, d, 0.0, 0.01)));
+}
+
 TEST(DipoleDrive, ConstantFieldObeysEhrenfest) {
     // omega 0 -> constant force; wide grid keeps the packet clear of the wrap.
     const Grid3D g = cube(-16.0, 16.0, 32);

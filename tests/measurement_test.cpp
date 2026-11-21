@@ -111,6 +111,16 @@ TEST(CollapseWavepacket, MatchesAnalyticGaussianPosterior) {
     EXPECT_NEAR(s.z, s_post, 0.02);
 }
 
+// The collapse applies its mask on the worker pool, and a pool region can
+// throw: a noexcept here would turn that into std::terminate.
+TEST(CollapseWavepacket, DoesNotPromiseNoexcept) {
+    const ses::Grid1D ax{-4.0, 4.0, 8};
+    ses::Field3D psi = ses::gaussian_wavepacket(
+        ses::Grid3D{ax, ax, ax}, ses::Vec3d{}, ses::Vec3d{1.0, 1.0, 1.0},
+        ses::Vec3d{});
+    EXPECT_FALSE(noexcept(ses::collapse_wavepacket(psi, ses::Vec3d{}, 1.0)));
+}
+
 TEST(CollapseWavepacket, SharperMeasurementRespreadsFaster) {
     // dp ~ 1/(2 s_m): sharper collapse disperses faster under V = 0.
     const Grid1D axis{-8.0, 8.0, 32};

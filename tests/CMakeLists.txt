@@ -106,6 +106,7 @@ set(SES_SCENARIO_TESTS
     doublewell1d_director_test.cpp
     harmonic1d_director_test.cpp
     landau2d_director_test.cpp
+    molecule_director_test.cpp
     qdot2d_director_test.cpp
     qpc2d_test.cpp
     rutherford3d_director_test.cpp

@@ -171,4 +171,17 @@ TEST(Fft, InverseOfARejectedSizeLeavesTheInputUntouched) {
     EXPECT_EQ(a, before);
 }
 
+// Nothing to transform is not an error and not a division by the size: the
+// empty table, both directions, vector and pointer forms.
+TEST(Fft, AnEmptyTransformIsANoOp) {
+    EXPECT_TRUE(ses::fft_twiddles(0).empty());
+    std::vector<std::complex<double>> a;
+    EXPECT_NO_THROW(ses::fft(a));
+    EXPECT_NO_THROW(ses::ifft(a));
+    EXPECT_TRUE(a.empty());
+    const std::vector<std::complex<double>> w;
+    EXPECT_NO_THROW(ses::fft(a.data(), 0, w.data()));
+    EXPECT_NO_THROW(ses::ifft(a.data(), 0, w.data()));
+}
+
 }  // namespace
