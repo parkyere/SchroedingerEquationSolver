@@ -212,10 +212,16 @@ inline double radial_p2(double A, int m, double R, int n_xi, double xi_max,
 // ys / w(xs)^(m/2) with w = xi^2 - 1 (radial) or 1 - eta^2: the part of an
 // m > 0 profile that stays smooth at its axis end, where the profile itself
 // goes like w^(m/2) (a square root for m = 1). A node ON the end (w = 0: the
-// baked tables are end-inclusive) takes the cubic through its four
-// neighbours -- whatever the table holds there is not used. Cubic, not a
-// line: the baked xi nodes are 0.17 apart and the smooth part of 1pi_u falls
-// by a fifth over the first interval (a line read 6 % low at xi = 1).
+// baked tables are end-inclusive) is rebuilt from its neighbours -- whatever
+// the table holds there is not used:
+//  - the cubic through four of them on the xi table (its nodes are 0.17
+//    apart and the smooth part of 1pi_u falls by a fifth over the first
+//    interval: a line read 6 % low at xi = 1) and on the eta table of even m;
+//  - the nearest one on the eta table of ODD m. There the neighbours carry
+//    the boundary layer of the finite-difference solve the table was baked
+//    from (M / sqrt(1 - eta^2) of 1pi_u runs 8.6 % high at the first node,
+//    4.4 % at the second), and an extrapolating stencil amplifies it: the
+//    cubic read 17.5 % high at the end, the nearest node its own 8.5 %.
 inline std::vector<double> smooth_part(const std::vector<double>& xs,
                                        const std::vector<double>& ys, int m,
                                        bool radial) {
@@ -232,12 +238,15 @@ inline std::vector<double> smooth_part(const std::vector<double>& xs,
         }
     }
     if (n >= 5) {
+        const bool hold = !radial && m % 2 == 1;
         if (!(weight(xs[0]) > kOnTheEnd)) {
-            s[0] = 4.0 * s[1] - 6.0 * s[2] + 4.0 * s[3] - s[4];
+            s[0] = hold ? s[1]
+                        : 4.0 * s[1] - 6.0 * s[2] + 4.0 * s[3] - s[4];
         }
         if (!(weight(xs[n - 1]) > kOnTheEnd)) {
-            s[n - 1] = 4.0 * s[n - 2] - 6.0 * s[n - 3] + 4.0 * s[n - 4] -
-                       s[n - 5];
+            s[n - 1] = hold ? s[n - 2]
+                            : 4.0 * s[n - 2] - 6.0 * s[n - 3] +
+                                  4.0 * s[n - 4] - s[n - 5];
         }
     }
     return s;
