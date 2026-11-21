@@ -2763,17 +2763,25 @@ private:
 
     // Grow the dynamic-offset schedule UBO to `n` slots (ubo_slot_stride_ each;
     // initialize() sizes it for TwoCenterParams) and (re)point its set.
+    // Ready = the buffer holds n slots AND the set exists: a set allocation
+    // that failed after the buffer was made must not read as ready on the
+    // next call (record_step_batch would bind a null set).
     bool ensure_two_center_slots(int n) {
-        if (tc_sched_ubo_.buf != VK_NULL_HANDLE && tc_slots_ >= n) {
+        const bool have_slots =
+            tc_sched_ubo_.buf != VK_NULL_HANDLE && tc_slots_ >= n;
+        if (have_slots && tc_sched_set_ != VK_NULL_HANDLE) {
             return true;
         }
-        ctx_->destroy_buffer(&tc_sched_ubo_);
-        if (!ctx_->create_host_buffer(
-                static_cast<VkDeviceSize>(ubo_slot_stride_) * n,
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &tc_sched_ubo_)) {
-            return false;
+        if (!have_slots) {
+            ctx_->destroy_buffer(&tc_sched_ubo_);
+            tc_slots_ = 0;
+            if (!ctx_->create_host_buffer(
+                    static_cast<VkDeviceSize>(ubo_slot_stride_) * n,
+                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &tc_sched_ubo_)) {
+                return false;
+            }
+            tc_slots_ = n;
         }
-        tc_slots_ = n;
         if (tc_sched_set_ == VK_NULL_HANDLE) {
             tc_sched_set_ = arena_.allocate(*ctx_, two_center_k_.set_layout());
             if (tc_sched_set_ == VK_NULL_HANDLE) {
