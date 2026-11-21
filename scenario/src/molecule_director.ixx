@@ -370,9 +370,9 @@ protected:
     void after_reset() override { free_state_buffers(); }
 
     // The deflated relax chain and its cached eigenstates live on the device:
-    // nothing of them survives, and a CPU relax would cool toward the ground
-    // under an excited state's label.
-    void after_device_lost() override {
+    // nothing of them is usable from the CPU path, and a CPU relax would cool
+    // toward the ground under an excited state's label.
+    void after_leaving_gpu() override {
         fine_polish_ = false;
         fine_left_ = 0;
         stepping_ = BaseStepping::RealTime;
@@ -500,7 +500,15 @@ public:
     }
     void measure_now() override {
         abort_flush();
+        if (!ensure_cpu_current()) {
+            return;  // nothing will collapse (the base refuses a stale psi)
+        }
         MoleculeDirectorBase::measure_now();
+        // A collapsed packet is no atlas orbital: the title must stop naming
+        // one, and a later fallback to the CPU must not put it back.
+        showing_random_ = false;
+        cur_ = -1;
+        title_dirty_ = true;
     }
 
     double default_camera_azimuth() const override { return 0.35; }
@@ -542,7 +550,8 @@ protected:
     // the grid's bound manifold; the atlas itself is immediate).
     bool prepared(int k) const override {
         ensure_atlas();
-        return k >= 0 && k < static_cast<int>(atlas_.size()) && flushed_;
+        return k >= 0 && k < static_cast<int>(atlas_.size()) &&
+               flush_ != Flush::Running;
     }
     double energy(int k) const override {
         ensure_atlas();
@@ -652,23 +661,25 @@ protected:
         rebuild_markers();
     }
 
-    void after_device_lost() override {
+    void after_leaving_gpu() override {
         abort_flush();  // the atlas flush is GPU-only as well
-        MoleculeDirectorBase::after_device_lost();
+        MoleculeDirectorBase::after_leaving_gpu();
         // The CPU steps in make()'s boot-axis potential and never turns the
         // rotor (the rotated V lived on the device only): put the nuclei
         // back on that axis, as a Reset does, or the markers, the rotor line
         // and E_elec would describe a potential nobody steps in. An orbital
         // on show was sampled along the old axis -- sample it again along
-        // this one; a random superposition cannot be redrawn, so its label
-        // goes.
+        // this one (the caller restages; cur_ is -1 after a measurement, so
+        // a collapsed packet is never replaced). A random superposition
+        // cannot be redrawn, so its label goes.
         reset_rotor();
         rebuild_markers();
         const bool orbital = !showing_random_ && cur_ >= 0 &&
                              cur_ < static_cast<int>(atlas_.size());
         showing_random_ = false;
         if (orbital) {
-            prepare(cur_);  // CPU path: shown as sampled, no flush
+            sim_.set_psi(synth_member(cur_));
+            flush_ = Flush::Sampled;  // CPU path: shown as sampled
         } else {
             cur_ = -1;
         }
@@ -705,7 +716,10 @@ protected:
                       atlas_[static_cast<std::size_t>(cur_)].label.c_str(),
                       atlas_[static_cast<std::size_t>(cur_)].orb.energy *
                           kHaToEv,
-                      flushed_ ? "" : "  (flushing onto the grid...)");
+                      flush_ == Flush::Running
+                          ? "  (flushing onto the grid...)"
+                          : flush_ == Flush::Sampled ? "  (sampled, unflushed)"
+                                                     : "");
         }
         s += strf("  ({} known orbitals)  keys: 2.. orbitals / S random",
                   static_cast<int>(atlas_.size()));
@@ -782,13 +796,13 @@ private:
     // flushes in its own V.
     void start_flush(int k) {
         if (!use_gpu_path()) {
-            flushed_ = true;  // CPU path: shown as sampled
+            flush_ = Flush::Sampled;  // CPU path: shown as sampled
             return;
         }
         flush_v_ = current_potential();  // the live axis (relax_potential)
         if (!ensure_relax_tables()) {
-            flush_v_.clear();
-            flushed_ = true;
+            std::vector<double>().swap(flush_v_);  // 134 MB: clear() keeps it
+            flush_ = Flush::Sampled;
             return;
         }
         for (int i = 0; i < k; ++i) {
@@ -803,27 +817,32 @@ private:
                              "created -- showing the sampled orbital unflushed\n",
                              i + 1, k);
                 finish_flush(false);
-                flushed_ = true;
+                flush_ = Flush::Sampled;
                 return;
             }
             flush_deflate_.push_back(h);
         }
         flush_left_ = ses::kH2plusAtlasFlushSteps;
-        flushed_ = false;
+        flush_ = Flush::Running;
         stepping_ = BaseStepping::Relaxing;
     }
 
+    // The flush is kH2plusAtlasFlushSteps long whatever the time dial says:
+    // the last batch is cut to what is left (at x16 a 40-step flush ran 48).
     void run_relax_batch() override {
+        const int n = flush_left_ > 0
+                          ? std::min(pending_gpu_steps_, flush_left_)
+                          : pending_gpu_steps_;
         const ses_vk::Engine::RelaxStats stats =
             flush_deflate_.empty()
-                ? engine_.relax_step(pending_gpu_steps_)
-                : engine_.relax_deflated_step(flush_deflate_, pending_gpu_steps_);
+                ? engine_.relax_step(n)
+                : engine_.relax_deflated_step(flush_deflate_, n);
         relax_energy_display_ = stats.energy;
         if (stats.peak > 0.0) {
             peak_ = stats.peak;
         }
         norm_display_ = 1.0;
-        flush_left_ -= pending_gpu_steps_;
+        flush_left_ -= n;
         if (flush_left_ <= 0) {
             finish_flush(true);
         }
@@ -837,18 +856,23 @@ private:
         flush_left_ = 0;
         engine_.release_relax_tables();
         std::vector<double>().swap(flush_v_);  // 134 MB at 256^3: drop it
-        flushed_ = landed || flushed_;
         if (landed) {
+            flush_ = Flush::Landed;
             stepping_ = BaseStepping::RealTime;
         }
         title_dirty_ = true;
     }
 
+    // A flush cut short leaves the member where the relaxation got to: not
+    // flushing any more, and not on the grid either. A landed member stays
+    // landed.
     void abort_flush() {
         if (flush_left_ > 0 || !flush_deflate_.empty()) {
             finish_flush(false);
         }
-        flushed_ = true;  // whatever replaces the member is shown as-is
+        if (flush_ == Flush::Running) {
+            flush_ = Flush::Sampled;
+        }
     }
 
     const std::vector<double>& relax_potential() const override {
@@ -959,7 +983,11 @@ private:
     std::vector<int> flush_deflate_;  // lower members' GPU handles, in flight
     std::vector<double> flush_v_;     // V along the live axis, tables only
     int flush_left_ = 0;
-    bool flushed_ = true;
+    // The member on show: still relaxing onto the grid, landed there, or only
+    // sampled from the atlas (CPU path, or a flush that could not start or
+    // was cut short). prepared(k) means "not Running"; the title says which.
+    enum class Flush { Running, Landed, Sampled };
+    Flush flush_ = Flush::Sampled;
     ses::Vec3d pred_n_{};           // scheduled batch's end axis
     bool scheduled_ = false;
     std::atomic<int> jmax_{0};

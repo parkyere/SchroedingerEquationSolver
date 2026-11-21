@@ -166,20 +166,16 @@ public:
         if (gpu_ok_ && engine_.device_lost()) {
             std::fprintf(stderr, "%s: GPU device lost -- falling back to CPU\n",
                          scene_name());
-            gpu_ok_ = false;
-            cpu_is_truth_ = true;
-            pending_gpu_steps_ = 0;
-            decay_on_ = false;  // the jump trials run on the GPU path only
-            after_device_lost();
-            stage_active_view();
-            title_dirty_ = true;
+            leave_gpu_path();
         }
         if (!use_gpu_path()) {
             return;
         }
         // Reclaim last frame's async batch FIRST (display flip + cb reuse).
         engine_.wait_async();
-        bridge_cpu_state();
+        if (!bridge_cpu_state()) {
+            return;  // the upload failed: the scene is on the CPU now
+        }
         service_requests();
         run_pending_batches();
         extract_surface_if_dirty();
@@ -298,13 +294,18 @@ public:
     // ---- display accessors ----
 
     bool cloud() const override { return mode_ == BaseViewMode::Cloud; }
+    // gpu_ok_ like the volume views below: once the scene is on the CPU the
+    // GPU mesh is the last one extracted there, and the shell prefers it to
+    // the CPU mesh as long as this hands it out.
     VkBuffer surface_vbuf() const override {
-        return (mode_ == BaseViewMode::Surface && engine_.mc_ready())
+        return (gpu_ok_ && mode_ == BaseViewMode::Surface &&
+                engine_.mc_ready())
                    ? engine_.mc_vertex_buffer()
                    : VK_NULL_HANDLE;
     }
     VkBuffer surface_indirect() const override {
-        return (mode_ == BaseViewMode::Surface && engine_.mc_ready())
+        return (gpu_ok_ && mode_ == BaseViewMode::Surface &&
+                engine_.mc_ready())
                    ? engine_.mc_indirect_buffer()
                    : VK_NULL_HANDLE;
     }
@@ -380,9 +381,9 @@ protected:
     virtual double absorber_width() const { return 0.0; }
     virtual void on_gpu_ready() {}
     virtual void after_reset() {}
-    // run_frame, right after it left the GPU path for a lost device: disarm
-    // whatever else only runs there.
-    virtual void after_device_lost() {}
+    // leave_gpu_path(), right after the flags flipped: disarm whatever else
+    // only runs on the device.
+    virtual void after_leaving_gpu() {}
     virtual void service_requests() {}   // run_frame, before stepping
     virtual void before_step_batch(int) {}  // run_frame, before a real-time batch
     virtual void after_step_batch() {}   // run_frame, after a real-time batch
@@ -393,9 +394,12 @@ protected:
 
     // CPU state authoritative: refresh the brightness normalizer, upload,
     // bridge immediately (an empty step queue would keep a stale cloud).
-    void bridge_cpu_state() {
+    // False = the upload failed and the scene left the GPU path: the device
+    // still holds the OLD state, and stepping or showing that one under the
+    // new state's name is the one thing this must not do.
+    [[nodiscard]] bool bridge_cpu_state() {
         if (!cpu_is_truth_) {
-            return;
+            return true;
         }
         double pk = 0.0;
         for (const std::complex<double>& z : sim_.psi().data()) {
@@ -404,10 +408,33 @@ protected:
         if (pk > 0.0) {
             peak_ = pk;
         }
-        engine_.upload_state(sim_.psi().data());
+        if (!engine_.upload_state(sim_.psi().data())) {
+            std::fprintf(stderr, "%s: state upload failed -- falling back to "
+                                 "CPU stepping\n",
+                         scene_name());
+            leave_gpu_path();
+            return false;
+        }
         cpu_is_truth_ = false;
         volume_dirty_ = false;  // texture comes from the bridge now
         write_display_texture();
+        return true;
+    }
+
+    // Leave the GPU path for good -- a lost device, or an upload the scene
+    // cannot run without: the CPU copy of psi is the truth from here, the
+    // modes that only run on the device are disarmed (after_leaving_gpu) and
+    // the view is restaged from the CPU. ONE place: the table-upload
+    // failures used to flip the two flags only, with the device-only modes
+    // still armed and nothing restaged.
+    void leave_gpu_path() {
+        gpu_ok_ = false;
+        cpu_is_truth_ = true;
+        pending_gpu_steps_ = 0;
+        decay_on_ = false;  // the jump trials run on the GPU path only
+        after_leaving_gpu();
+        stage_active_view();
+        title_dirty_ = true;
     }
 
     // Run this frame's queued steps (real-time or relax batch) + the title
@@ -743,8 +770,7 @@ protected:
         std::fprintf(stderr, "engine: potential upload failed -- falling "
                              "back to CPU stepping\n");
         ensure_cpu_current();
-        gpu_ok_ = false;
-        cpu_is_truth_ = true;
+        leave_gpu_path();
         return false;
     }
 
@@ -800,10 +826,19 @@ protected:
 
     // GPU-only modes force the Cloud view; the surface buffers (~175 MB) go
     // with it instead of lingering until the next Tab or scene switch.
+    // Called BEFORE the mode's own allocations on purpose (relax tables,
+    // manifold cache, transient states): they get the freed VRAM. A caller
+    // that then refuses leaves the scene in Cloud, so the display volume is
+    // refreshed here as Tab does on the way back -- it is not written while
+    // the surface is up, and a paused scene would show the cloud of the
+    // moment the surface was entered.
     void force_cloud_view() {
         if (mode_ != BaseViewMode::Cloud) {
             mode_ = BaseViewMode::Cloud;
             engine_.release_mc();
+            if (gpu_ok_ && !cpu_is_truth_) {
+                write_display_texture();
+            }
         }
     }
 

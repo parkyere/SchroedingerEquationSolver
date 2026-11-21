@@ -185,17 +185,7 @@ public:
         if (gpu_ok_ && engine_.device_lost()) {
             std::fprintf(stderr,
                          "run_frame: GPU device lost -- falling back to CPU\n");
-            gpu_ok_ = false;
-            cpu_is_truth_ = true;
-            // Disarm the GPU-only modes, as the CPU-meshing fallback does:
-            // their toggles return early once !gpu_ok_, so they could never
-            // be cleared and their labels would stick.
-            if (stepping_ == BaseStepping::RelaxingExcited) {
-                stepping_ = BaseStepping::Relaxing;  // deflation is GPU-only
-            }
-            laser_pol_ = LaserPol::Off;
-            decay_on_ = false;
-            title_dirty_ = true;
+            leave_gpu_path();  // disarms via after_leaving_gpu() below
         }
         // Photon streaks: shared display component (base member).
         photon_streaks_.advance_and_build();
@@ -216,8 +206,7 @@ public:
             }
             return;
         }
-        if (use_gpu_path()) {
-            bridge_cpu_state();
+        if (use_gpu_path() && bridge_cpu_state()) {
             // Projective ENERGY measurement (Key E): sample n from
             // P_n=|<phi_n|psi>|^2 and collapse; the deficit 1-sum(P_n) is the
             // continuum (n=-1).
@@ -491,10 +480,10 @@ public:
             return;  // the drive runs on the GPU path only
         }
         if (laser_pol_ == LaserPol::Off) {
-            force_cloud_view();
             if (!manifold_ready()) {
-                return;
+                return;  // refused: the view stays as it is
             }
+            force_cloud_view();
             // Drive the GRID resonance: the coarse-grid 1s has a cusp gap and a
             // relaxed 1s sits ~0.03 Ha below a synthesized one, so prefer the
             // cooled <H>, else the h-audit grid energy. "Cooled" means at
@@ -1150,6 +1139,17 @@ private:
         }
     }
 
+    // Off the GPU path (lost device, failed table upload): disarm the modes
+    // that only run there, as the CPU-meshing fallback in toggle_view_mode
+    // does -- their toggles return early once !gpu_ok_, so they could never
+    // be cleared and their labels would stick. The base clears decay_on_.
+    void after_leaving_gpu() override {
+        if (stepping_ == BaseStepping::RelaxingExcited) {
+            stepping_ = BaseStepping::Relaxing;  // deflation is GPU-only
+        }
+        laser_pol_ = LaserPol::Off;
+    }
+
     // One imaginary-time batch: renormalized every step; the ITP estimator gives
     // the convergence readout free. The excited flavor deflates states below the
     // target.
@@ -1189,11 +1189,11 @@ private:
     template <class MakeSeed>
     void start_excited_relax(MakeSeed&& make_seed, const char* label,
                              bool deflate_p_triplet) {
-        if (!gpu_ok_ || solving()) {
-            return;  // deflation runs on the GPU path only
+        if (!gpu_ok_ || solving() || !manifold_ready()) {
+            return;  // deflation runs on the GPU path only; view untouched
         }
-        force_cloud_view();
-        if (!manifold_ready() || !ensure_relax_tables()) {
+        force_cloud_view();  // ahead of the tables: they get the freed VRAM
+        if (!ensure_relax_tables()) {
             return;
         }
         // Deflation set: OWNED transient fp32 buffers, freed at auto-complete /
@@ -1281,8 +1281,7 @@ private:
             std::fprintf(stderr, "engine: field-table upload failed -- "
                                  "falling back to CPU stepping\n");
             ensure_cpu_current();  // pull the GPU psi down first
-            gpu_ok_ = false;
-            cpu_is_truth_ = true;  // sim_ is now the only stepped state
+            leave_gpu_path();  // sim_ is now the only stepped state
             return;
         }
         uploaded_e0_ = fields_.e0;
