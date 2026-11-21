@@ -232,6 +232,14 @@ public:
         if (color_.view == VK_NULL_HANDLE) {
             return false;
         }
+        // Nothing can be submitted once the device is lost (OneShot::begin
+        // refuses below), and the uploads ahead of it would still run: a
+        // director that fell back to the CPU hands over a fresh volume every
+        // tick, and each would allocate a 3D image, copy the field into the
+        // staging buffer, fail to submit and destroy the image again.
+        if (ctx_->device_lost) {
+            return false;
+        }
         // Converged early-out: once accumulation saturates (accum.comp caps the
         // window at kAccumCap) later frames only move a static scene by the
         // rotating jitter/dither residual -- visually converged, so skip the
