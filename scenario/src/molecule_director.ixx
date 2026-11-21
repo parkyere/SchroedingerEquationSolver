@@ -247,10 +247,10 @@ protected:
             fine_left_ = 0;
             engine_.release_relax_tables();
         }
+        force_cloud_view();  // ahead of the tables: they get the freed VRAM
         if (!ensure_relax_tables()) {
             return;
         }
-        force_cloud_view();
         deflate_.clear();
         for (int i = 0; i < k; ++i) {
             deflate_.push_back(buf_[i]);
@@ -830,9 +830,13 @@ private:
     // The flush is kH2plusAtlasFlushSteps long whatever the time dial says:
     // the last batch is cut to what is left (at x16 a 40-step flush ran 48).
     void run_relax_batch() override {
-        const int n = flush_left_ > 0
-                          ? std::min(pending_gpu_steps_, flush_left_)
-                          : pending_gpu_steps_;
+        if (flush_left_ <= 0) {
+            // Relaxing with no flush in flight: nothing here relaxes on its
+            // own, so go back to real time rather than "land" a member.
+            stepping_ = BaseStepping::RealTime;
+            return;
+        }
+        const int n = std::min(pending_gpu_steps_, flush_left_);
         const ses_vk::Engine::RelaxStats stats =
             flush_deflate_.empty()
                 ? engine_.relax_step(n)
@@ -872,6 +876,10 @@ private:
         }
         if (flush_ == Flush::Running) {
             flush_ = Flush::Sampled;
+            // The flush WAS the relax: a caller that returns without setting
+            // the mode (a refused measurement) must not leave the scene
+            // relaxing on released tables.
+            stepping_ = BaseStepping::RealTime;
         }
     }
 
@@ -977,7 +985,9 @@ private:
 
     mutable std::vector<Mo> atlas_;
     mutable double atlas_R_ = -1.0;
-    int cur_ = 0;  // currently-shown atlas index (-1: none)
+    // Currently-shown atlas index (-1: none). None at boot: the GPU path
+    // prepares 1sigma_g in on_gpu_ready, the CPU path shows make()'s seed.
+    int cur_ = -1;
     ses::RigidRotor rotor_;
     ses::Vec3d e1_{1.0, 0.0, 0.0};  // azimuth reference, parallel-transported
     std::vector<int> flush_deflate_;  // lower members' GPU handles, in flight

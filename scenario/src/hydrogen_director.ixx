@@ -306,6 +306,10 @@ public:
         last_measured_index_ = -2;
         last_partial_outcome_ = -99;
         sim_ = make_simulation();
+        // GPU state discarded with the reset -- said BEFORE the upload below:
+        // if that fails it pulls the device state down first, and with the
+        // flag still false the pre-reset state came back over the new sim_.
+        cpu_is_truth_ = true;
         stepping_ = BaseStepping::RealTime;
         free_deflation_buffers();
         drop_relax_tables();
@@ -313,7 +317,6 @@ public:
         fields_.b = 0.0;
         upload_field_tables();    // restore the base half-potential
         reset_ionized_tally();
-        cpu_is_truth_ = true;  // GPU state discarded with the reset
         gpu_time_ = 0.0;
         pending_gpu_steps_ = 0;
         if (gpu_ok_ && manifold_ready()) {
@@ -506,6 +509,10 @@ public:
             if (fields_.b_active()) {
                 fields_.b = 0.0;
                 upload_field_tables();
+                if (!gpu_ok_) {
+                    return;  // that upload failed and the scene left the
+                             // GPU path: no drive to arm (it would stick on)
+                }
             }
             laser_pol_ = LaserPol::Z;
             stepping_ = BaseStepping::RealTime;  // the drive lives in real time
