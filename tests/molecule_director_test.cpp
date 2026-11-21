@@ -12,6 +12,9 @@ namespace {
 // One director for the three label contracts: a 256^3 scene costs seconds.
 //  - At boot the CPU path shows make()'s Gaussian seed: the title must not
 //    claim an atlas orbital (the GPU path prepares 1sigma_g in on_gpu_ready).
+//    The atlas is loaded first, as the panel does every frame through
+//    state_count(): with it still empty the title has no name to print and
+//    the check would pass for the wrong reason.
 //  - A prepared orbital is named.
 //  - A position measurement collapses it into a packet: the name goes. (It
 //    also decides what a device-loss fallback restores -- a kept index would
@@ -21,11 +24,11 @@ TEST(H2PlusDirector, TheTitleNamesAnOrbitalOnlyWhileOneIsShown) {
     const auto names_an_orbital = [&d] {
         return d.title_text().find("showing") != std::string::npos;
     };
-    EXPECT_FALSE(names_an_orbital()) << d.title_text();
-
     ses_shell::MoleculeApi* ml = d.molecule();
     ASSERT_NE(ml, nullptr);
-    ASSERT_GT(ml->state_count(), 2);
+    ASSERT_GT(ml->state_count(), 2);  // loads the atlas
+    EXPECT_FALSE(names_an_orbital()) << d.title_text();
+
     ml->prepare(2);
     EXPECT_TRUE(names_an_orbital()) << d.title_text();
 
